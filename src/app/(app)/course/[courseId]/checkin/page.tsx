@@ -1,0 +1,168 @@
+import { notFound, redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isConfigured } from "@/lib/env";
+import { getProfile } from "@/lib/auth";
+import { getSignedPhotoUrls } from "@/lib/storage";
+import {
+  CheckInLive,
+  type DirectoryEntry,
+  type OccupantInfo,
+  type SeatInfo,
+} from "@/components/features/checkin/CheckInLive";
+import { SessionControls } from "@/components/features/checkin/SessionControls";
+
+export default async function CheckInPage({
+  params,
+}: {
+  params: Promise<{ courseId: string }>;
+}) {
+  const { courseId } = await params;
+  const profile = await getProfile();
+  if (!profile) redirect("/login");
+
+  const supabase = await createClient();
+  // RLS membership gate — non-members get null.
+  const { data: course } = await supabase
+    .from("courses")
+    .select("id, name, professor_id")
+    .eq("id", courseId)
+    .single();
+  if (!course) notFound();
+  const isProfessor = course.professor_id === profile.id;
+
+  // Today's open session (if any).
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: session } = await supabase
+    .from("class_sessions")
+    .select("id, closed_at")
+    .eq("course_id", courseId)
+    .eq("session_date", today)
+    .is("closed_at", null)
+    .maybeSingle();
+  const sessionId = session?.id ?? null;
+
+  // Seats.
+  const { data: seatRows } = await supabase
+    .from("seats")
+    .select("id, label, row_index, col_index")
+    .eq("course_id", courseId);
+  const seats: SeatInfo[] = (seatRows ?? []).map((s) => ({
+    id: s.id,
+    label: s.label,
+    row: s.row_index,
+    col: s.col_index,
+  }));
+
+  // Occupants + my enrollment + my score + who I've verified today.
+  let initialOccupants: OccupantInfo[] = [];
+  let myEnrollmentId: string | null = null;
+  let networkingScore = 0;
+  let verifiedByMe: string[] = [];
+
+  const { data: myEnrollment } = await supabase
+    .from("enrollments")
+    .select("id")
+    .eq("course_id", courseId)
+    .eq("profile_id", profile.id)
+    .eq("status", "active")
+    .maybeSingle();
+  myEnrollmentId = myEnrollment?.id ?? null;
+
+  if (myEnrollmentId) {
+    const { count } = await supabase
+      .from("check_ins")
+      .select("id", { count: "exact", head: true })
+      .eq("enrollment_id", myEnrollmentId)
+      .eq("is_new_seat", true);
+    networkingScore = count ?? 0;
+  }
+
+  if (sessionId) {
+    const { data: checkins } = await supabase
+      .from("check_ins")
+      .select("enrollment_id, seat_id, verified")
+      .eq("session_id", sessionId);
+    initialOccupants = (checkins ?? []).map((c) => ({
+      enrollmentId: c.enrollment_id,
+      seatId: c.seat_id,
+      verified: c.verified,
+    }));
+
+    if (myEnrollmentId) {
+      const { data: myVerifs } = await supabase
+        .from("seat_verifications")
+        .select("subject_enrollment_id")
+        .eq("session_id", sessionId)
+        .eq("verifier_enrollment_id", myEnrollmentId);
+      verifiedByMe = (myVerifs ?? []).map((v) => v.subject_enrollment_id);
+    }
+  }
+
+  // Directory (names + one photo, no emails) via admin — the RLS course
+  // check above already proved membership.
+  const directory: Record<string, DirectoryEntry> = {};
+  if (isConfigured.supabaseAdmin) {
+    const admin = createAdminClient();
+    const { data: enrollments } = await admin
+      .from("enrollments")
+      .select("id, roster_name, profile_id")
+      .eq("course_id", courseId)
+      .eq("status", "active");
+
+    const memberIds = (enrollments ?? [])
+      .map((e) => e.profile_id)
+      .filter((id): id is string => Boolean(id));
+    const { data: photos } =
+      memberIds.length > 0
+        ? await admin
+            .from("profile_photos")
+            .select("profile_id, storage_path")
+            .in("profile_id", memberIds)
+        : { data: [] as { profile_id: string; storage_path: string }[] };
+    const urlMap = await getSignedPhotoUrls(
+      admin,
+      (photos ?? []).map((p) => p.storage_path)
+    );
+    const photoByProfile = new Map<string, string>();
+    for (const p of photos ?? []) {
+      const url = urlMap[p.storage_path];
+      if (url && !photoByProfile.has(p.profile_id)) {
+        photoByProfile.set(p.profile_id, url);
+      }
+    }
+    for (const e of enrollments ?? []) {
+      directory[e.id] = {
+        name: e.roster_name,
+        photoUrl: e.profile_id ? (photoByProfile.get(e.profile_id) ?? null) : null,
+      };
+    }
+  }
+
+  return (
+    <div className="grid gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {isProfessor ? "Today's session" : "Check in"}
+          </h1>
+          <p className="text-sm text-muted-foreground">{course.name}</p>
+        </div>
+        {isProfessor && (
+          <SessionControls courseId={courseId} sessionId={sessionId} />
+        )}
+      </div>
+
+      <CheckInLive
+        courseId={courseId}
+        sessionId={sessionId}
+        seats={seats}
+        initialOccupants={initialOccupants}
+        directory={directory}
+        myEnrollmentId={isProfessor ? null : myEnrollmentId}
+        networkingScore={networkingScore}
+        verifiedByMe={verifiedByMe}
+      />
+    </div>
+  );
+}
