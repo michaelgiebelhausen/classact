@@ -23,6 +23,7 @@ import type { PhotoKind } from "@/types/db";
 
 interface Props {
   initialName: string;
+  initialPhonetic: string;
   photoUrls: Partial<Record<PhotoKind, string>>;
   icebreakerKeys: string[];
   initialAnswers: Record<string, string>;
@@ -30,6 +31,7 @@ interface Props {
 
 export function OnboardingFlow({
   initialName,
+  initialPhonetic,
   photoUrls,
   icebreakerKeys,
   initialAnswers,
@@ -38,6 +40,7 @@ export function OnboardingFlow({
   const fields = icebreakersByKey(icebreakerKeys);
   const [step, setStep] = useState(0);
   const [fullName, setFullName] = useState(initialName);
+  const [namePhonetic, setNamePhonetic] = useState(initialPhonetic);
   const [answers, setAnswers] = useState<Record<string, string>>(initialAnswers);
   const [finishing, setFinishing] = useState(false);
 
@@ -50,7 +53,7 @@ export function OnboardingFlow({
       return;
     }
     setFinishing(true);
-    const result = await completeOnboarding({ fullName, answers });
+    const result = await completeOnboarding({ fullName, namePhonetic, answers });
     if (result.ok) {
       capture("onboarding_completed");
       toast.success("You're set. See you in class.");
@@ -85,6 +88,23 @@ export function OnboardingFlow({
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
               />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="namePhonetic">
+                How do you say it?{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id="namePhonetic"
+                placeholder="shiv-AWN muhr-FEE"
+                value={namePhonetic}
+                onChange={(e) => setNamePhonetic(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                A quick pronunciation guide so classmates get your name right.
+              </p>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
               <PhotoUploader kind="candid" initialUrl={photoUrls.candid ?? null} />

@@ -42,7 +42,7 @@ export const rosterRowSchema = z.object({
 
 export const gameScoreSchema = z.object({
   courseId: z.string().uuid(),
-  gameType: z.enum(["memory_tiles", "flash_cards"]),
+  gameType: z.enum(["memory_tiles", "flash_cards", "matching"]),
   score: z.number().int().min(0).max(10000),
   durationMs: z.number().int().min(0).max(3_600_000).optional(),
 });

@@ -14,12 +14,15 @@ const answersSchema = z.record(z.string(), z.string().trim().max(2000));
  */
 export async function completeOnboarding(input: {
   fullName: string;
+  namePhonetic?: string;
   answers: Record<string, string>;
 }): Promise<ActionResult> {
   const fullName = input.fullName.trim();
   if (fullName.length < 2) {
     return { ok: false, error: "Tell us your name — it's how classmates find you." };
   }
+  // Optional pronunciation guide; keep it short and store null when blank.
+  const namePhonetic = (input.namePhonetic ?? "").trim().slice(0, 100);
   const parsedAnswers = answersSchema.safeParse(input.answers);
   if (!parsedAnswers.success) {
     return { ok: false, error: "One of your answers is too long." };
@@ -63,7 +66,11 @@ export async function completeOnboarding(input: {
 
   const { error: profileError } = await supabase
     .from("profiles")
-    .update({ full_name: fullName, onboarding_complete: true })
+    .update({
+      full_name: fullName,
+      name_phonetic: namePhonetic.length > 0 ? namePhonetic : null,
+      onboarding_complete: true,
+    })
     .eq("id", user.id);
   if (profileError) {
     return { ok: false, error: "Couldn't finish onboarding. Try again." };

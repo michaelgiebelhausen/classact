@@ -154,6 +154,7 @@ export default async function MetricsPage({
             label="Best flash cards"
             value={metrics.bestFlashCards ?? "—"}
           />
+          <Metric label="Best matching" value={metrics.bestMatching ?? "—"} />
         </div>
       )}
     </div>

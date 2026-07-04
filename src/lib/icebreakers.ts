@@ -6,6 +6,12 @@ export interface IcebreakerField {
   multiline: boolean;
   /** zod-ish lightweight validation hint applied in the form */
   kind: "text" | "url";
+  /**
+   * Whether this answer works as a memory hook on the flash-card back (a short,
+   * factual detail — hometown, major). Excludes guessing games like "two truths
+   * and a lie" (a spoiler) and links like a Spotify URL (not a hook).
+   */
+  flashcardHint: boolean;
 }
 
 /** The catalog professors pick from (courses.icebreaker_fields stores keys). */
@@ -17,6 +23,7 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     placeholder: "1) ... 2) ... 3) ...",
     multiline: true,
     kind: "text",
+    flashcardHint: false, // it's a guessing game — would spoil it
   },
   {
     key: "first_job",
@@ -25,6 +32,7 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     placeholder: "Lifeguard — taught me to stay calm when everyone panics.",
     multiline: true,
     kind: "text",
+    flashcardHint: true,
   },
   {
     key: "spotify_url",
@@ -33,6 +41,7 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     placeholder: "https://open.spotify.com/playlist/...",
     multiline: false,
     kind: "url",
+    flashcardHint: false, // a link isn't a memory hook
   },
   {
     key: "hometown",
@@ -41,6 +50,7 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     placeholder: "Greenville, SC",
     multiline: false,
     kind: "text",
+    flashcardHint: true,
   },
   {
     key: "major",
@@ -49,6 +59,7 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     placeholder: "Marketing",
     multiline: false,
     kind: "text",
+    flashcardHint: true,
   },
   {
     key: "fun_fact",
@@ -57,6 +68,7 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     placeholder: "I've been to 14 national parks.",
     multiline: true,
     kind: "text",
+    flashcardHint: true,
   },
 ];
 
@@ -68,4 +80,14 @@ export const DEFAULT_ICEBREAKER_KEYS = [
 
 export function icebreakersByKey(keys: string[]): IcebreakerField[] {
   return ICEBREAKER_CATALOG.filter((f) => keys.includes(f.key));
+}
+
+/**
+ * The course's icebreaker fields that are eligible as a flash-card hook, in
+ * catalog order. The games page picks the first of these a student answered.
+ */
+export function flashcardHintFields(courseKeys: string[]): IcebreakerField[] {
+  return ICEBREAKER_CATALOG.filter(
+    (f) => f.flashcardHint && courseKeys.includes(f.key)
+  );
 }

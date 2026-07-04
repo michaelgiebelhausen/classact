@@ -59,6 +59,7 @@ export default async function OnboardingPage() {
       </h1>
       <OnboardingFlow
         initialName={profile.full_name ?? ""}
+        initialPhonetic={profile.name_phonetic ?? ""}
         photoUrls={photoUrls}
         icebreakerKeys={icebreakerKeys}
         initialAnswers={initialAnswers}

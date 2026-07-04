@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
+import { flashcardHintFields } from "@/lib/icebreakers";
 import { NameGames, type GamePlayer } from "@/components/features/games/NameGames";
 
 const MIN_PLAYERS = 6;
@@ -21,7 +22,7 @@ export default async function GamesPage({
   // RLS membership gate.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name")
+    .select("id, name, icebreaker_fields")
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -42,6 +43,55 @@ export default async function GamesPage({
     );
     const photoMap = await resolveEnrollmentPhotos(admin, candidates);
 
+    // Phonetic pronunciation guides, keyed by profile (activated students only).
+    const phoneticByProfile = new Map<string, string>();
+    const activatedIds = candidates
+      .map((e) => e.profile_id)
+      .filter((id): id is string => Boolean(id));
+    if (activatedIds.length > 0) {
+      const { data: profs } = await admin
+        .from("profiles")
+        .select("id, name_phonetic")
+        .in("id", activatedIds);
+      for (const p of profs ?? []) {
+        if (p.name_phonetic) phoneticByProfile.set(p.id, p.name_phonetic);
+      }
+    }
+
+    // One icebreaker fact per classmate for the flash-card back — the first
+    // flashcard-eligible field (in catalog priority order) they actually answered.
+    const hintByEnrollment = new Map<string, { label: string; value: string }>();
+    const hintFields = flashcardHintFields(course.icebreaker_fields ?? []);
+    if (hintFields.length > 0 && candidates.length > 0) {
+      const { data: answers } = await admin
+        .from("student_answers")
+        .select("enrollment_id, field_key, value")
+        .in(
+          "enrollment_id",
+          candidates.map((e) => e.id)
+        );
+      const answersByEnrollment = new Map<string, Map<string, string>>();
+      for (const a of answers ?? []) {
+        const value = (a.value ?? "").trim();
+        if (!value) continue;
+        let m = answersByEnrollment.get(a.enrollment_id);
+        if (!m) {
+          m = new Map();
+          answersByEnrollment.set(a.enrollment_id, m);
+        }
+        m.set(a.field_key, value);
+      }
+      for (const [enrollmentId, m] of answersByEnrollment) {
+        for (const f of hintFields) {
+          const value = m.get(f.key);
+          if (value) {
+            hintByEnrollment.set(enrollmentId, { label: f.label, value });
+            break;
+          }
+        }
+      }
+    }
+
     for (const e of candidates) {
       const urls = photoMap.get(e.id) ?? [];
       if (urls.length > 0) {
@@ -49,6 +99,10 @@ export default async function GamesPage({
           enrollmentId: e.id,
           name: e.roster_name,
           photoUrls: urls,
+          phonetic: e.profile_id
+            ? phoneticByProfile.get(e.profile_id) ?? null
+            : null,
+          hint: hintByEnrollment.get(e.id) ?? null,
         });
       }
     }

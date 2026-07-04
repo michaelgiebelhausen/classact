@@ -7,7 +7,7 @@ import type { ActionResult } from "@/server/actions/auth";
 /** Record a finished round (FR-013/FR-014). */
 export async function recordGameScore(input: {
   courseId: string;
-  gameType: "memory_tiles" | "flash_cards";
+  gameType: "memory_tiles" | "flash_cards" | "matching";
   score: number;
   durationMs?: number;
 }): Promise<ActionResult> {

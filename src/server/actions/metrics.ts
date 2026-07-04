@@ -11,6 +11,7 @@ export interface StudentMetrics {
   networkingScore: number;
   bestMemoryTiles: number | null;
   bestFlashCards: number | null;
+  bestMatching: number | null;
   gamesPlayed: number;
 }
 
@@ -79,6 +80,7 @@ export async function getStudentMetrics(
 
   const memory = (scores ?? []).filter((s) => s.game_type === "memory_tiles");
   const flash = (scores ?? []).filter((s) => s.game_type === "flash_cards");
+  const matching = (scores ?? []).filter((s) => s.game_type === "matching");
 
   return {
     sessionsAttended: (checkins ?? []).length,
@@ -90,6 +92,8 @@ export async function getStudentMetrics(
       memory.length > 0 ? Math.max(...memory.map((s) => s.score)) : null,
     bestFlashCards:
       flash.length > 0 ? Math.max(...flash.map((s) => s.score)) : null,
+    bestMatching:
+      matching.length > 0 ? Math.max(...matching.map((s) => s.score)) : null,
     gamesPlayed: (scores ?? []).length,
   };
 }

@@ -10,7 +10,7 @@ export type Role = "student" | "professor"
 export type EnrollmentStatus = "invited" | "active"
 export type PhotoKind = "candid" | "professional" | "adventure"
 export type SeatRelation = "front" | "back" | "left" | "right"
-export type GameType = "memory_tiles" | "flash_cards"
+export type GameType = "memory_tiles" | "flash_cards" | "matching"
 export type DeckKind = "pdf" | "google_slides"
 export type FocusEventType = "away" | "back"
 export type QuestionSource = "ai" | "professor"
@@ -21,6 +21,7 @@ export type ProfileRow = {
   id: string
   role: Role
   full_name: string | null
+  name_phonetic: string | null
   onboarding_complete: boolean
   created_at: string
 }

@@ -18,6 +18,10 @@ export interface GamePlayer {
   enrollmentId: string;
   name: string;
   photoUrls: string[]; // 1–3 signed URLs
+  /** Pronunciation guide ("shiv-AWN"), if the classmate added one. */
+  phonetic?: string | null;
+  /** One icebreaker fact for the flash-card back, e.g. { label: "Hometown", value: "Greenville, SC" }. */
+  hint?: { label: string; value: string } | null;
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -50,6 +54,10 @@ function MemoryTiles({
   const boardPlayers = useMemo(
     () => shuffle(players).slice(0, Math.min(8, players.length)),
     [players]
+  );
+  const byId = useMemo(
+    () => new Map(boardPlayers.map((p) => [p.enrollmentId, p])),
+    [boardPlayers]
   );
   const [tiles] = useState<Tile[]>(() =>
     shuffle(
@@ -151,7 +159,14 @@ function MemoryTiles({
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <span className="p-1">{tile.content}</span>
+                  <span className="grid gap-0.5 p-1 leading-tight">
+                    {tile.content}
+                    {byId.get(tile.playerId)?.phonetic ? (
+                      <span className="text-[10px] font-normal italic text-muted-foreground">
+                        {byId.get(tile.playerId)!.phonetic}
+                      </span>
+                    ) : null}
+                  </span>
                 )
               ) : (
                 <span className="text-primary-foreground">?</span>
@@ -231,8 +246,19 @@ function FlashCards({
         aria-label={revealed ? player.name : "Flip to reveal name"}
       >
         {revealed ? (
-          <div className="flex h-72 items-center justify-center bg-background p-4 text-xl font-semibold">
-            {player.name}
+          <div className="flex h-72 flex-col items-center justify-center gap-2 bg-background p-4 text-center">
+            <span className="text-xl font-semibold">{player.name}</span>
+            {player.phonetic ? (
+              <span className="text-sm italic text-muted-foreground">
+                {player.phonetic}
+              </span>
+            ) : null}
+            {player.hint ? (
+              <span className="mt-1 text-sm text-muted-foreground">
+                <span className="font-medium">{player.hint.label}:</span>{" "}
+                {player.hint.value}
+              </span>
+            ) : null}
           </div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
@@ -251,6 +277,148 @@ function FlashCards({
           Flip
         </Button>
       )}
+    </div>
+  );
+}
+
+/* ---------------- Matching (tap to pair) ---------------- */
+
+function Matching({
+  players,
+  courseId,
+  onExit,
+}: {
+  players: GamePlayer[];
+  courseId: string;
+  onExit: () => void;
+}) {
+  // A board of up to 6. Photos hold their order; the name column is shuffled.
+  const boardPlayers = useMemo(
+    () => shuffle(players).slice(0, Math.min(6, players.length)),
+    [players]
+  );
+  const nameColumn = useMemo(() => shuffle(boardPlayers), [boardPlayers]);
+
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [matched, setMatched] = useState<Set<string>>(new Set());
+  const [wrongName, setWrongName] = useState<string | null>(null);
+  const [misses, setMisses] = useState(0);
+  const [startedAt] = useState(() => Date.now());
+  const [done, setDone] = useState(false);
+
+  // Record the finished round in an effect (keeps Date.now() out of render,
+  // same as Memory tiles). Fires once when the board is cleared.
+  useEffect(() => {
+    if (!done) return;
+    capture("game_played", { gameType: "matching" });
+    recordGameScore({
+      courseId,
+      gameType: "matching" satisfies GameType,
+      score: Math.max(0, 100 - misses * 10),
+      durationMs: Date.now() - startedAt,
+    }).then((r) => {
+      if (!r.ok) toast.error(r.error);
+    });
+    // misses/startedAt are read once at completion; done is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
+
+  function pickName(id: string) {
+    if (done || matched.has(id) || !selectedPhoto) return;
+    if (selectedPhoto === id) {
+      const next = new Set(matched);
+      next.add(id);
+      setMatched(next);
+      setSelectedPhoto(null);
+      setWrongName(null);
+      if (next.size === boardPlayers.length) setDone(true);
+    } else {
+      setMisses((m) => m + 1);
+      setWrongName(id);
+      setSelectedPhoto(null);
+    }
+  }
+
+  if (done) {
+    return (
+      <GameResult
+        title="All matched."
+        detail={
+          misses === 0
+            ? "Perfect — no misses."
+            : `${misses} miss${misses === 1 ? "" : "es"} along the way.`
+        }
+        onExit={onExit}
+      />
+    );
+  }
+
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm text-muted-foreground">
+        Tap a face, then tap the name that goes with it.{" "}
+        {misses > 0 ? `${misses} miss${misses === 1 ? "" : "es"}.` : null}
+      </p>
+      <div className="grid grid-cols-2 gap-4">
+        {/* Photo column */}
+        <div className="grid gap-2">
+          {boardPlayers.map((p) => {
+            const isMatched = matched.has(p.enrollmentId);
+            const isSelected = selectedPhoto === p.enrollmentId;
+            return (
+              <button
+                key={p.enrollmentId}
+                type="button"
+                onClick={() => {
+                  if (!isMatched) setSelectedPhoto(p.enrollmentId);
+                }}
+                disabled={isMatched}
+                aria-label={isMatched ? `Matched: ${p.name}` : "Pick this face"}
+                className={[
+                  "overflow-hidden rounded-lg border-2 transition-all",
+                  isMatched ? "opacity-30" : "",
+                  isSelected ? "border-primary ring-2 ring-primary" : "border-transparent",
+                ].join(" ")}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.photoUrls[0]}
+                  alt="Classmate"
+                  className="aspect-square w-full object-cover"
+                />
+              </button>
+            );
+          })}
+        </div>
+        {/* Name column */}
+        <div className="grid content-start gap-2">
+          {nameColumn.map((p) => {
+            const isMatched = matched.has(p.enrollmentId);
+            const isWrong = wrongName === p.enrollmentId;
+            return (
+              <button
+                key={p.enrollmentId}
+                type="button"
+                onClick={() => pickName(p.enrollmentId)}
+                disabled={isMatched}
+                className={[
+                  "rounded-lg border px-3 py-2 text-left text-sm font-medium transition-all",
+                  isMatched ? "border-primary bg-primary/10 text-primary opacity-60" : "",
+                  isWrong ? "border-destructive bg-destructive/10 text-destructive" : "",
+                  !isMatched && !isWrong ? "hover:border-primary" : "",
+                ].join(" ")}
+              >
+                {p.name}
+                {p.phonetic ? (
+                  <span className="block text-xs font-normal italic text-muted-foreground">
+                    {p.phonetic}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -299,12 +467,23 @@ export function NameGames({
 
   if (!game) {
     return (
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <Card className="cursor-pointer" onClick={() => setGame("memory_tiles")}>
           <CardHeader>
             <CardTitle>Memory tiles</CardTitle>
             <CardDescription>
               Flip tiles to match faces with names. Clear the board.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button>Play</Button>
+          </CardContent>
+        </Card>
+        <Card className="cursor-pointer" onClick={() => setGame("matching")}>
+          <CardHeader>
+            <CardTitle>Matching</CardTitle>
+            <CardDescription>
+              Tap a face, then tap the name that goes with it.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -331,6 +510,12 @@ export function NameGames({
       <CardContent className="pt-6">
         {game === "memory_tiles" ? (
           <MemoryTiles
+            players={players}
+            courseId={courseId}
+            onExit={() => setGame(null)}
+          />
+        ) : game === "matching" ? (
+          <Matching
             players={players}
             courseId={courseId}
             onExit={() => setGame(null)}
