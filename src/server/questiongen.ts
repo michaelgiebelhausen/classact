@@ -124,6 +124,9 @@ export async function generateTpsQuestions(
 ): Promise<GenResult> {
   const apiKey = env.openrouterApiKey;
   if (!apiKey) {
+    console.error(
+      "[questiongen] OPENROUTER_API_KEY is not set in this server process — restart the dev server after editing .env.local."
+    );
     return {
       ok: false,
       error:
@@ -172,6 +175,10 @@ export async function generateTpsQuestions(
   }
 
   if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    console.error(
+      `[questiongen] OpenRouter ${response.status}: ${detail.slice(0, 500)}`
+    );
     if (response.status === 401 || response.status === 403) {
       return {
         ok: false,
@@ -191,12 +198,15 @@ export async function generateTpsQuestions(
   }
 
   let text: string;
+  let rawPayload = "";
   try {
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
+    rawPayload = JSON.stringify(payload);
     text = payload.choices?.[0]?.message?.content ?? "";
   } catch {
+    console.error("[questiongen] OpenRouter response body was not JSON.");
     return { ok: false, error: "OpenRouter returned an unreadable response." };
   }
 
@@ -204,6 +214,9 @@ export async function generateTpsQuestions(
   try {
     parsed = JSON.parse(extractJson(text));
   } catch {
+    console.error(
+      `[questiongen] Model reply wasn't valid JSON. Payload: ${rawPayload.slice(0, 500)}`
+    );
     return {
       ok: false,
       error: "The model didn't return valid questions — try again.",
@@ -212,6 +225,9 @@ export async function generateTpsQuestions(
 
   const questions = validateQuestions(parsed, input.pageCount);
   if (questions.length === 0) {
+    console.error(
+      `[questiongen] Model JSON had no usable questions. Reply: ${text.slice(0, 500)}`
+    );
     return {
       ok: false,
       error: "The model didn't return usable questions — try again.",
