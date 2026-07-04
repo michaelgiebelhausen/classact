@@ -15,6 +15,10 @@ import {
   type ProjectListItem,
 } from "@/components/features/projects/ProjectManager";
 import type { TaskItem } from "@/components/features/projects/ProjectTasks";
+import {
+  TeamPanel,
+  type TeamInfo,
+} from "@/components/features/projects/TeamPanel";
 
 export default async function ProjectsPage({
   params,
@@ -69,6 +73,47 @@ export default async function ProjectsPage({
     tasksByProject.set(t.project_id, list);
   }
 
+  // Teams + members + contract signatures. RLS trims what each viewer gets
+  // (students only see signatures for their own team; that's fine — the UI
+  // only shows signed-status inside your own team card).
+  const { data: teamRows } = await supabase
+    .from("project_teams")
+    .select("id, project_id, name, contract_text")
+    .eq("course_id", courseId)
+    .order("created_at", { ascending: true });
+  const { data: memberRows } = await supabase
+    .from("project_team_members")
+    .select("team_id, enrollment_id, role, enrollments(roster_name)")
+    .in("team_id", (teamRows ?? []).map((t) => t.id));
+  const { data: signatureRows } = await supabase
+    .from("team_contract_signatures")
+    .select("team_id, enrollment_id")
+    .in("team_id", (teamRows ?? []).map((t) => t.id));
+  const signedSet = new Set(
+    (signatureRows ?? []).map((s) => `${s.team_id}:${s.enrollment_id}`)
+  );
+  const teamsByProject = new Map<string, TeamInfo[]>();
+  for (const team of teamRows ?? []) {
+    const members = (memberRows ?? [])
+      .filter((m) => m.team_id === team.id)
+      .map((m) => ({
+        enrollmentId: m.enrollment_id,
+        name:
+          (m.enrollments as unknown as { roster_name: string } | null)
+            ?.roster_name ?? "Unknown",
+        role: m.role,
+        signed: signedSet.has(`${team.id}:${m.enrollment_id}`),
+      }));
+    const list = teamsByProject.get(team.project_id) ?? [];
+    list.push({
+      id: team.id,
+      name: team.name,
+      contractText: team.contract_text,
+      members,
+    });
+    teamsByProject.set(team.project_id, list);
+  }
+
   // ---------- Professor ----------
   if (isProfessor) {
     const projects: ProjectListItem[] = (projectRows ?? []).map((p) => ({
@@ -80,6 +125,12 @@ export default async function ProjectsPage({
       contractText: p.contract_text,
       status: p.status,
       tasks: tasksByProject.get(p.id) ?? [],
+      teams: (teamsByProject.get(p.id) ?? []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        memberCount: t.members.length,
+        signedCount: t.members.filter((m) => m.signed).length,
+      })),
     }));
     return (
       <div className="grid gap-6">
@@ -90,6 +141,14 @@ export default async function ProjectsPage({
   }
 
   // ---------- Student ----------
+  const { data: myEnrollment } = await supabase
+    .from("enrollments")
+    .select("id")
+    .eq("course_id", courseId)
+    .eq("profile_id", profile.id)
+    .eq("status", "active")
+    .maybeSingle();
+
   if (!projectRows || projectRows.length === 0) {
     return (
       <div className="grid gap-6">
@@ -168,11 +227,19 @@ export default async function ProjectsPage({
                   ))}
                 </ul>
               )}
-              <p className="text-xs text-muted-foreground">
-                Team sign-up and the task board are coming in the next update —
-                for now, look over the tasks and start thinking about who
-                you&apos;ll team up with.
-              </p>
+              {myEnrollment ? (
+                <TeamPanel
+                  courseId={courseId}
+                  projectId={p.id}
+                  targetTeamSize={p.target_team_size}
+                  myEnrollmentId={myEnrollment.id}
+                  teams={teamsByProject.get(p.id) ?? []}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Activate your enrollment to join a team.
+                </p>
+              )}
             </CardContent>
           </Card>
         );

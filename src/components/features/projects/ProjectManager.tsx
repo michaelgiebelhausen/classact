@@ -44,6 +44,13 @@ import { capture } from "@/lib/analytics";
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024; // Supabase default object limit
 
+export interface ProjectTeamSummary {
+  id: string;
+  name: string;
+  memberCount: number;
+  signedCount: number;
+}
+
 export interface ProjectListItem {
   id: string;
   title: string;
@@ -53,6 +60,7 @@ export interface ProjectListItem {
   contractText: string;
   status: "draft" | "open";
   tasks: TaskItem[];
+  teams: ProjectTeamSummary[];
 }
 
 interface Props {
@@ -279,10 +287,6 @@ export function ProjectManager({ courseId, projects }: Props) {
               {uploading ? "Working…" : "Upload assignment PDF"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Team size is guidance, not a cap — students see a heads-up if their
-            team grows past it.
-          </p>
         </CardContent>
       </Card>
 
@@ -386,6 +390,19 @@ export function ProjectManager({ courseId, projects }: Props) {
                     projectId={project.id}
                     tasks={project.tasks}
                   />
+                  {project.teams.length > 0 && (
+                    <div className="mt-2 border-t pt-2">
+                      <p className="text-xs text-muted-foreground">
+                        <Users className="mr-1 inline size-3" />
+                        {project.teams
+                          .map(
+                            (t) =>
+                              `${t.name} (${t.memberCount} member${t.memberCount === 1 ? "" : "s"} · ${t.signedCount} signed)`
+                          )
+                          .join(" · ")}
+                      </p>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
