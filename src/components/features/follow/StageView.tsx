@@ -1,11 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Maximize2 } from "lucide-react";
+import { Maximize2, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
+import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { setLecturePage } from "@/server/actions/lectures";
-import { lectureChannelName, type LectureSyncMessage } from "@/lib/lecturesync";
+import {
+  lectureChannelName,
+  type LectureSyncMessage,
+  type PollBroadcast,
+} from "@/lib/lecturesync";
+import type { PollResults, PollStage } from "@/types/db";
+
+const LETTERS = "ABCDEFGH";
 
 interface Props {
   courseId: string;
@@ -16,6 +24,8 @@ interface Props {
   deckKind: "pdf" | "google_slides";
   fileUrl: string | null;
   embedUrl: string | null;
+  /** Open round when the window is opened mid-poll. */
+  initialPoll: PollBroadcast | null;
 }
 
 /**
@@ -33,12 +43,20 @@ export function StageView({
   deckKind,
   fileUrl,
   embedUrl,
+  initialPoll,
 }: Props) {
   const [page, setPage] = useState(initialPage);
   const [ended, setEnded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [poll, setPoll] = useState<PollBroadcast | null>(initialPoll);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const pageRef = useRef(initialPage);
+  const pollRef = useRef<PollBroadcast | null>(initialPoll);
+
+  const applyPoll = useCallback((next: PollBroadcast | null) => {
+    pollRef.current = next;
+    setPoll(next);
+  }, []);
 
   // Same-browser sync with the presenter window.
   useEffect(() => {
@@ -48,6 +66,8 @@ export function StageView({
       if (e.data?.type === "page") {
         pageRef.current = e.data.page;
         setPage(e.data.page);
+      } else if (e.data?.type === "poll") {
+        applyPoll(e.data.poll);
       } else if (e.data?.type === "ended") {
         setEnded(true);
       }
@@ -56,7 +76,50 @@ export function StageView({
       channelRef.current = null;
       channel.close();
     };
-  }, [lectureId]);
+  }, [lectureId, applyPoll]);
+
+  // Cross-device fallback for polls: follow the round rows directly.
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`stage-polls:${lectureId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "poll_rounds",
+          filter: `lecture_id=eq.${lectureId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            id?: string;
+            prompt?: string;
+            options?: string[];
+            stage?: PollStage;
+            results?: PollResults | null;
+            correct_indices?: number[] | null;
+          };
+          if (!rec?.id || !rec.stage) return;
+          if (rec.stage === "closed") {
+            if (pollRef.current?.roundId === rec.id) applyPoll(null);
+            return;
+          }
+          applyPoll({
+            roundId: rec.id,
+            prompt: rec.prompt ?? pollRef.current?.prompt ?? "",
+            options: rec.options ?? pollRef.current?.options ?? [],
+            stage: rec.stage,
+            results: rec.results ?? null,
+            correctIndices: rec.correct_indices ?? null,
+          });
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [lectureId, applyPoll]);
 
   // Cross-device fallback: follow the lecture row like a student would.
   useEffect(() => {
@@ -93,6 +156,8 @@ export function StageView({
   // The professor may click through with this window focused too.
   const goTo = useCallback(
     (next: number) => {
+      // While a poll is on, the poll owns the projector — slides stay put.
+      if (pollRef.current) return;
       const clamped = Math.max(1, pageCount ? Math.min(next, pageCount) : next);
       if (clamped === pageRef.current) return;
       pageRef.current = clamped;
@@ -173,6 +238,59 @@ export function StageView({
           allowFullScreen
         />
       ) : null}
+
+      {poll && (
+        <div className="absolute inset-0 grid place-items-center overflow-y-auto bg-black p-[6vmin] text-white">
+          <div className="w-full max-w-4xl">
+            <p className="text-sm font-medium uppercase tracking-widest text-white/50">
+              {poll.stage === "think" && "Think — answer on your own device"}
+              {poll.stage === "pair" && "Pair — discuss with your partner"}
+              {poll.stage === "revote" && "Re-vote — answer again"}
+              {poll.stage === "reveal" && "Results"}
+            </p>
+            <h1 className="mt-4 text-balance text-[clamp(1.5rem,4vmin,3rem)] font-semibold leading-tight">
+              {poll.prompt}
+            </h1>
+            <div className="mt-8">
+              {poll.stage === "reveal" ? (
+                <PollResultsChart
+                  options={poll.options}
+                  results={poll.results}
+                  correctIndices={poll.correctIndices}
+                  variant="dark"
+                />
+              ) : poll.stage === "pair" ? (
+                <div className="flex items-center gap-4 rounded-xl bg-white/5 p-6 text-white/80">
+                  <Users className="size-10 shrink-0" />
+                  <p className="text-[clamp(1rem,2.5vmin,1.5rem)]">
+                    Your partner is on your screen — explain your reasoning and
+                    try to convince each other.
+                  </p>
+                </div>
+              ) : (
+                <ul className="grid gap-3">
+                  {poll.options.map((option, i) => (
+                    <li
+                      key={i}
+                      className="rounded-xl bg-white/5 px-5 py-4 text-[clamp(1rem,2.8vmin,1.75rem)]"
+                    >
+                      <span className="mr-3 font-semibold text-white/60">
+                        {LETTERS[i]}.
+                      </span>
+                      {option}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {(poll.stage === "think" || poll.stage === "revote") && (
+              <p className="mt-8 text-[clamp(0.875rem,2vmin,1.25rem)] text-white/50">
+                Answer on your own computer — Follow Along → Participate.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {!isFullscreen && (
         <button

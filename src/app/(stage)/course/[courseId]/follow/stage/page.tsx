@@ -58,6 +58,14 @@ export default async function StagePage({
       ? await getSignedDeckUrl(supabase, deck.storage_path)
       : null;
 
+  // If the window opens mid-poll, start on the question, not the slide.
+  const { data: openRound } = await supabase
+    .from("poll_rounds")
+    .select("id, prompt, options, stage, results, correct_indices")
+    .eq("lecture_id", lecture.id)
+    .neq("stage", "closed")
+    .maybeSingle();
+
   return (
     <StageView
       courseId={courseId}
@@ -68,6 +76,18 @@ export default async function StagePage({
       deckKind={deck.kind}
       fileUrl={fileUrl}
       embedUrl={deck.embed_url}
+      initialPoll={
+        openRound
+          ? {
+              roundId: openRound.id,
+              prompt: openRound.prompt,
+              options: openRound.options,
+              stage: openRound.stage,
+              results: openRound.results,
+              correctIndices: openRound.correct_indices,
+            }
+          : null
+      }
     />
   );
 }

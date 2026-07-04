@@ -40,16 +40,24 @@ You already created the "Class Act" project at supabase.com. Now:
 2. **Create the database tables:** dashboard → SQL Editor → New query. Open
    `supabase/migrations/0001_init.sql` in this folder, paste the whole thing,
    Run. Repeat for `0002_rls.sql`, `0003_storage.sql`,
-   `0004_canvas_photos.sql`, then `0005_follow_along.sql` (order matters).
-   Each should say "Success".
+   `0004_canvas_photos.sql`, `0005_follow_along.sql`, then
+   `0006_participate.sql` (order matters). Each should say "Success".
 3. **Check Realtime is on:** dashboard → Database → Replication → make sure
-   the `supabase_realtime` publication includes `check_ins`, `lectures`, and
-   `focus_events` (migrations 0002/0005 add them; just confirm).
+   the `supabase_realtime` publication includes `check_ins`, `lectures`,
+   `focus_events`, `poll_rounds`, `poll_answers`, and `poll_pairs`
+   (migrations 0002/0005/0006 add them; just confirm).
 4. **Canvas roster sync (optional):** to pull students + ID photos straight
    from a Canvas course, set in `.env.local` (and later in Vercel):
    - `CANVAS_BASE_URL` — e.g. `https://clemson.instructure.com`
    - `CANVAS_API_TOKEN` — Canvas → Account → Settings → New Access Token
-5. **Auth redirect URLs:** dashboard → Authentication → URL Configuration:
+5. **AI think-pair-share questions (OpenRouter):** set in `.env.local` (and
+   later in Vercel):
+   - `OPENROUTER_API_KEY` — openrouter.ai → Keys → Create Key (server-only;
+     treat like a password)
+   - `OPENROUTER_MODEL` — optional; defaults to `anthropic/claude-sonnet-5`.
+     If generation errors mention the model, set this to a Claude model your
+     OpenRouter account can use (it needs PDF/file input support).
+6. **Auth redirect URLs:** dashboard → Authentication → URL Configuration:
    - Site URL: `http://localhost:3000` for now (change to your live URL later)
    - Redirect URLs: add `http://localhost:3000/**`
 

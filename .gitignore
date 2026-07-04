@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the blank template must ship with the repo (see HANDOFF.md)
+!.env.example
 
 # vercel
 .vercel

@@ -8,9 +8,12 @@ import {
   ChevronRight,
   EyeOff,
   MonitorUp,
+  Play,
   Sparkles,
   Square,
   Timer,
+  Users,
+  X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
@@ -24,15 +27,31 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
+import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { endLecture, setLecturePage } from "@/server/actions/lectures";
+import {
+  closePollRound,
+  launchPollRound,
+  markPollCorrect,
+  revealPollResults,
+  setPollStage,
+} from "@/server/actions/polls";
 import { formatAwayDuration } from "@/lib/focus";
+import { firstVoteGuidance, tallyVotes } from "@/lib/participate";
 import {
   lectureChannelName,
   stagePath,
   type LectureSyncMessage,
 } from "@/lib/lecturesync";
 import { capture } from "@/lib/analytics";
-import type { FocusEventType } from "@/types/db";
+import type {
+  FocusEventType,
+  PollPhase,
+  PollResults,
+  PollStage,
+} from "@/types/db";
+
+const LETTERS = "ABCDEFGH";
 
 export interface RosterEntry {
   name: string;
@@ -44,6 +63,32 @@ export interface FocusStateInput {
   awayCount: number;
   awayMs: number;
   isAway: boolean;
+}
+
+/** Approved bank question, ready to launch (includes the professor's key). */
+export interface PresenterQuestion {
+  id: string;
+  prompt: string;
+  options: string[];
+  correctIndices: number[];
+  positionAfterPage: number;
+}
+
+/** The open round, as the presenter tracks it locally. */
+export interface ActiveRound {
+  id: string;
+  questionId: string | null;
+  prompt: string;
+  options: string[];
+  stage: PollStage;
+  results: PollResults | null;
+  correctIndices: number[] | null;
+}
+
+export interface PresenterVote {
+  enrollmentId: string;
+  phase: PollPhase;
+  choice: number;
 }
 
 interface Props {
@@ -58,6 +103,14 @@ interface Props {
   pageCount: number | null;
   roster: Record<string, RosterEntry>;
   initialFocus: FocusStateInput[];
+  /** Approved think-pair-share questions for this deck. */
+  questions: PresenterQuestion[];
+  /** Question ids already run (any round) in this lecture. */
+  ranQuestionIds: string[];
+  /** The open round, when the page loads mid-poll. */
+  initialRound: ActiveRound | null;
+  /** Votes already recorded on the open round. */
+  initialVotes: PresenterVote[];
 }
 
 interface FocusState {
@@ -88,6 +141,10 @@ export function ProfessorPresenter({
   pageCount,
   roster,
   initialFocus,
+  questions,
+  ranQuestionIds,
+  initialRound,
+  initialVotes,
 }: Props) {
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
@@ -112,10 +169,93 @@ export function ProfessorPresenter({
   const pageRef = useRef(initialPage);
   const channelRef = useRef<BroadcastChannel | null>(null);
 
+  // ---- Think-pair-share round state ----
+  const [round, setRound] = useState<ActiveRound | null>(initialRound);
+  const roundRef = useRef<ActiveRound | null>(initialRound);
+  const ranRef = useRef<Set<string>>(new Set(ranQuestionIds));
+  const [ran, setRan] = useState<Set<string>>(() => new Set(ranQuestionIds));
+  const [votes, setVotes] = useState<Map<string, Partial<Record<PollPhase, number>>>>(
+    () => {
+      const map = new Map<string, Partial<Record<PollPhase, number>>>();
+      for (const v of initialVotes) {
+        const entry = map.get(v.enrollmentId) ?? {};
+        entry[v.phase] = v.choice;
+        map.set(v.enrollmentId, entry);
+      }
+      return map;
+    }
+  );
+  const [pollBusy, setPollBusy] = useState(false);
+
+  const broadcastPoll = useCallback((p: ActiveRound | null) => {
+    channelRef.current?.postMessage({
+      type: "poll",
+      poll: p
+        ? {
+            roundId: p.id,
+            prompt: p.prompt,
+            options: p.options,
+            stage: p.stage,
+            results: p.results,
+            correctIndices: p.correctIndices,
+          }
+        : null,
+    } satisfies LectureSyncMessage);
+  }, []);
+
+  const applyRound = useCallback(
+    (p: ActiveRound | null) => {
+      roundRef.current = p;
+      setRound(p);
+      broadcastPoll(p);
+    },
+    [broadcastPoll]
+  );
+
+  const launchQuestion = useCallback(
+    async (question: PresenterQuestion) => {
+      setPollBusy(true);
+      const result = await launchPollRound(courseId, lectureId, question.id);
+      setPollBusy(false);
+      if (!result.ok || !result.data) {
+        toast.error(result.ok ? "Couldn't launch the poll." : result.error);
+        return;
+      }
+      ranRef.current.add(question.id);
+      setRan(new Set(ranRef.current));
+      setVotes(new Map());
+      applyRound({
+        id: result.data.roundId,
+        questionId: question.id,
+        prompt: question.prompt,
+        options: question.options,
+        stage: "think",
+        results: null,
+        correctIndices: null,
+      });
+      capture("poll_launched", {});
+    },
+    [applyRound, courseId, lectureId]
+  );
+
   const goTo = useCallback(
     (next: number) => {
+      // While a poll is open it owns the room — slides stay put.
+      if (roundRef.current) return;
       const clamped = Math.max(1, totalPages ? Math.min(next, totalPages) : next);
       if (clamped === pageRef.current) return;
+      // Advancing one slide forward runs any queued question first — the
+      // poll inserts itself between the slides.
+      if (clamped === pageRef.current + 1) {
+        const queued = questions.find(
+          (q) =>
+            q.positionAfterPage === pageRef.current && !ranRef.current.has(q.id)
+        );
+        if (queued) {
+          void launchQuestion(queued);
+          return;
+        }
+      }
       pageRef.current = clamped;
       setPage(clamped);
       channelRef.current?.postMessage({
@@ -126,7 +266,7 @@ export function ProfessorPresenter({
         if (!result.ok) toast.error(result.error);
       });
     },
-    [courseId, lectureId, totalPages]
+    [courseId, lectureId, totalPages, questions, launchQuestion]
   );
 
   // Instant sync with the projector stage window (same browser).
@@ -247,7 +387,115 @@ export function ProfessorPresenter({
     };
   }, [lectureId]);
 
+  // Live votes on the open round (professor-private tallies).
+  const roundId = round?.id ?? null;
+  useEffect(() => {
+    if (!roundId) return;
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`poll-votes:${roundId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "poll_answers",
+          filter: `round_id=eq.${roundId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            enrollment_id?: string;
+            phase?: PollPhase;
+            choice?: number;
+          };
+          if (!rec?.enrollment_id || rec.phase === undefined) return;
+          setVotes((prev) => {
+            const next = new Map(prev);
+            const entry = { ...(next.get(rec.enrollment_id!) ?? {}) };
+            entry[rec.phase!] = rec.choice;
+            next.set(rec.enrollment_id!, entry);
+            return next;
+          });
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [roundId]);
+
+  async function advanceStage(stage: "pair" | "revote") {
+    if (!roundRef.current) return;
+    setPollBusy(true);
+    const result = await setPollStage(courseId, roundRef.current.id, stage);
+    setPollBusy(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    applyRound({ ...roundRef.current, stage });
+  }
+
+  async function revealResults() {
+    if (!roundRef.current) return;
+    setPollBusy(true);
+    const result = await revealPollResults(courseId, roundRef.current.id);
+    setPollBusy(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    // Local tally so the reveal is instant; students get the DB copy.
+    const answers: Array<{ phase: PollPhase; choice: number }> = [];
+    votes.forEach((entry) => {
+      if (entry.think !== undefined)
+        answers.push({ phase: "think", choice: entry.think });
+      if (entry.revote !== undefined)
+        answers.push({ phase: "revote", choice: entry.revote });
+    });
+    applyRound({
+      ...roundRef.current,
+      stage: "reveal",
+      results: tallyVotes(answers, roundRef.current.options.length),
+    });
+    capture("poll_revealed", {});
+  }
+
+  async function toggleCorrect(index: number) {
+    if (!roundRef.current) return;
+    const current = roundRef.current.correctIndices ?? [];
+    const next = current.includes(index)
+      ? current.filter((i) => i !== index)
+      : [...current, index].sort((a, b) => a - b);
+    if (next.length === 0) return; // keep at least one marked
+    const result = await markPollCorrect(courseId, roundRef.current.id, next);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    applyRound({ ...roundRef.current, correctIndices: next });
+  }
+
+  async function closeRound(advance: boolean) {
+    if (!roundRef.current) return;
+    setPollBusy(true);
+    const result = await closePollRound(courseId, roundRef.current.id);
+    setPollBusy(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    applyRound(null);
+    // goTo (not skipping the poll check) so a second question queued at the
+    // same slide launches next instead of being skipped.
+    if (advance) goTo(pageRef.current + 1);
+  }
+
   async function handleEnd() {
+    if (roundRef.current) {
+      await closePollRound(courseId, roundRef.current.id);
+      applyRound(null);
+    }
     setEnding(true);
     const result = await endLecture(courseId, lectureId);
     setEnding(false);
@@ -288,6 +536,57 @@ export function ProfessorPresenter({
     return rows;
   }, [roster, focus, now]);
   const awayNow = attention.filter((a) => a.isAway).length;
+  const rosterCount = Object.keys(roster).length;
+
+  const queued = useMemo(
+    () =>
+      questions
+        .filter((q) => !ran.has(q.id))
+        .sort((a, b) => a.positionAfterPage - b.positionAfterPage),
+    [questions, ran]
+  );
+
+  // Professor-private live tallies for the open round.
+  const pollStats = useMemo(() => {
+    if (!round) return null;
+    const showRevote = round.stage === "revote" || round.stage === "reveal";
+    const counts = round.options.map(() => 0);
+    const suggestedKey = round.questionId
+      ? (questions.find((q) => q.id === round.questionId)?.correctIndices ?? [])
+      : [];
+    let thinkCount = 0;
+    let revoteCount = 0;
+    let thinkCorrect = 0;
+    votes.forEach((entry) => {
+      if (entry.think !== undefined) {
+        thinkCount += 1;
+        if (suggestedKey.includes(entry.think)) thinkCorrect += 1;
+      }
+      if (entry.revote !== undefined) revoteCount += 1;
+      const shown = showRevote ? entry.revote : entry.think;
+      if (shown !== undefined && shown >= 0 && shown < counts.length) {
+        counts[shown] += 1;
+      }
+    });
+    return {
+      counts,
+      thinkCount,
+      revoteCount,
+      suggestedKey,
+      guidance:
+        suggestedKey.length > 0
+          ? firstVoteGuidance(thinkCorrect, thinkCount)
+          : null,
+    };
+  }, [round, votes, questions]);
+
+  const stageLabel: Record<PollStage, string> = {
+    think: "Think — students answer on their own.",
+    pair: "Pair — partners are assigned and debating.",
+    revote: "Re-vote — did anyone get convinced?",
+    reveal: "Reveal — click an option to mark it correct.",
+    closed: "",
+  };
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -411,16 +710,156 @@ export function ProfessorPresenter({
           </CardContent>
         </Card>
 
-        <Card className="border-dashed">
+        <Card
+          className={
+            round ? "border-[var(--flame,#e0552f)]" : undefined
+          }
+        >
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base text-muted-foreground">
+            <CardTitle className="flex items-center gap-2 text-base">
               <Sparkles className="size-4" /> Think-Pair-Share
             </CardTitle>
             <CardDescription>
-              Coming soon — AI-suggested discussion questions will pop in here
-              based on your slides.
+              {round
+                ? stageLabel[round.stage]
+                : queued.length > 0
+                  ? `${queued.length} approved ${queued.length === 1 ? "question pops" : "questions pop"} in automatically as you pass ${queued.length === 1 ? "its" : "their"} slide.`
+                  : "Approve or add questions on your deck to run them live."}
             </CardDescription>
           </CardHeader>
+          <CardContent className="grid gap-3">
+            {round && pollStats ? (
+              <>
+                <p className="text-sm font-medium">{round.prompt}</p>
+                <p className="text-xs text-muted-foreground">
+                  {round.stage === "revote" || round.stage === "reveal"
+                    ? `${pollStats.revoteCount} of ${rosterCount} re-voted`
+                    : `${pollStats.thinkCount} of ${rosterCount} answered`}
+                </p>
+                {round.stage === "think" && pollStats.guidance && (
+                  <p className="rounded-lg bg-muted p-2 text-xs">
+                    <span className="font-medium">
+                      {pollStats.guidance.pct}% correct so far.
+                    </span>{" "}
+                    {pollStats.guidance.message}
+                  </p>
+                )}
+                {round.stage === "reveal" ? (
+                  <PollResultsChart
+                    options={round.options}
+                    results={round.results}
+                    correctIndices={round.correctIndices}
+                    onSelectOption={(i) => void toggleCorrect(i)}
+                  />
+                ) : (
+                  <ul className="grid gap-1">
+                    {round.options.map((option, i) => (
+                      <li
+                        key={i}
+                        className="flex items-center justify-between gap-2 text-sm"
+                      >
+                        <span className="min-w-0 truncate">
+                          {LETTERS[i]}. {option}
+                          {pollStats.suggestedKey.includes(i) && (
+                            <span
+                              className="ml-1 text-xs text-green-700"
+                              title="Your answer key"
+                            >
+                              ✓
+                            </span>
+                          )}
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {pollStats.counts[i]}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="grid gap-2">
+                  {round.stage === "think" && (
+                    <Button
+                      className="w-full"
+                      onClick={() => void advanceStage("pair")}
+                      disabled={pollBusy}
+                    >
+                      <Users className="mr-2 size-4" /> Pair & discuss
+                    </Button>
+                  )}
+                  {round.stage === "pair" && (
+                    <Button
+                      className="w-full"
+                      onClick={() => void advanceStage("revote")}
+                      disabled={pollBusy}
+                    >
+                      Open re-vote
+                    </Button>
+                  )}
+                  {(round.stage === "revote" ||
+                    round.stage === "think" ||
+                    round.stage === "pair") && (
+                    <Button
+                      variant={round.stage === "revote" ? "default" : "outline"}
+                      className="w-full"
+                      onClick={() => void revealResults()}
+                      disabled={pollBusy}
+                    >
+                      Reveal results
+                    </Button>
+                  )}
+                  {round.stage === "reveal" && (
+                    <Button
+                      className="w-full"
+                      onClick={() => void closeRound(true)}
+                      disabled={pollBusy}
+                    >
+                      <Play className="mr-2 size-4" /> Resume lecture
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-muted-foreground"
+                    onClick={() => void closeRound(false)}
+                    disabled={pollBusy}
+                  >
+                    <X className="mr-1 size-4" /> Cancel poll
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                {queued.slice(0, 4).map((q) => (
+                  <div key={q.id} className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm" title={q.prompt}>
+                        {q.prompt}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        After slide {q.positionAfterPage}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void launchQuestion(q)}
+                      disabled={pollBusy}
+                      aria-label={`Launch: ${q.prompt.slice(0, 60)}`}
+                    >
+                      <Play className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                {queued.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Nothing queued. Questions are managed on your deck in
+                    Follow Along (or the Participate page) — approve some
+                    before class.
+                  </p>
+                )}
+              </>
+            )}
+          </CardContent>
         </Card>
       </div>
     </div>

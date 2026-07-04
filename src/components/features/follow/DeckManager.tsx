@@ -16,6 +16,10 @@ import {
 } from "@/components/ui/card";
 import { DECK_BUCKET } from "@/lib/storage";
 import { createDeck, deleteDeck, startLecture } from "@/server/actions/lectures";
+import {
+  DeckQuestions,
+  type QuestionItem,
+} from "@/components/features/follow/DeckQuestions";
 import { capture } from "@/lib/analytics";
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024; // Supabase default object limit
@@ -26,6 +30,8 @@ export interface DeckListItem {
   kind: "pdf" | "google_slides";
   pageCount: number | null;
   createdAt: string;
+  readingTitle: string | null;
+  questions: QuestionItem[];
 }
 
 interface Props {
@@ -214,37 +220,47 @@ export function DeckManager({ courseId, decks }: Props) {
               {decks.map((deck) => (
                 <li
                   key={deck.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3"
+                  className="rounded-lg border px-4 py-3"
                 >
-                  <div className="flex items-center gap-3">
-                    <Presentation className="size-5 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm font-medium">{deck.title}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {deck.kind === "pdf"
-                          ? `PDF${deck.pageCount ? ` · ${deck.pageCount} slides` : ""}`
-                          : "Google Slides (unsynced)"}
-                      </p>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <Presentation className="size-5 text-muted-foreground" />
+                      <div>
+                        <p className="text-sm font-medium">{deck.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {deck.kind === "pdf"
+                            ? `PDF${deck.pageCount ? ` · ${deck.pageCount} slides` : ""}`
+                            : "Google Slides (unsynced)"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => void handlePresent(deck.id)}
+                        disabled={busyDeck === deck.id}
+                      >
+                        <Play className="mr-1 size-4" /> Present
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void handleDelete(deck)}
+                        disabled={busyDeck === deck.id}
+                        aria-label={`Delete ${deck.title}`}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => void handlePresent(deck.id)}
-                      disabled={busyDeck === deck.id}
-                    >
-                      <Play className="mr-1 size-4" /> Present
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void handleDelete(deck)}
-                      disabled={busyDeck === deck.id}
-                      aria-label={`Delete ${deck.title}`}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </div>
+                  <DeckQuestions
+                    courseId={courseId}
+                    deckId={deck.id}
+                    deckKind={deck.kind}
+                    pageCount={deck.pageCount}
+                    readingTitle={deck.readingTitle}
+                    questions={deck.questions}
+                  />
                 </li>
               ))}
             </ul>

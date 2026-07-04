@@ -7,6 +7,7 @@ import { AlertTriangle, Eye, NotebookPen, Radio, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Card,
   CardContent,
@@ -15,13 +16,30 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
+import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { recordFocusEvent, saveLectureNotes } from "@/server/actions/lectures";
+import { submitPollAnswer } from "@/server/actions/polls";
 import { formatAwayDuration } from "@/lib/focus";
 import { capture } from "@/lib/analytics";
+import { cn } from "@/lib/utils";
+import type { PollPhase, PollResults, PollStage } from "@/types/db";
+
+const LETTERS = "ABCDEFGH";
+
+/** The open round, as students see it (no answer key until reveal). */
+export interface StudentRound {
+  id: string;
+  prompt: string;
+  options: string[];
+  stage: PollStage;
+  results: PollResults | null;
+  correctIndices: number[] | null;
+}
 
 interface Props {
   courseId: string;
   lectureId: string;
+  enrollmentId: string;
   initialPage: number;
   deckTitle: string;
   deckKind: "pdf" | "google_slides";
@@ -31,13 +49,29 @@ interface Props {
   /** Prior focus tally for this lecture (survives refreshes). */
   initialAwayCount: number;
   initialAwayMs: number;
+  /** Class roster (names/photos) so partners can be shown by face. */
+  roster: Record<string, { name: string; photoUrl: string | null }>;
+  initialRound: StudentRound | null;
+  initialMyAnswers: Array<{ phase: PollPhase; choice: number }>;
+  initialPartnerIds: string[];
 }
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
 export function StudentFollow({
   courseId,
   lectureId,
+  enrollmentId,
   initialPage,
   deckTitle,
   deckKind,
@@ -46,6 +80,10 @@ export function StudentFollow({
   initialNotes,
   initialAwayCount,
   initialAwayMs,
+  roster,
+  initialRound,
+  initialMyAnswers,
+  initialPartnerIds,
 }: Props) {
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
@@ -55,6 +93,18 @@ export function StudentFollow({
   const [awayCount, setAwayCount] = useState(initialAwayCount);
   const [awayMs, setAwayMs] = useState(initialAwayMs);
   const [warning, setWarning] = useState<{ durationMs: number } | null>(null);
+
+  // ---- Think-pair-share round ----
+  const [round, setRound] = useState<StudentRound | null>(initialRound);
+  const [myThink, setMyThink] = useState<number | null>(
+    initialMyAnswers.find((a) => a.phase === "think")?.choice ?? null
+  );
+  const [myRevote, setMyRevote] = useState<number | null>(
+    initialMyAnswers.find((a) => a.phase === "revote")?.choice ?? null
+  );
+  const [partnerIds, setPartnerIds] = useState<string[]>(initialPartnerIds);
+  const [voting, setVoting] = useState(false);
+  const roundIdRef = useRef<string | null>(initialRound?.id ?? null);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAwayRef = useRef(false);
@@ -117,6 +167,130 @@ export function StudentFollow({
       supabase.removeChannel(channel);
     };
   }, [lectureId, router]);
+
+  // ---- Poll sync: rounds pop in / advance stages, pairs arrive ----
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`polls:${lectureId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "poll_rounds",
+          filter: `lecture_id=eq.${lectureId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            id: string;
+            prompt: string;
+            options: string[];
+            stage: PollStage;
+            results: PollResults | null;
+            correct_indices: number[] | null;
+          };
+          if (!rec?.id || rec.stage === "closed") return;
+          roundIdRef.current = rec.id;
+          setRound({
+            id: rec.id,
+            prompt: rec.prompt,
+            options: rec.options,
+            stage: rec.stage,
+            results: rec.results,
+            correctIndices: rec.correct_indices,
+          });
+          setMyThink(null);
+          setMyRevote(null);
+          setPartnerIds([]);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "poll_rounds",
+          filter: `lecture_id=eq.${lectureId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            id: string;
+            stage: PollStage;
+            results: PollResults | null;
+            correct_indices: number[] | null;
+          };
+          if (!rec?.id || rec.id !== roundIdRef.current) return;
+          if (rec.stage === "closed") {
+            roundIdRef.current = null;
+            setRound(null);
+            setPartnerIds([]);
+            return;
+          }
+          setRound((prev) =>
+            prev && prev.id === rec.id
+              ? {
+                  ...prev,
+                  stage: rec.stage,
+                  results: rec.results,
+                  correctIndices: rec.correct_indices,
+                }
+              : prev
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "poll_pairs",
+          filter: `course_id=eq.${courseId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            round_id: string;
+            member_ids: string[];
+          };
+          if (
+            rec?.round_id !== roundIdRef.current ||
+            !Array.isArray(rec.member_ids) ||
+            !rec.member_ids.includes(enrollmentId)
+          ) {
+            return;
+          }
+          setPartnerIds(rec.member_ids.filter((id) => id !== enrollmentId));
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [lectureId, courseId, enrollmentId]);
+
+  async function vote(choice: number) {
+    if (!round || voting) return;
+    const phase: PollPhase | null =
+      round.stage === "think"
+        ? "think"
+        : round.stage === "revote"
+          ? "revote"
+          : null;
+    if (!phase) return;
+    const previous = phase === "think" ? myThink : myRevote;
+    if (phase === "think") setMyThink(choice);
+    else setMyRevote(choice);
+    setVoting(true);
+    const result = await submitPollAnswer(courseId, round.id, choice);
+    setVoting(false);
+    if (!result.ok) {
+      if (phase === "think") setMyThink(previous);
+      else setMyRevote(previous);
+      toast.error(result.error);
+      return;
+    }
+    capture("poll_answered", { phase });
+  }
 
   // ---- Focus guard: log tab-away / return, warn on return ----
   useEffect(() => {
@@ -186,6 +360,128 @@ export function StudentFollow({
             ? "Save failed — keep a copy!"
             : "Notes are private to you";
 
+  // ---- Poll card (pops into the rail while a round is live) ----
+  const canVote = round?.stage === "think" || round?.stage === "revote";
+  const selection =
+    round?.stage === "revote" || round?.stage === "reveal"
+      ? (myRevote ?? null)
+      : myThink;
+  let revealOutcome: string | null = null;
+  if (round?.stage === "reveal" && round.correctIndices?.length) {
+    const key = round.correctIndices;
+    const finalChoice = myRevote ?? myThink;
+    const firstRight = myThink !== null && key.includes(myThink);
+    const finalRight = finalChoice !== null && key.includes(finalChoice);
+    if (finalChoice === null) revealOutcome = null;
+    else if (finalRight && !firstRight)
+      revealOutcome =
+        "You switched to the right answer after discussing — that's exactly how this works.";
+    else if (finalRight) revealOutcome = "You had it right — nice.";
+    else revealOutcome = "Not this time — arguing it out still counts.";
+  }
+
+  const pollCard = round ? (
+    <Card className="border-[var(--flame,#e0552f)]">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="size-4 text-[var(--flame,#e0552f)]" />
+          {round.stage === "think" && "Think"}
+          {round.stage === "pair" && "Pair up"}
+          {round.stage === "revote" && "Re-vote"}
+          {round.stage === "reveal" && "Results"}
+        </CardTitle>
+        <CardDescription>
+          {round.stage === "think" &&
+            "Answer on your own first — no talking yet."}
+          {round.stage === "pair" &&
+            "Explain your reasoning and try to convince each other."}
+          {round.stage === "revote" &&
+            "Did your partner change your mind? Answer again."}
+          {round.stage === "reveal" && "How the class voted, before and after."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm font-medium">{round.prompt}</p>
+
+        {round.stage === "pair" && (
+          <div className="rounded-lg bg-muted p-2.5">
+            {partnerIds.length > 0 ? (
+              <div className="grid gap-1.5">
+                <p className="text-xs font-medium">Discuss with:</p>
+                {partnerIds.map((id) => {
+                  const partner = roster[id];
+                  if (!partner) return null;
+                  return (
+                    <div key={id} className="flex items-center gap-2">
+                      <Avatar className="size-7">
+                        {partner.photoUrl && (
+                          <AvatarImage
+                            src={partner.photoUrl}
+                            alt={partner.name}
+                          />
+                        )}
+                        <AvatarFallback className="text-[10px]">
+                          {initials(partner.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-sm">{partner.name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Turn to a neighbor and compare answers.
+              </p>
+            )}
+          </div>
+        )}
+
+        {round.stage === "reveal" ? (
+          <>
+            <PollResultsChart
+              options={round.options}
+              results={round.results}
+              correctIndices={round.correctIndices}
+            />
+            {revealOutcome && (
+              <p className="rounded-lg bg-muted p-2 text-xs">{revealOutcome}</p>
+            )}
+          </>
+        ) : (
+          <div className="grid gap-1.5">
+            {round.options.map((option, i) => (
+              <Button
+                key={i}
+                variant={selection === i ? "default" : "outline"}
+                className={cn(
+                  "h-auto w-full justify-start whitespace-normal py-2 text-left",
+                  !canVote && "opacity-80"
+                )}
+                onClick={() => void vote(i)}
+                disabled={!canVote || voting}
+              >
+                <span className="mr-2 font-semibold">{LETTERS[i]}.</span>
+                {option}
+              </Button>
+            ))}
+            {round.stage === "revote" && myThink !== null && (
+              <p className="text-xs text-muted-foreground">
+                Your first answer: {LETTERS[myThink]}. Stick or switch — your
+                call.
+              </p>
+            )}
+            {canVote && selection !== null && (
+              <p className="text-xs text-muted-foreground">
+                Answer recorded — you can change it until the next stage.
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  ) : null;
+
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
       <div className="grid content-start gap-4">
@@ -223,6 +519,7 @@ export function StudentFollow({
       </div>
 
       <div className="grid content-start gap-4">
+        {pollCard}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -260,17 +557,19 @@ export function StudentFollow({
           </CardContent>
         </Card>
 
-        <Card className="border-dashed">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base text-muted-foreground">
-              <Sparkles className="size-4" /> Participate
-            </CardTitle>
-            <CardDescription>
-              Think-pair-share questions will pop in here when your professor
-              launches one.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        {!round && (
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base text-muted-foreground">
+                <Sparkles className="size-4" /> Participate
+              </CardTitle>
+              <CardDescription>
+                Think-pair-share questions pop in here when your professor
+                launches one — stay ready.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
       </div>
 
       {warning && (

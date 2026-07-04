@@ -13,6 +13,9 @@ export type SeatRelation = "front" | "back" | "left" | "right"
 export type GameType = "memory_tiles" | "flash_cards"
 export type DeckKind = "pdf" | "google_slides"
 export type FocusEventType = "away" | "back"
+export type QuestionSource = "ai" | "professor"
+export type PollStage = "think" | "pair" | "revote" | "reveal" | "closed"
+export type PollPhase = "think" | "revote"
 
 export type ProfileRow = {
   id: string
@@ -110,6 +113,8 @@ export type LectureDeckRow = {
   storage_path: string | null
   embed_url: string | null
   page_count: number | null
+  reading_path: string | null
+  reading_title: string | null
   created_at: string
 }
 
@@ -138,6 +143,57 @@ export type FocusEventRow = {
   occurred_at: string
 }
 
+export type DeckQuestionRow = {
+  id: string
+  deck_id: string
+  course_id: string
+  prompt: string
+  options: string[]
+  correct_indices: number[]
+  rationale: string | null
+  position_after_page: number
+  approved: boolean
+  source: QuestionSource
+  created_at: string
+}
+
+export type PollResults = {
+  think: number[]
+  revote: number[]
+}
+
+export type PollRoundRow = {
+  id: string
+  lecture_id: string
+  course_id: string
+  question_id: string | null
+  prompt: string
+  options: string[]
+  stage: PollStage
+  correct_indices: number[] | null
+  results: PollResults | null
+  started_at: string
+  revealed_at: string | null
+  closed_at: string | null
+}
+
+export type PollAnswerRow = {
+  id: string
+  round_id: string
+  enrollment_id: string
+  phase: PollPhase
+  choice: number
+  answered_at: string
+}
+
+export type PollPairRow = {
+  id: string
+  round_id: string
+  course_id: string
+  member_ids: string[]
+  created_at: string
+}
+
 type TableShape<Row> = {
   Row: Row
   Insert: Partial<Row>
@@ -162,6 +218,10 @@ export type Database = {
       lectures: TableShape<LectureRow>
       lecture_notes: TableShape<LectureNoteRow>
       focus_events: TableShape<FocusEventRow>
+      deck_questions: TableShape<DeckQuestionRow>
+      poll_rounds: TableShape<PollRoundRow>
+      poll_answers: TableShape<PollAnswerRow>
+      poll_pairs: TableShape<PollPairRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

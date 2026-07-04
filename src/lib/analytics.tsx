@@ -17,7 +17,12 @@ export type AnalyticsEvent =
   | "deck_uploaded"
   | "lecture_started"
   | "lecture_ended"
-  | "lecture_focus_lost";
+  | "lecture_focus_lost"
+  | "reading_attached"
+  | "tps_questions_generated"
+  | "poll_launched"
+  | "poll_answered"
+  | "poll_revealed";
 
 export function capture(event: AnalyticsEvent, props?: Record<string, unknown>) {
   if (!KEY) return;

@@ -21,6 +21,9 @@ export const env = {
   emailFrom: orUndef(process.env.EMAIL_FROM) ?? "ClassAct <noreply@classact.college>",
   canvasBaseUrl: orUndef(process.env.CANVAS_BASE_URL),
   canvasToken: orUndef(process.env.CANVAS_API_TOKEN),
+  openrouterApiKey: orUndef(process.env.OPENROUTER_API_KEY),
+  openrouterModel:
+    orUndef(process.env.OPENROUTER_MODEL) ?? "anthropic/claude-sonnet-5",
   posthogKey: orUndef(process.env.NEXT_PUBLIC_POSTHOG_KEY),
   posthogHost:
     orUndef(process.env.NEXT_PUBLIC_POSTHOG_HOST) ?? "https://us.i.posthog.com",
@@ -32,6 +35,7 @@ export const isConfigured = {
   supabaseAdmin: Boolean(env.supabaseUrl && env.supabaseServiceRoleKey),
   email: Boolean(env.resendApiKey),
   canvas: Boolean(env.canvasBaseUrl && env.canvasToken),
+  ai: Boolean(env.openrouterApiKey),
   analytics: Boolean(env.posthogKey),
   sentry: Boolean(env.sentryDsn),
 } as const
