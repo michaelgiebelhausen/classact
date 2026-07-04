@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { CONTRACT_TASK_TITLE } from "@/lib/projects";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -12,7 +13,6 @@ import type { ActionResult } from "@/server/actions/auth";
  * "review & sign the team contract" card.
  */
 
-const CONTRACT_TASK_TITLE = "Review & sign the team contract";
 const CONTRACT_TASK_MINUTES = 10;
 
 /** Resolve the caller's active enrollment in a course, or fail. */

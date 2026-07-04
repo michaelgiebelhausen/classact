@@ -1,9 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Crown, FileSignature, LogOut, Plus, Users } from "lucide-react";
+import {
+  Check,
+  Crown,
+  FileSignature,
+  FolderKanban,
+  LogOut,
+  Plus,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -131,6 +140,11 @@ export function TeamPanel({
             </span>
           </p>
           <div className="flex flex-wrap gap-2">
+            <Button size="sm" asChild>
+              <Link href={`/course/${courseId}/projects/${projectId}`}>
+                <FolderKanban className="mr-1 size-4" /> Open board
+              </Link>
+            </Button>
             <Button
               size="sm"
               variant={me.signed ? "outline" : "default"}

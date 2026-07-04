@@ -6,6 +6,13 @@
  * the project when the team forms.
  */
 
+/**
+ * Identifies the auto-created per-member contract card on a team board.
+ * Contract cards can't be reassigned, re-estimated, or deleted — they
+ * complete by signing the contract.
+ */
+export const CONTRACT_TASK_TITLE = "Review & sign the team contract";
+
 export const DEFAULT_TEAM_CONTRACT = `TEAM CONTRACT
 
 As a member of this team, I agree to:

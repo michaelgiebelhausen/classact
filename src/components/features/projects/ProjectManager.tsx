@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -391,16 +392,19 @@ export function ProjectManager({ courseId, projects }: Props) {
                     tasks={project.tasks}
                   />
                   {project.teams.length > 0 && (
-                    <div className="mt-2 border-t pt-2">
-                      <p className="text-xs text-muted-foreground">
-                        <Users className="mr-1 inline size-3" />
-                        {project.teams
-                          .map(
-                            (t) =>
-                              `${t.name} (${t.memberCount} member${t.memberCount === 1 ? "" : "s"} · ${t.signedCount} signed)`
-                          )
-                          .join(" · ")}
-                      </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2">
+                      <Users className="size-3 text-muted-foreground" />
+                      {project.teams.map((t) => (
+                        <Link
+                          key={t.id}
+                          href={`/course/${courseId}/projects/${project.id}?team=${t.id}`}
+                          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        >
+                          {t.name} ({t.memberCount} member
+                          {t.memberCount === 1 ? "" : "s"} · {t.signedCount}{" "}
+                          signed)
+                        </Link>
+                      ))}
                     </div>
                   )}
                 </li>
