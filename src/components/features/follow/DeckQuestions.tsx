@@ -1,10 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
-  BookOpen,
   ChevronDown,
   ChevronRight,
   Pencil,
@@ -13,9 +12,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -25,20 +22,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { DECK_BUCKET } from "@/lib/storage";
 import {
-  attachDeckReading,
   createQuestion,
   deleteQuestion,
   generateDeckQuestions,
-  removeDeckReading,
   setQuestionApproved,
   updateQuestion,
 } from "@/server/actions/polls";
 import { capture } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
-const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const LETTERS = "ABCDEFGH";
 
 export interface QuestionItem {
@@ -84,10 +77,8 @@ export function DeckQuestions({
   questions,
 }: Props) {
   const router = useRouter();
-  const readingInputRef = useRef<HTMLInputElement>(null);
   const [expanded, setExpanded] = useState(questions.length > 0);
   const [generating, setGenerating] = useState(false);
-  const [uploadingReading, setUploadingReading] = useState(false);
   const [busyQuestion, setBusyQuestion] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftQuestion | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
@@ -96,53 +87,6 @@ export function DeckQuestions({
   const sorted = [...questions].sort(
     (a, b) => a.positionAfterPage - b.positionAfterPage
   );
-
-  async function handleReadingFile(file: File) {
-    if (file.type !== "application/pdf") {
-      toast.error("The reading needs to be a PDF (combine files in Acrobat).");
-      return;
-    }
-    if (file.size > MAX_PDF_BYTES) {
-      toast.error("That PDF is over 50MB — compress it and try again.");
-      return;
-    }
-    setUploadingReading(true);
-    try {
-      const path = `${courseId}/reading-${crypto.randomUUID()}.pdf`;
-      const supabase = createClient();
-      const { error: uploadError } = await supabase.storage
-        .from(DECK_BUCKET)
-        .upload(path, file, { contentType: "application/pdf" });
-      if (uploadError) {
-        toast.error("Upload failed — check your connection and try again.");
-        return;
-      }
-      const title = file.name.replace(/\.pdf$/i, "");
-      const result = await attachDeckReading(courseId, deckId, path, title);
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
-      }
-      capture("reading_attached", {});
-      toast.success("Reading attached — AI questions will draw on it too.");
-      router.refresh();
-    } finally {
-      setUploadingReading(false);
-      if (readingInputRef.current) readingInputRef.current.value = "";
-    }
-  }
-
-  async function handleRemoveReading() {
-    setUploadingReading(true);
-    const result = await removeDeckReading(courseId, deckId);
-    setUploadingReading(false);
-    if (!result.ok) {
-      toast.error(result.error);
-      return;
-    }
-    toast.success("Reading removed.");
-    router.refresh();
-  }
 
   async function handleGenerate() {
     setGenerating(true);
@@ -267,41 +211,6 @@ export function DeckQuestions({
             : `${questions.length} question${questions.length === 1 ? "" : "s"} · ${approvedCount} approved`}
         </button>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <input
-            ref={readingInputRef}
-            type="file"
-            accept="application/pdf"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleReadingFile(file);
-            }}
-          />
-          {readingTitle ? (
-            <Badge variant="secondary" className="max-w-56 gap-1">
-              <BookOpen className="size-3" />
-              <span className="truncate">{readingTitle}</span>
-              <button
-                type="button"
-                onClick={() => void handleRemoveReading()}
-                disabled={uploadingReading}
-                aria-label="Remove reading"
-                className="ml-0.5 hover:text-destructive"
-              >
-                <X className="size-3" />
-              </button>
-            </Badge>
-          ) : (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => readingInputRef.current?.click()}
-              disabled={uploadingReading}
-            >
-              <BookOpen className="mr-1 size-4" />
-              {uploadingReading ? "Uploading…" : "Attach reading PDF"}
-            </Button>
-          )}
           {deckKind === "pdf" && (
             <Button
               size="sm"
@@ -341,6 +250,12 @@ export function DeckQuestions({
               {readingTitle ? " and the reading" : ""}, or add your own with +.
             </li>
           )}
+          {sorted.length > 0 && approvedCount === 0 && (
+            <li className="text-xs text-muted-foreground">
+              Check the box to approve a question — only approved questions
+              pop into the lecture.
+            </li>
+          )}
           {sorted.map((q) => (
             <li
               key={q.id}
@@ -363,41 +278,41 @@ export function DeckQuestions({
                 className="mt-1 size-4 accent-[var(--flame,#e0552f)]"
               />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm" title={q.prompt}>
-                  {q.prompt}
-                </p>
+                <p className="break-words text-sm">{q.prompt}</p>
                 <p className="text-xs text-muted-foreground">
                   After slide {q.positionAfterPage} · {q.options.length} options
                   {q.source === "ai" && " · AI draft"}
                 </p>
               </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  setDraft({
-                    id: q.id,
-                    prompt: q.prompt,
-                    options: [...q.options],
-                    correctIndices: [...q.correctIndices],
-                    positionAfterPage: q.positionAfterPage,
-                    rationale: q.rationale,
-                  })
-                }
-                disabled={busyQuestion === q.id}
-                aria-label="Edit question"
-              >
-                <Pencil className="size-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void handleDelete(q)}
-                disabled={busyQuestion === q.id}
-                aria-label="Delete question"
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              <div className="flex shrink-0 gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    setDraft({
+                      id: q.id,
+                      prompt: q.prompt,
+                      options: [...q.options],
+                      correctIndices: [...q.correctIndices],
+                      positionAfterPage: q.positionAfterPage,
+                      rationale: q.rationale,
+                    })
+                  }
+                  disabled={busyQuestion === q.id}
+                  aria-label="Edit question"
+                >
+                  <Pencil className="size-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void handleDelete(q)}
+                  disabled={busyQuestion === q.id}
+                  aria-label="Delete question"
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
             </li>
           ))}
         </ul>

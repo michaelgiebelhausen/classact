@@ -13,6 +13,7 @@ import {
   DeckQuestions,
   type QuestionItem,
 } from "@/components/features/follow/DeckQuestions";
+import { DeckReading } from "@/components/features/follow/DeckReading";
 
 /**
  * Participate — the think-pair-share home. Professors manage each deck's
@@ -98,12 +99,21 @@ export default async function ParticipatePage({
               <ul className="grid gap-3">
                 {(deckRows ?? []).map((deck) => (
                   <li key={deck.id} className="rounded-lg border px-4 py-3">
-                    <p className="text-sm font-medium">{deck.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {deck.kind === "pdf"
-                        ? `PDF${deck.page_count ? ` · ${deck.page_count} slides` : ""}`
-                        : "Google Slides (unsynced)"}
-                    </p>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{deck.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {deck.kind === "pdf"
+                            ? `PDF${deck.page_count ? ` · ${deck.page_count} slides` : ""}`
+                            : "Google Slides (unsynced)"}
+                        </p>
+                      </div>
+                      <DeckReading
+                        courseId={courseId}
+                        deckId={deck.id}
+                        readingTitle={deck.reading_title}
+                      />
+                    </div>
                     <DeckQuestions
                       courseId={courseId}
                       deckId={deck.id}

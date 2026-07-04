@@ -20,6 +20,7 @@ import {
   DeckQuestions,
   type QuestionItem,
 } from "@/components/features/follow/DeckQuestions";
+import { DeckReading } from "@/components/features/follow/DeckReading";
 import { capture } from "@/lib/analytics";
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024; // Supabase default object limit
@@ -234,7 +235,12 @@ export function DeckManager({ courseId, decks }: Props) {
                         </p>
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <DeckReading
+                        courseId={courseId}
+                        deckId={deck.id}
+                        readingTitle={deck.readingTitle}
+                      />
                       <Button
                         size="sm"
                         onClick={() => void handlePresent(deck.id)}

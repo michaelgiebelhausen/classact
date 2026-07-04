@@ -174,6 +174,9 @@ export function ProfessorPresenter({
   const roundRef = useRef<ActiveRound | null>(initialRound);
   const ranRef = useRef<Set<string>>(new Set(ranQuestionIds));
   const [ran, setRan] = useState<Set<string>>(() => new Set(ranQuestionIds));
+  // Whether closing the current round should advance to the next slide —
+  // true only when the poll inserted itself between two slides.
+  const advanceOnResumeRef = useRef(false);
   const [votes, setVotes] = useState<Map<string, Partial<Record<PollPhase, number>>>>(
     () => {
       const map = new Map<string, Partial<Record<PollPhase, number>>>();
@@ -213,7 +216,7 @@ export function ProfessorPresenter({
   );
 
   const launchQuestion = useCallback(
-    async (question: PresenterQuestion) => {
+    async (question: PresenterQuestion, advanceOnResume = false) => {
       setPollBusy(true);
       const result = await launchPollRound(courseId, lectureId, question.id);
       setPollBusy(false);
@@ -221,6 +224,7 @@ export function ProfessorPresenter({
         toast.error(result.ok ? "Couldn't launch the poll." : result.error);
         return;
       }
+      advanceOnResumeRef.current = advanceOnResume;
       ranRef.current.add(question.id);
       setRan(new Set(ranRef.current));
       setVotes(new Map());
@@ -252,7 +256,7 @@ export function ProfessorPresenter({
             q.positionAfterPage === pageRef.current && !ranRef.current.has(q.id)
         );
         if (queued) {
-          void launchQuestion(queued);
+          void launchQuestion(queued, true);
           return;
         }
       }
@@ -276,15 +280,26 @@ export function ProfessorPresenter({
     channel.onmessage = (e: MessageEvent<LectureSyncMessage>) => {
       // Stage window clicked through — it already persisted the page.
       if (e.data?.type === "page") {
+        const previous = pageRef.current;
         pageRef.current = e.data.page;
         setPage(e.data.page);
+        // The stage window doesn't know about queued questions — if its
+        // advance crossed one, launch it now (the poll overlays the slide,
+        // so no extra advance on resume).
+        if (!roundRef.current && e.data.page === previous + 1) {
+          const queued = questions.find(
+            (q) =>
+              q.positionAfterPage === previous && !ranRef.current.has(q.id)
+          );
+          if (queued) void launchQuestion(queued);
+        }
       }
     };
     return () => {
       channelRef.current = null;
       channel.close();
     };
-  }, [lectureId]);
+  }, [lectureId, questions, launchQuestion]);
 
   function openStage() {
     void (async () => {
@@ -486,9 +501,10 @@ export function ProfessorPresenter({
       return;
     }
     applyRound(null);
-    // goTo (not skipping the poll check) so a second question queued at the
-    // same slide launches next instead of being skipped.
-    if (advance) goTo(pageRef.current + 1);
+    // Advance only when the poll inserted itself between slides (goTo
+    // re-checks queued questions, so a second one at the same slide runs
+    // next instead of being skipped).
+    if (advance && advanceOnResumeRef.current) goTo(pageRef.current + 1);
   }
 
   async function handleEnd() {
