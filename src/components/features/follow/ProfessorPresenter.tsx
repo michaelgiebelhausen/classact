@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ChevronLeft,
   ChevronRight,
   EyeOff,
+  MonitorUp,
   Sparkles,
   Square,
   Timer,
@@ -25,6 +26,11 @@ import {
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { endLecture, setLecturePage } from "@/server/actions/lectures";
 import { formatAwayDuration } from "@/lib/focus";
+import {
+  lectureChannelName,
+  stagePath,
+  type LectureSyncMessage,
+} from "@/lib/lecturesync";
 import { capture } from "@/lib/analytics";
 import type { FocusEventType } from "@/types/db";
 
@@ -103,20 +109,73 @@ export function ProfessorPresenter({
   // Clock state so elapsed/away durations can be computed purely in render;
   // refreshed every few seconds by the interval below.
   const [now, setNow] = useState<number | null>(null);
+  const pageRef = useRef(initialPage);
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   const goTo = useCallback(
     (next: number) => {
       const clamped = Math.max(1, totalPages ? Math.min(next, totalPages) : next);
-      setPage((current) => {
-        if (clamped === current) return current;
-        void setLecturePage(courseId, lectureId, clamped).then((result) => {
-          if (!result.ok) toast.error(result.error);
-        });
-        return clamped;
+      if (clamped === pageRef.current) return;
+      pageRef.current = clamped;
+      setPage(clamped);
+      channelRef.current?.postMessage({
+        type: "page",
+        page: clamped,
+      } satisfies LectureSyncMessage);
+      void setLecturePage(courseId, lectureId, clamped).then((result) => {
+        if (!result.ok) toast.error(result.error);
       });
     },
     [courseId, lectureId, totalPages]
   );
+
+  // Instant sync with the projector stage window (same browser).
+  useEffect(() => {
+    const channel = new BroadcastChannel(lectureChannelName(lectureId));
+    channelRef.current = channel;
+    channel.onmessage = (e: MessageEvent<LectureSyncMessage>) => {
+      // Stage window clicked through — it already persisted the page.
+      if (e.data?.type === "page") {
+        pageRef.current = e.data.page;
+        setPage(e.data.page);
+      }
+    };
+    return () => {
+      channelRef.current = null;
+      channel.close();
+    };
+  }, [lectureId]);
+
+  function openStage() {
+    void (async () => {
+      let features = "popup=yes,width=1280,height=720";
+      try {
+        // Window Management API (Chrome/Edge): place straight on the
+        // projector screen when one is attached.
+        const w = window as Window & {
+          getScreenDetails?: () => Promise<{
+            currentScreen: unknown;
+            screens: Array<{
+              availLeft: number;
+              availTop: number;
+              availWidth: number;
+              availHeight: number;
+            }>;
+          }>;
+        };
+        if (w.getScreenDetails) {
+          const details = await w.getScreenDetails();
+          const other = details.screens.find((s) => s !== details.currentScreen);
+          if (other) {
+            features = `popup=yes,left=${other.availLeft},top=${other.availTop},width=${other.availWidth},height=${other.availHeight}`;
+          }
+        }
+      } catch {
+        // Permission declined or single screen — default popup is fine.
+      }
+      window.open(stagePath(courseId), "classact-stage", features);
+    })();
+  }
 
   // Keyboard presenting: ← → and space.
   useEffect(() => {
@@ -197,6 +256,9 @@ export function ProfessorPresenter({
       return;
     }
     capture("lecture_ended", {});
+    channelRef.current?.postMessage({
+      type: "ended",
+    } satisfies LectureSyncMessage);
     toast.success("Lecture ended.");
     router.refresh();
   }
@@ -284,7 +346,15 @@ export function ProfessorPresenter({
               {deckKind === "google_slides" && " · slides unsynced (embed)"}
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-2">
+            <Button className="w-full" onClick={openStage}>
+              <MonitorUp className="mr-2 size-4" /> Project slides
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Opens a clean slides-only window — drag it to the projector
+              screen and click Fullscreen. This window stays your private
+              dashboard.
+            </p>
             <Button
               variant="destructive"
               className="w-full"

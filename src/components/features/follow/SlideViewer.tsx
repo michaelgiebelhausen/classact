@@ -15,13 +15,24 @@ interface Props {
   /** Reports the real page count once the document loads. */
   onPageCount?: (count: number) => void;
   className?: string;
+  /**
+   * "width" (default) scales to the container's width; "contain" also caps by
+   * the container's height — used by the projector stage view.
+   */
+  fit?: "width" | "contain";
 }
 
 /**
  * Renders one page of a PDF deck to a canvas, sized to its container.
  * pdf.js is imported dynamically so it never runs during SSR.
  */
-export function SlideViewer({ fileUrl, page, onPageCount, className }: Props) {
+export function SlideViewer({
+  fileUrl,
+  page,
+  onPageCount,
+  className,
+  fit = "width",
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -29,6 +40,21 @@ export function SlideViewer({ fileUrl, page, onPageCount, className }: Props) {
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [docVersion, setDocVersion] = useState(0);
+  const [resizeTick, setResizeTick] = useState(0);
+
+  // Re-render on window resize (e.g. the stage window dragged to a projector).
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    function onResize() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setResizeTick((t) => t + 1), 150);
+    }
+    window.addEventListener("resize", onResize);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
 
   // Load the document once per file URL.
   useEffect(() => {
@@ -84,7 +110,11 @@ export function SlideViewer({ fileUrl, page, onPageCount, className }: Props) {
 
         const baseViewport = pdfPage.getViewport({ scale: 1 });
         const width = container.clientWidth || baseViewport.width;
-        const scale = width / baseViewport.width;
+        const height = container.clientHeight || baseViewport.height;
+        const scale =
+          fit === "contain"
+            ? Math.min(width / baseViewport.width, height / baseViewport.height)
+            : width / baseViewport.width;
         const dpr = window.devicePixelRatio || 1;
         const viewport = pdfPage.getViewport({ scale: scale * dpr });
 
@@ -104,7 +134,7 @@ export function SlideViewer({ fileUrl, page, onPageCount, className }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [page, docVersion]);
+  }, [page, docVersion, fit, resizeTick]);
 
   return (
     <div ref={containerRef} className={className}>
@@ -120,7 +150,13 @@ export function SlideViewer({ fileUrl, page, onPageCount, className }: Props) {
       )}
       <canvas
         ref={canvasRef}
-        className={status === "ready" ? "w-full rounded-lg shadow-sm" : "hidden"}
+        className={
+          status !== "ready"
+            ? "hidden"
+            : fit === "contain"
+              ? "max-h-full max-w-full"
+              : "w-full rounded-lg shadow-sm"
+        }
       />
     </div>
   );
