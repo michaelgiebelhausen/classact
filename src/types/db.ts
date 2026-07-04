@@ -52,6 +52,7 @@ export type EnrollmentRow = {
   roster_email: string
   status: EnrollmentStatus
   roster_photo_path: string | null
+  roster_name_phonetic: string | null
   created_at: string
 }
 

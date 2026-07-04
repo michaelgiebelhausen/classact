@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PHOTO_BUCKET } from "@/lib/storage";
 import { env, isConfigured } from "@/lib/env";
+import { phoneticsForNames } from "@/server/phonetics";
 import type { ActionResult } from "@/server/actions/auth";
 
 interface CanvasUser {
@@ -205,12 +206,15 @@ export async function syncCanvasRoster(input: {
   const fresh = roster.students.filter((s) => !existingEmails.has(s.email));
 
   if (fresh.length > 0) {
+    // Best-effort AI pronunciation defaults (never blocks the sync).
+    const phonetics = await phoneticsForNames(fresh.map((s) => s.name));
     const { error } = await supabase.from("enrollments").insert(
       fresh.map((s) => ({
         course_id: course.id,
         roster_name: s.name,
         roster_email: s.email,
         status: "invited" as const,
+        roster_name_phonetic: phonetics.get(s.name.trim()) ?? null,
       }))
     );
     if (error) return { ok: false, error: "Import failed — try again." };

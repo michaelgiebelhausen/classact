@@ -41,6 +41,8 @@ export function OnboardingFlow({
   const [step, setStep] = useState(0);
   const [fullName, setFullName] = useState(initialName);
   const [namePhonetic, setNamePhonetic] = useState(initialPhonetic);
+  // Was the field pre-filled with an AI-generated guess? Changes the nudge copy.
+  const guessedPhonetic = initialPhonetic.trim().length > 0;
   const [answers, setAnswers] = useState<Record<string, string>>(initialAnswers);
   const [finishing, setFinishing] = useState(false);
 
@@ -103,7 +105,9 @@ export function OnboardingFlow({
                 onChange={(e) => setNamePhonetic(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                A quick pronunciation guide so classmates get your name right.
+                {guessedPhonetic
+                  ? "We took a best guess — fix it if it's off so classmates say your name right."
+                  : "A quick pronunciation guide so classmates get your name right."}
               </p>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">

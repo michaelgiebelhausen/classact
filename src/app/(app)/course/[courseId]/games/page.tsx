@@ -33,7 +33,7 @@ export default async function GamesPage({
     const admin = createAdminClient();
     const { data: enrollments } = await admin
       .from("enrollments")
-      .select("id, roster_name, profile_id, roster_photo_path")
+      .select("id, roster_name, profile_id, roster_photo_path, roster_name_phonetic")
       .eq("course_id", courseId);
 
     // Everyone but yourself; not-yet-activated students (null profile_id) are
@@ -99,9 +99,10 @@ export default async function GamesPage({
           enrollmentId: e.id,
           name: e.roster_name,
           photoUrls: urls,
-          phonetic: e.profile_id
-            ? phoneticByProfile.get(e.profile_id) ?? null
-            : null,
+          phonetic:
+            (e.profile_id ? phoneticByProfile.get(e.profile_id) : null) ??
+            e.roster_name_phonetic ??
+            null,
           hint: hintByEnrollment.get(e.id) ?? null,
         });
       }

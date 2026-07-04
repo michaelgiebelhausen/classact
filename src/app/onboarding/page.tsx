@@ -16,8 +16,15 @@ export default async function OnboardingPage() {
   // Union of icebreaker fields across the student's courses (usually one).
   const { data: enrollments } = await supabase
     .from("enrollments")
-    .select("id, courses(icebreaker_fields)")
+    .select("id, roster_name_phonetic, courses(icebreaker_fields)")
     .eq("profile_id", profile.id);
+
+  // AI-generated pronunciation default (from roster import/sync) to pre-fill the
+  // field; the student's own saved value, if any, takes precedence below.
+  const autoPhonetic =
+    (enrollments ?? [])
+      .map((e) => e.roster_name_phonetic)
+      .find((v): v is string => Boolean(v)) ?? "";
 
   const keySet = new Set<string>();
   for (const e of enrollments ?? []) {
@@ -59,7 +66,7 @@ export default async function OnboardingPage() {
       </h1>
       <OnboardingFlow
         initialName={profile.full_name ?? ""}
-        initialPhonetic={profile.name_phonetic ?? ""}
+        initialPhonetic={profile.name_phonetic || autoPhonetic}
         photoUrls={photoUrls}
         icebreakerKeys={icebreakerKeys}
         initialAnswers={initialAnswers}

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { parseRosterCsv } from "@/lib/csv";
 import { rateLimit } from "@/lib/ratelimit";
+import { phoneticsForNames } from "@/server/phonetics";
 
 const bodySchema = z.object({
   courseId: z.string().uuid(),
@@ -58,12 +59,15 @@ export async function POST(request: NextRequest) {
   const dupes = rows.length - fresh.length;
 
   if (fresh.length > 0) {
+    // Best-effort AI pronunciation defaults (never blocks the import).
+    const phonetics = await phoneticsForNames(fresh.map((r) => r.name));
     const { error } = await supabase.from("enrollments").insert(
       fresh.map((r) => ({
         course_id: course.id,
         roster_name: r.name,
         roster_email: r.email,
         status: "invited" as const,
+        roster_name_phonetic: phonetics.get(r.name.trim()) ?? null,
       }))
     );
     if (error) {
