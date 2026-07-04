@@ -163,6 +163,27 @@ export default async function ProjectBoardPage({
       "id, title, description, estimated_minutes, actual_minutes, status, assigned_enrollment_id, position"
     )
     .eq("team_id", activeTeam.id);
+
+  // Unresolved flags on this board (RLS: visible to the team + professor).
+  const { data: flagRows } = await supabase
+    .from("task_flags")
+    .select("id, team_task_id, flagged_by_enrollment_id, reason")
+    .in("team_task_id", (taskRows ?? []).map((t) => t.id))
+    .is("resolved_at", null);
+  const flagsByTask = new Map<
+    string,
+    { id: string; reason: string; flaggedByEnrollmentId: string }[]
+  >();
+  for (const f of flagRows ?? []) {
+    const list = flagsByTask.get(f.team_task_id) ?? [];
+    list.push({
+      id: f.id,
+      reason: f.reason,
+      flaggedByEnrollmentId: f.flagged_by_enrollment_id,
+    });
+    flagsByTask.set(f.team_task_id, list);
+  }
+
   const tasks: BoardTask[] = (taskRows ?? []).map((t) => ({
     id: t.id,
     title: t.title,
@@ -173,6 +194,7 @@ export default async function ProjectBoardPage({
     assignedEnrollmentId: t.assigned_enrollment_id,
     isContract: t.title === CONTRACT_TASK_TITLE,
     position: t.position,
+    flags: flagsByTask.get(t.id) ?? [],
   }));
 
   return (

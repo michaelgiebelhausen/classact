@@ -50,6 +50,7 @@ export interface ProjectTeamSummary {
   name: string;
   memberCount: number;
   signedCount: number;
+  flagCount: number;
 }
 
 export interface ProjectListItem {
@@ -403,6 +404,12 @@ export function ProjectManager({ courseId, projects }: Props) {
                           {t.name} ({t.memberCount} member
                           {t.memberCount === 1 ? "" : "s"} · {t.signedCount}{" "}
                           signed)
+                          {t.flagCount > 0 && (
+                            <span className="ml-1 font-semibold text-red-600">
+                              · {t.flagCount} flag
+                              {t.flagCount === 1 ? "" : "s"}
+                            </span>
+                          )}
                         </Link>
                       ))}
                     </div>

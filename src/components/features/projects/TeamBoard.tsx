@@ -7,6 +7,7 @@ import {
   Check,
   Clock,
   FileSignature,
+  Flag,
   Inbox,
   Pencil,
   Plus,
@@ -32,6 +33,7 @@ import {
   reopenTask,
   updateTeamTask,
 } from "@/server/actions/board";
+import { flagTask, resolveFlag } from "@/server/actions/flags";
 import { formatMinutes } from "@/lib/projects";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +53,8 @@ export interface BoardTask {
   assignedEnrollmentId: string | null;
   isContract: boolean;
   position: number;
+  /** Unresolved flags — a flagged done card earns no credit until settled. */
+  flags: { id: string; reason: string; flaggedByEnrollmentId: string }[];
 }
 
 interface Props {
@@ -66,6 +70,7 @@ interface Props {
 type DialogMode =
   | { kind: "view"; task: BoardTask }
   | { kind: "complete"; task: BoardTask; minutes: number }
+  | { kind: "flag"; task: BoardTask; reason: string }
   | {
       kind: "edit";
       task: BoardTask | null; // null = adding new
@@ -118,6 +123,11 @@ function TaskCard({
           <span className="ml-1 flex items-center gap-0.5 text-green-700">
             <Check className="size-3" />
             {nameOf(members, task.assignedEnrollmentId)}
+          </span>
+        )}
+        {task.flags.length > 0 && (
+          <span className="ml-1 flex items-center gap-0.5 font-medium text-red-600">
+            <Flag className="size-3" /> flagged
           </span>
         )}
       </p>
@@ -210,16 +220,23 @@ export function TeamBoard({
   const totals = useMemo(() => {
     const done = new Map<string, number>();
     const queued = new Map<string, number>();
+    const flagged = new Map<string, number>();
     for (const t of tasks) {
       if (!t.assignedEnrollmentId) continue;
-      const map = t.status === "done" ? done : queued;
+      // A flagged done card earns nothing until the professor settles it.
+      const map =
+        t.status === "done"
+          ? t.flags.length > 0
+            ? flagged
+            : done
+          : queued;
       map.set(
         t.assignedEnrollmentId,
         (map.get(t.assignedEnrollmentId) ?? 0) + creditedMinutes(t)
       );
     }
     const teamDone = Array.from(done.values()).reduce((a, b) => a + b, 0);
-    return { done, queued, teamDone };
+    return { done, queued, flagged, teamDone };
   }, [tasks]);
 
   async function run(action: () => Promise<{ ok: boolean; error?: string }>) {
@@ -249,6 +266,31 @@ export function TeamBoard({
     );
     if (ok) {
       toast.success("Nice — task done.");
+      setDialog(null);
+    }
+  }
+
+  async function handleFlag() {
+    if (dialog?.kind !== "flag") return;
+    const ok = await run(() =>
+      flagTask(courseId, dialog.task.id, dialog.reason)
+    );
+    if (ok) {
+      toast.success(
+        "Flagged. Those minutes don't count until your professor settles it."
+      );
+      setDialog(null);
+    }
+  }
+
+  async function handleResolve(flagId: string, outcome: "dismiss" | "uphold") {
+    const ok = await run(() => resolveFlag(courseId, flagId, outcome));
+    if (ok) {
+      toast.success(
+        outcome === "dismiss"
+          ? "Flag dismissed — credit restored."
+          : "Flag upheld — the task is back on their plate."
+      );
       setDialog(null);
     }
   }
@@ -378,6 +420,13 @@ export function TeamBoard({
                     {formatMinutes(queued)} on their plate
                   </span>
                 )}
+                {(totals.flagged.get(m.enrollmentId) ?? 0) > 0 && (
+                  <span className="flex items-center gap-0.5 text-xs font-medium text-red-600">
+                    <Flag className="size-3" />
+                    {formatMinutes(totals.flagged.get(m.enrollmentId) ?? 0)}{" "}
+                    flagged
+                  </span>
+                )}
               </li>
             );
           })}
@@ -416,19 +465,81 @@ export function TeamBoard({
                   contract (on the Projects page).
                 </p>
               ) : dialog.task.status === "done" ? (
-                <DialogFooter>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      void run(() => reopenTask(courseId, dialog.task.id)).then(
-                        (ok) => ok && setDialog(null)
-                      )
-                    }
-                    disabled={busy}
-                  >
-                    <RotateCcw className="mr-1 size-4" /> Reopen
-                  </Button>
-                </DialogFooter>
+                <div className="grid gap-3">
+                  {dialog.task.flags.map((f) => (
+                    <div
+                      key={f.id}
+                      className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs"
+                    >
+                      <p className="flex items-center gap-1 font-medium text-red-800">
+                        <Flag className="size-3" /> Flagged by{" "}
+                        {memberName(f.flaggedByEnrollmentId)}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-red-900">
+                        {f.reason}
+                      </p>
+                      {myEnrollmentId === null ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              void handleResolve(f.id, "dismiss")
+                            }
+                            disabled={busy}
+                          >
+                            Dismiss — the work was fine
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => void handleResolve(f.id, "uphold")}
+                            disabled={busy}
+                          >
+                            Uphold — reopen the task
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="mt-1 text-red-700/80">
+                          These minutes don&apos;t count until your professor
+                          settles the flag.
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                  <DialogFooter className="flex-wrap">
+                    {myEnrollmentId !== null &&
+                      dialog.task.assignedEnrollmentId !== myEnrollmentId &&
+                      !dialog.task.flags.some(
+                        (f) => f.flaggedByEnrollmentId === myEnrollmentId
+                      ) && (
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            setDialog({
+                              kind: "flag",
+                              task: dialog.task,
+                              reason: "",
+                            })
+                          }
+                          disabled={busy}
+                        >
+                          <Flag className="mr-1 size-4" /> Not really done
+                        </Button>
+                      )}
+                    <Button
+                      variant="outline"
+                      onClick={() =>
+                        void run(() =>
+                          reopenTask(courseId, dialog.task.id)
+                        ).then((ok) => ok && setDialog(null))
+                      }
+                      disabled={busy}
+                    >
+                      <RotateCcw className="mr-1 size-4" /> Reopen
+                    </Button>
+                  </DialogFooter>
+                </div>
               ) : (
                 <div className="grid gap-3">
                   <div className="grid gap-1.5">
@@ -563,6 +674,45 @@ export function TeamBoard({
                 </Button>
                 <Button onClick={() => void handleComplete()} disabled={busy}>
                   {busy ? "Saving…" : "Done"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+
+          {dialog?.kind === "flag" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Flag this task?</DialogTitle>
+                <DialogDescription>
+                  For a card that landed in Done without the work behind it.
+                  Your team and professor see the flag, and the minutes
+                  don&apos;t count until the professor settles it.
+                </DialogDescription>
+              </DialogHeader>
+              <textarea
+                value={dialog.reason}
+                onChange={(e) =>
+                  setDialog((d) =>
+                    d?.kind === "flag" ? { ...d, reason: e.target.value } : d
+                  )
+                }
+                placeholder="What's missing or wrong? Be specific — this is the record."
+                className="min-h-24 w-full resize-y rounded-lg border bg-background p-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                autoFocus
+              />
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setDialog({ kind: "view", task: dialog.task })}
+                >
+                  Back
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => void handleFlag()}
+                  disabled={busy || dialog.reason.trim().length < 5}
+                >
+                  {busy ? "Flagging…" : "Flag it"}
                 </Button>
               </DialogFooter>
             </>

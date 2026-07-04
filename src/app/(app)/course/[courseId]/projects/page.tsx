@@ -92,6 +92,21 @@ export default async function ProjectsPage({
   const signedSet = new Set(
     (signatureRows ?? []).map((s) => `${s.team_id}:${s.enrollment_id}`)
   );
+
+  // Unresolved flag counts per team (professor sees all; students, RLS-trimmed
+  // to their own team's).
+  const { data: openFlagRows } = await supabase
+    .from("task_flags")
+    .select("id, team_tasks(team_id)")
+    .eq("course_id", courseId)
+    .is("resolved_at", null);
+  const flagCountByTeam = new Map<string, number>();
+  for (const f of openFlagRows ?? []) {
+    const teamId = (f.team_tasks as unknown as { team_id: string } | null)
+      ?.team_id;
+    if (!teamId) continue;
+    flagCountByTeam.set(teamId, (flagCountByTeam.get(teamId) ?? 0) + 1);
+  }
   const teamsByProject = new Map<string, TeamInfo[]>();
   for (const team of teamRows ?? []) {
     const members = (memberRows ?? [])
@@ -130,6 +145,7 @@ export default async function ProjectsPage({
         name: t.name,
         memberCount: t.members.length,
         signedCount: t.members.filter((m) => m.signed).length,
+        flagCount: flagCountByTeam.get(t.id) ?? 0,
       })),
     }));
     return (
