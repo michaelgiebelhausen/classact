@@ -78,9 +78,36 @@ export function StageView({
     };
   }, [lectureId, applyPoll]);
 
-  // Cross-device fallback for polls: follow the round rows directly.
+  // Cross-device fallback for polls: follow the round rows directly, with a
+  // 5s polling fallback when realtime drops (same pattern as slide sync).
   useEffect(() => {
     const supabase = createClient();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    async function pollRound() {
+      const { data } = await supabase
+        .from("poll_rounds")
+        .select("id, prompt, options, stage, results, correct_indices")
+        .eq("lecture_id", lectureId)
+        .neq("stage", "closed")
+        .maybeSingle();
+      if (!data) {
+        if (pollRef.current) applyPoll(null);
+        return;
+      }
+      const next = {
+        roundId: data.id,
+        prompt: data.prompt,
+        options: data.options,
+        stage: data.stage,
+        results: data.results,
+        correctIndices: data.correct_indices,
+      };
+      if (JSON.stringify(next) !== JSON.stringify(pollRef.current)) {
+        applyPoll(next);
+      }
+    }
+
     const channel = supabase
       .channel(`stage-polls:${lectureId}`)
       .on(
@@ -115,8 +142,18 @@ export function StageView({
           });
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        const ok = status === "SUBSCRIBED";
+        if (!ok && !pollTimer) {
+          pollTimer = setInterval(() => void pollRound(), 5000);
+        }
+        if (ok && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      });
     return () => {
+      if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
   }, [lectureId, applyPoll]);

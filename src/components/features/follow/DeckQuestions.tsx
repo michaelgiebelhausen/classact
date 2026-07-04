@@ -59,6 +59,8 @@ interface DraftQuestion {
   prompt: string;
   options: string[];
   correctIndices: number[];
+  /** True = opinion question, no answer key. */
+  noCorrect: boolean;
   positionAfterPage: number;
   rationale: string | null;
 }
@@ -134,13 +136,19 @@ export function DeckQuestions({
 
   async function handleSaveDraft() {
     if (!draft) return;
+    if (!draft.noCorrect && draft.correctIndices.length === 0) {
+      toast.error(
+        'Mark a correct answer, or check "no correct answer" for an opinion question.'
+      );
+      return;
+    }
     setSavingDraft(true);
     try {
       const payload = {
         courseId,
         prompt: draft.prompt,
         options: draft.options,
-        correctIndices: draft.correctIndices,
+        correctIndices: draft.noCorrect ? [] : draft.correctIndices,
         positionAfterPage: draft.positionAfterPage,
       };
       const result = draft.id
@@ -231,6 +239,7 @@ export function DeckQuestions({
                 prompt: "",
                 options: ["", "", ""],
                 correctIndices: [],
+                noCorrect: false,
                 positionAfterPage: 1,
                 rationale: null,
               })
@@ -281,6 +290,7 @@ export function DeckQuestions({
                 <p className="break-words text-sm">{q.prompt}</p>
                 <p className="text-xs text-muted-foreground">
                   After slide {q.positionAfterPage} · {q.options.length} options
+                  {q.correctIndices.length === 0 && " · opinion"}
                   {q.source === "ai" && " · AI draft"}
                 </p>
               </div>
@@ -294,6 +304,7 @@ export function DeckQuestions({
                       prompt: q.prompt,
                       options: [...q.options],
                       correctIndices: [...q.correctIndices],
+                      noCorrect: q.correctIndices.length === 0,
                       positionAfterPage: q.positionAfterPage,
                       rationale: q.rationale,
                     })
@@ -359,6 +370,7 @@ export function DeckQuestions({
                       type="checkbox"
                       checked={draft.correctIndices.includes(i)}
                       onChange={() => toggleDraftCorrect(i)}
+                      disabled={draft.noCorrect}
                       aria-label={`Option ${LETTERS[i]} is correct`}
                       className="size-4 accent-green-600"
                     />
@@ -396,6 +408,27 @@ export function DeckQuestions({
                 >
                   <Plus className="mr-1 size-4" /> Add option
                 </Button>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={draft.noCorrect}
+                    onChange={(e) =>
+                      setDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              noCorrect: e.target.checked,
+                              correctIndices: e.target.checked
+                                ? []
+                                : d.correctIndices,
+                            }
+                          : d
+                      )
+                    }
+                    className="size-4 accent-[var(--flame,#e0552f)]"
+                  />
+                  No correct answer (opinion / discussion prompt)
+                </label>
               </div>
               <div className="grid gap-1.5">
                 <label className="text-sm font-medium" htmlFor="tps-position">

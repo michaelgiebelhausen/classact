@@ -169,8 +169,68 @@ export function StudentFollow({
   }, [lectureId, router]);
 
   // ---- Poll sync: rounds pop in / advance stages, pairs arrive ----
+  // Realtime first, with a 5s polling fallback (same pattern as slide sync)
+  // so a dropped connection can't strand anyone mid-vote.
   useEffect(() => {
     const supabase = createClient();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    async function pollRound() {
+      const { data } = await supabase
+        .from("poll_rounds")
+        .select("id, prompt, options, stage, results, correct_indices")
+        .eq("lecture_id", lectureId)
+        .neq("stage", "closed")
+        .maybeSingle();
+      if (!data) {
+        if (roundIdRef.current) {
+          roundIdRef.current = null;
+          setRound(null);
+          setPartnerIds([]);
+        }
+        return;
+      }
+      if (data.id !== roundIdRef.current) {
+        roundIdRef.current = data.id;
+        setRound({
+          id: data.id,
+          prompt: data.prompt,
+          options: data.options,
+          stage: data.stage,
+          results: data.results,
+          correctIndices: data.correct_indices,
+        });
+        setMyThink(null);
+        setMyRevote(null);
+        setPartnerIds([]);
+      } else {
+        setRound((prev) => {
+          if (!prev || prev.id !== data.id) return prev;
+          const next = {
+            ...prev,
+            stage: data.stage,
+            results: data.results,
+            correctIndices: data.correct_indices,
+          };
+          return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+        });
+      }
+      if (data.stage === "pair" || data.stage === "revote") {
+        const { data: pair } = await supabase
+          .from("poll_pairs")
+          .select("member_ids")
+          .eq("round_id", data.id)
+          .contains("member_ids", JSON.stringify([enrollmentId]))
+          .maybeSingle();
+        if (pair) {
+          const partners = pair.member_ids.filter((id) => id !== enrollmentId);
+          setPartnerIds((prev) =>
+            JSON.stringify(prev) === JSON.stringify(partners) ? prev : partners
+          );
+        }
+      }
+    }
+
     const channel = supabase
       .channel(`polls:${lectureId}`)
       .on(
@@ -262,8 +322,18 @@ export function StudentFollow({
           setPartnerIds(rec.member_ids.filter((id) => id !== enrollmentId));
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        const ok = status === "SUBSCRIBED";
+        if (!ok && !pollTimer) {
+          pollTimer = setInterval(() => void pollRound(), 5000);
+        }
+        if (ok && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      });
     return () => {
+      if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
   }, [lectureId, courseId, enrollmentId]);

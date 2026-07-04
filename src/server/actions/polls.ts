@@ -76,13 +76,13 @@ function validateQuestionFields(input: {
     return `Give the question ${MIN_OPTIONS}–${MAX_OPTIONS} answer options.`;
   }
   if (options.some((o) => o.length > 500)) return "An option is too long.";
+  // Empty correctIndices is allowed — that's an opinion question (no key).
   if (
-    input.correctIndices.length === 0 ||
     input.correctIndices.some(
       (i) => !Number.isInteger(i) || i < 0 || i >= options.length
     )
   ) {
-    return "Mark at least one option as correct.";
+    return "The correct-answer markers don't match the options.";
   }
   if (
     !Number.isInteger(input.positionAfterPage) ||
@@ -417,6 +417,72 @@ export async function launchPollRound(
     return { ok: false, error: "A poll is already running — close it first." };
   }
   return { ok: true, data: { roundId: created.id } };
+}
+
+/**
+ * Professor: ask an impromptu question mid-lecture — saved into the deck's
+ * question bank (for the record, positioned at the current slide) and
+ * launched as a live round in one step. Empty correctIndices = opinion poll.
+ */
+export async function launchQuickPoll(input: {
+  courseId: string;
+  lectureId: string;
+  prompt: string;
+  options: string[];
+  correctIndices: number[];
+}): Promise<ActionResult<{ roundId: string; questionId: string }>> {
+  const { supabase, error } = await requireProfessor(input.courseId);
+  if (error) return { ok: false, error };
+  const invalid = validateQuestionFields({ ...input, positionAfterPage: 1 });
+  if (invalid) return { ok: false, error: invalid };
+
+  const { data: lecture } = await supabase
+    .from("lectures")
+    .select("id, deck_id, current_page")
+    .eq("id", input.lectureId)
+    .eq("course_id", input.courseId)
+    .is("ended_at", null)
+    .maybeSingle();
+  if (!lecture) return { ok: false, error: "The lecture isn't live." };
+
+  const options = input.options.map((o) => o.trim()).filter(Boolean);
+  const prompt = input.prompt.trim();
+  const { data: question, error: questionError } = await supabase
+    .from("deck_questions")
+    .insert({
+      deck_id: lecture.deck_id,
+      course_id: input.courseId,
+      prompt,
+      options,
+      correct_indices: input.correctIndices,
+      rationale: "Asked live as a quick poll.",
+      position_after_page: lecture.current_page,
+      approved: true,
+      source: "professor",
+    })
+    .select("id")
+    .single();
+  if (questionError || !question) {
+    return { ok: false, error: "Couldn't save the question." };
+  }
+
+  const { data: round, error: roundError } = await supabase
+    .from("poll_rounds")
+    .insert({
+      lecture_id: input.lectureId,
+      course_id: input.courseId,
+      question_id: question.id,
+      prompt,
+      options,
+      stage: "think",
+    })
+    .select("id")
+    .single();
+  if (roundError || !round) {
+    return { ok: false, error: "A poll is already running — close it first." };
+  }
+  revalidatePath(`/course/${input.courseId}/participate`);
+  return { ok: true, data: { roundId: round.id, questionId: question.id } };
 }
 
 /**

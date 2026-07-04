@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/card";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
+import { QuickPollDialog } from "@/components/features/follow/QuickPollDialog";
 import { endLecture, setLecturePage } from "@/server/actions/lectures";
 import {
   closePollRound,
@@ -189,6 +190,12 @@ export function ProfessorPresenter({
     }
   );
   const [pollBusy, setPollBusy] = useState(false);
+  // Quick polls launched this session — not in the server-fetched bank yet.
+  const [localQuestions, setLocalQuestions] = useState<PresenterQuestion[]>([]);
+  const allQuestions = useMemo(
+    () => [...questions, ...localQuestions],
+    [questions, localQuestions]
+  );
 
   const broadcastPoll = useCallback((p: ActiveRound | null) => {
     channelRef.current?.postMessage({
@@ -251,7 +258,7 @@ export function ProfessorPresenter({
       // Advancing one slide forward runs any queued question first — the
       // poll inserts itself between the slides.
       if (clamped === pageRef.current + 1) {
-        const queued = questions.find(
+        const queued = allQuestions.find(
           (q) =>
             q.positionAfterPage === pageRef.current && !ranRef.current.has(q.id)
         );
@@ -270,7 +277,7 @@ export function ProfessorPresenter({
         if (!result.ok) toast.error(result.error);
       });
     },
-    [courseId, lectureId, totalPages, questions, launchQuestion]
+    [courseId, lectureId, totalPages, allQuestions, launchQuestion]
   );
 
   // Instant sync with the projector stage window (same browser).
@@ -287,7 +294,7 @@ export function ProfessorPresenter({
         // advance crossed one, launch it now (the poll overlays the slide,
         // so no extra advance on resume).
         if (!roundRef.current && e.data.page === previous + 1) {
-          const queued = questions.find(
+          const queued = allQuestions.find(
             (q) =>
               q.positionAfterPage === previous && !ranRef.current.has(q.id)
           );
@@ -299,7 +306,7 @@ export function ProfessorPresenter({
       channelRef.current = null;
       channel.close();
     };
-  }, [lectureId, questions, launchQuestion]);
+  }, [lectureId, allQuestions, launchQuestion]);
 
   function openStage() {
     void (async () => {
@@ -402,11 +409,31 @@ export function ProfessorPresenter({
     };
   }, [lectureId]);
 
-  // Live votes on the open round (professor-private tallies).
+  // Live votes on the open round (professor-private tallies), with a 5s
+  // polling fallback when realtime drops — same pattern as slide sync.
   const roundId = round?.id ?? null;
   useEffect(() => {
     if (!roundId) return;
     const supabase = createClient();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    async function pollVotes() {
+      const { data } = await supabase
+        .from("poll_answers")
+        .select("enrollment_id, phase, choice")
+        .eq("round_id", roundId!);
+      if (!data) return;
+      setVotes(() => {
+        const next = new Map<string, Partial<Record<PollPhase, number>>>();
+        for (const v of data) {
+          const entry = next.get(v.enrollment_id) ?? {};
+          entry[v.phase] = v.choice;
+          next.set(v.enrollment_id, entry);
+        }
+        return next;
+      });
+    }
+
     const channel = supabase
       .channel(`poll-votes:${roundId}`)
       .on(
@@ -433,8 +460,18 @@ export function ProfessorPresenter({
           });
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        const ok = status === "SUBSCRIBED";
+        if (!ok && !pollTimer) {
+          pollTimer = setInterval(() => void pollVotes(), 5000);
+        }
+        if (ok && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      });
     return () => {
+      if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
   }, [roundId]);
@@ -489,6 +526,19 @@ export function ProfessorPresenter({
       return;
     }
     applyRound({ ...roundRef.current, correctIndices: next });
+  }
+
+  function handleQuickLaunched(
+    newRound: ActiveRound,
+    question: PresenterQuestion
+  ) {
+    setLocalQuestions((prev) => [...prev, question]);
+    ranRef.current.add(question.id);
+    setRan(new Set(ranRef.current));
+    advanceOnResumeRef.current = false;
+    setVotes(new Map());
+    applyRound(newRound);
+    capture("poll_launched", { quick: true });
   }
 
   async function closeRound(advance: boolean) {
@@ -556,10 +606,10 @@ export function ProfessorPresenter({
 
   const queued = useMemo(
     () =>
-      questions
+      allQuestions
         .filter((q) => !ran.has(q.id))
         .sort((a, b) => a.positionAfterPage - b.positionAfterPage),
-    [questions, ran]
+    [allQuestions, ran]
   );
 
   // Professor-private live tallies for the open round.
@@ -568,7 +618,8 @@ export function ProfessorPresenter({
     const showRevote = round.stage === "revote" || round.stage === "reveal";
     const counts = round.options.map(() => 0);
     const suggestedKey = round.questionId
-      ? (questions.find((q) => q.id === round.questionId)?.correctIndices ?? [])
+      ? (allQuestions.find((q) => q.id === round.questionId)?.correctIndices ??
+        [])
       : [];
     let thinkCount = 0;
     let revoteCount = 0;
@@ -594,7 +645,7 @@ export function ProfessorPresenter({
           ? firstVoteGuidance(thinkCorrect, thinkCount)
           : null,
     };
-  }, [round, votes, questions]);
+  }, [round, votes, allQuestions]);
 
   const stageLabel: Record<PollStage, string> = {
     think: "Think — students answer on their own.",
@@ -603,6 +654,11 @@ export function ProfessorPresenter({
     reveal: "Reveal — click an option to mark it correct.",
     closed: "",
   };
+  // No key on the question and none marked = opinion question.
+  const isOpinionRound =
+    Boolean(round) &&
+    (round?.correctIndices?.length ?? 0) === 0 &&
+    (pollStats?.suggestedKey.length ?? 0) === 0;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -737,7 +793,9 @@ export function ProfessorPresenter({
             </CardTitle>
             <CardDescription>
               {round
-                ? stageLabel[round.stage]
+                ? round.stage === "reveal" && isOpinionRound
+                  ? "Reveal — opinion question; this is how the class voted."
+                  : stageLabel[round.stage]
                 : queued.length > 0
                   ? `${queued.length} approved ${queued.length === 1 ? "question pops" : "questions pop"} in automatically as you pass ${queued.length === 1 ? "its" : "their"} slide.`
                   : "Approve or add questions on your deck to run them live."}
@@ -873,6 +931,12 @@ export function ProfessorPresenter({
                     before class.
                   </p>
                 )}
+                <QuickPollDialog
+                  courseId={courseId}
+                  lectureId={lectureId}
+                  disabled={pollBusy}
+                  onLaunched={handleQuickLaunched}
+                />
               </>
             )}
           </CardContent>
