@@ -171,7 +171,8 @@ export async function removeDeckReading(
 
 /**
  * Professor: have AI draft think-pair-share questions from the deck PDF
- * (plus the attached reading, when present). New drafts arrive unapproved.
+ * (plus the attached reading, when present). Drafts arrive approved — ready
+ * to run in lecture — and the professor unchecks any they don't want.
  */
 export async function generateDeckQuestions(
   courseId: string,
@@ -246,7 +247,7 @@ export async function generateDeckQuestions(
     correct_indices: q.correctIndices,
     rationale: q.rationale || null,
     position_after_page: q.positionAfterPage,
-    approved: false,
+    approved: true,
     source: "ai" as const,
   }));
   const { error: insertError } = await supabase

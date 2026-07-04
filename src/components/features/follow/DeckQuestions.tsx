@@ -99,7 +99,7 @@ export function DeckQuestions({
       const count = result.data?.count ?? 0;
       capture("tps_questions_generated", { count });
       toast.success(
-        `Drafted ${count} think-pair-share questions — review and approve the ones you like.`
+        `Drafted ${count} think-pair-share questions — all approved and ready to run; uncheck any you don't want in class.`
       );
       setExpanded(true);
       router.refresh();
