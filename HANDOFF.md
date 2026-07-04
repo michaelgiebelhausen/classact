@@ -41,8 +41,9 @@ You already created the "Class Act" project at supabase.com. Now:
    `supabase/migrations/0001_init.sql` in this folder, paste the whole thing,
    Run. Repeat for `0002_rls.sql`, `0003_storage.sql`,
    `0004_canvas_photos.sql`, `0005_follow_along.sql`,
-   `0006_participate.sql`, `0007_name_phonetics.sql`, then
-   `0008_roster_phonetics.sql` (order matters). Each should say "Success".
+   `0006_participate.sql`, `0007_name_phonetics.sql`,
+   `0008_roster_phonetics.sql`, then `0009_projects.sql`
+   (order matters). Each should say "Success".
 3. **Check Realtime is on:** dashboard → Database → Replication → make sure
    the `supabase_realtime` publication includes `check_ins`, `lectures`,
    `focus_events`, `poll_rounds`, `poll_answers`, and `poll_pairs`

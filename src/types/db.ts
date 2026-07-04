@@ -16,6 +16,11 @@ export type FocusEventType = "away" | "back"
 export type QuestionSource = "ai" | "professor"
 export type PollStage = "think" | "pair" | "revote" | "reveal" | "closed"
 export type PollPhase = "think" | "revote"
+export type ProjectStatus = "draft" | "open"
+export type ProjectTaskSource = "ai" | "professor"
+export type TeamTaskSource = "ai" | "professor" | "team"
+export type TeamTaskStatus = "unassigned" | "assigned" | "done"
+export type TeamRole = "lead" | "member"
 
 export type ProfileRow = {
   id: string
@@ -196,6 +201,86 @@ export type PollPairRow = {
   created_at: string
 }
 
+export type ProjectRow = {
+  id: string
+  course_id: string
+  title: string
+  storage_path: string | null
+  page_count: number | null
+  due_date: string | null
+  target_team_size: number | null
+  contract_text: string
+  status: ProjectStatus
+  created_at: string
+}
+
+export type ProjectTaskRow = {
+  id: string
+  project_id: string
+  course_id: string
+  title: string
+  description: string | null
+  estimated_minutes: number
+  position: number
+  source: ProjectTaskSource
+  created_at: string
+}
+
+export type ProjectTeamRow = {
+  id: string
+  project_id: string
+  course_id: string
+  name: string
+  contract_text: string
+  created_at: string
+}
+
+export type ProjectTeamMemberRow = {
+  id: string
+  team_id: string
+  project_id: string
+  enrollment_id: string
+  role: TeamRole
+  created_at: string
+}
+
+export type TeamTaskRow = {
+  id: string
+  team_id: string
+  project_id: string
+  course_id: string
+  source_task_id: string | null
+  title: string
+  description: string | null
+  estimated_minutes: number
+  actual_minutes: number | null
+  status: TeamTaskStatus
+  assigned_enrollment_id: string | null
+  assigned_by_enrollment_id: string | null
+  done_at: string | null
+  position: number
+  source: TeamTaskSource
+  created_at: string
+}
+
+export type TaskFlagRow = {
+  id: string
+  team_task_id: string
+  course_id: string
+  flagged_by_enrollment_id: string
+  reason: string
+  created_at: string
+  resolved_at: string | null
+  resolved_by: string | null
+}
+
+export type TeamContractSignatureRow = {
+  id: string
+  team_id: string
+  enrollment_id: string
+  signed_at: string
+}
+
 type TableShape<Row> = {
   Row: Row
   Insert: Partial<Row>
@@ -224,6 +309,13 @@ export type Database = {
       poll_rounds: TableShape<PollRoundRow>
       poll_answers: TableShape<PollAnswerRow>
       poll_pairs: TableShape<PollPairRow>
+      projects: TableShape<ProjectRow>
+      project_tasks: TableShape<ProjectTaskRow>
+      project_teams: TableShape<ProjectTeamRow>
+      project_team_members: TableShape<ProjectTeamMemberRow>
+      team_tasks: TableShape<TeamTaskRow>
+      task_flags: TableShape<TaskFlagRow>
+      team_contract_signatures: TableShape<TeamContractSignatureRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

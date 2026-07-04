@@ -22,7 +22,9 @@ export type AnalyticsEvent =
   | "tps_questions_generated"
   | "poll_launched"
   | "poll_answered"
-  | "poll_revealed";
+  | "poll_revealed"
+  | "project_uploaded"
+  | "project_tasks_generated";
 
 export function capture(event: AnalyticsEvent, props?: Record<string, unknown>) {
   if (!KEY) return;
