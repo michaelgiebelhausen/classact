@@ -11,6 +11,8 @@ export type EnrollmentStatus = "invited" | "active"
 export type PhotoKind = "candid" | "professional" | "adventure"
 export type SeatRelation = "front" | "back" | "left" | "right"
 export type GameType = "memory_tiles" | "flash_cards"
+export type DeckKind = "pdf" | "google_slides"
+export type FocusEventType = "away" | "back"
 
 export type ProfileRow = {
   id: string
@@ -100,6 +102,42 @@ export type NameGameScoreRow = {
   played_at: string
 }
 
+export type LectureDeckRow = {
+  id: string
+  course_id: string
+  title: string
+  kind: DeckKind
+  storage_path: string | null
+  embed_url: string | null
+  page_count: number | null
+  created_at: string
+}
+
+export type LectureRow = {
+  id: string
+  course_id: string
+  deck_id: string
+  current_page: number
+  started_at: string
+  ended_at: string | null
+}
+
+export type LectureNoteRow = {
+  id: string
+  lecture_id: string
+  enrollment_id: string
+  content: string
+  updated_at: string
+}
+
+export type FocusEventRow = {
+  id: string
+  lecture_id: string
+  enrollment_id: string
+  event_type: FocusEventType
+  occurred_at: string
+}
+
 type TableShape<Row> = {
   Row: Row
   Insert: Partial<Row>
@@ -120,6 +158,10 @@ export type Database = {
       check_ins: TableShape<CheckInRow>
       seat_verifications: TableShape<SeatVerificationRow>
       name_game_scores: TableShape<NameGameScoreRow>
+      lecture_decks: TableShape<LectureDeckRow>
+      lectures: TableShape<LectureRow>
+      lecture_notes: TableShape<LectureNoteRow>
+      focus_events: TableShape<FocusEventRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

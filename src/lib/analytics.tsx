@@ -13,7 +13,11 @@ export type AnalyticsEvent =
   | "onboarding_completed"
   | "checkin_completed"
   | "neighbor_verified"
-  | "game_played";
+  | "game_played"
+  | "deck_uploaded"
+  | "lecture_started"
+  | "lecture_ended"
+  | "lecture_focus_lost";
 
 export function capture(event: AnalyticsEvent, props?: Record<string, unknown>) {
   if (!KEY) return;

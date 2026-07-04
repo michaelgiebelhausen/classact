@@ -29,7 +29,7 @@ interface NavItem {
 const COURSE_NAV: NavItem[] = [
   { label: "Check In", icon: Armchair, seg: "checkin", status: "live" },
   { label: "Learn Names", icon: Sparkles, seg: "games", status: "live" },
-  { label: "Follow Along", icon: MonitorPlay, seg: "follow", status: "soon" },
+  { label: "Follow Along", icon: MonitorPlay, seg: "follow", status: "live" },
   { label: "Participate", icon: Vote, seg: "participate", status: "soon" },
   { label: "Shout-outs", icon: Megaphone, seg: "shoutouts", status: "soon" },
   { label: "Projects", icon: Users, seg: "projects", status: "soon" },

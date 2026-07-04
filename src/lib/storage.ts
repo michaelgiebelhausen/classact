@@ -2,7 +2,20 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import type { Database, PhotoKind } from "@/types/db"
 
 export const PHOTO_BUCKET = "profile-photos"
+export const DECK_BUCKET = "lecture-decks"
 const SIGNED_URL_TTL_SECONDS = 60 * 60 // 1 hour
+
+/** Short-lived signed URL for a lecture deck PDF. */
+export async function getSignedDeckUrl(
+  client: SupabaseClient<Database>,
+  path: string
+): Promise<string | null> {
+  const { data, error } = await client.storage
+    .from(DECK_BUCKET)
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
+  if (error || !data) return null
+  return data.signedUrl
+}
 
 /** Deterministic storage path for a student's photo of a given kind. */
 export function photoStoragePath(userId: string, kind: PhotoKind): string {
