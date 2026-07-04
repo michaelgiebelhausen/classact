@@ -19,6 +19,8 @@ export const env = {
   siteUrl: orUndef(process.env.NEXT_PUBLIC_SITE_URL) ?? "http://localhost:3000",
   resendApiKey: orUndef(process.env.RESEND_API_KEY),
   emailFrom: orUndef(process.env.EMAIL_FROM) ?? "ClassAct <noreply@classact.college>",
+  canvasBaseUrl: orUndef(process.env.CANVAS_BASE_URL),
+  canvasToken: orUndef(process.env.CANVAS_API_TOKEN),
   posthogKey: orUndef(process.env.NEXT_PUBLIC_POSTHOG_KEY),
   posthogHost:
     orUndef(process.env.NEXT_PUBLIC_POSTHOG_HOST) ?? "https://us.i.posthog.com",
@@ -29,6 +31,7 @@ export const isConfigured = {
   supabase: Boolean(env.supabaseUrl && env.supabaseAnonKey),
   supabaseAdmin: Boolean(env.supabaseUrl && env.supabaseServiceRoleKey),
   email: Boolean(env.resendApiKey),
+  canvas: Boolean(env.canvasBaseUrl && env.canvasToken),
   analytics: Boolean(env.posthogKey),
   sentry: Boolean(env.sentryDsn),
 } as const

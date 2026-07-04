@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { getSignedPhotoUrls } from "@/lib/storage";
+import { resolveEnrollmentPhotos } from "@/lib/storage";
 import {
   CheckInLive,
   type DirectoryEntry,
@@ -106,35 +106,14 @@ export default async function CheckInPage({
     const admin = createAdminClient();
     const { data: enrollments } = await admin
       .from("enrollments")
-      .select("id, roster_name, profile_id")
-      .eq("course_id", courseId)
-      .eq("status", "active");
+      .select("id, roster_name, profile_id, roster_photo_path")
+      .eq("course_id", courseId);
 
-    const memberIds = (enrollments ?? [])
-      .map((e) => e.profile_id)
-      .filter((id): id is string => Boolean(id));
-    const { data: photos } =
-      memberIds.length > 0
-        ? await admin
-            .from("profile_photos")
-            .select("profile_id, storage_path")
-            .in("profile_id", memberIds)
-        : { data: [] as { profile_id: string; storage_path: string }[] };
-    const urlMap = await getSignedPhotoUrls(
-      admin,
-      (photos ?? []).map((p) => p.storage_path)
-    );
-    const photoByProfile = new Map<string, string>();
-    for (const p of photos ?? []) {
-      const url = urlMap[p.storage_path];
-      if (url && !photoByProfile.has(p.profile_id)) {
-        photoByProfile.set(p.profile_id, url);
-      }
-    }
+    const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
     for (const e of enrollments ?? []) {
       directory[e.id] = {
         name: e.roster_name,
-        photoUrl: e.profile_id ? (photoByProfile.get(e.profile_id) ?? null) : null,
+        photoUrl: photoMap.get(e.id)?.[0] ?? null,
       };
     }
   }

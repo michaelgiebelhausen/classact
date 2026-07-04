@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { getSignedPhotoUrls } from "@/lib/storage";
+import { resolveEnrollmentPhotos } from "@/lib/storage";
 import { NameGames, type GamePlayer } from "@/components/features/games/NameGames";
 
 const MIN_PLAYERS = 6;
@@ -32,37 +32,18 @@ export default async function GamesPage({
     const admin = createAdminClient();
     const { data: enrollments } = await admin
       .from("enrollments")
-      .select("id, roster_name, profile_id")
-      .eq("course_id", courseId)
-      .eq("status", "active");
+      .select("id, roster_name, profile_id, roster_photo_path")
+      .eq("course_id", courseId);
 
+    // Everyone but yourself; not-yet-activated students (null profile_id) are
+    // included so their Canvas photo can seed the game.
     const candidates = (enrollments ?? []).filter(
-      (e) => e.profile_id && e.profile_id !== profile.id
+      (e) => e.profile_id !== profile.id
     );
-    const memberIds = candidates.map((e) => e.profile_id as string);
-    const { data: photos } =
-      memberIds.length > 0
-        ? await admin
-            .from("profile_photos")
-            .select("profile_id, storage_path")
-            .in("profile_id", memberIds)
-        : { data: [] as { profile_id: string; storage_path: string }[] };
-
-    const urlMap = await getSignedPhotoUrls(
-      admin,
-      (photos ?? []).map((p) => p.storage_path)
-    );
-    const photosByProfile = new Map<string, string[]>();
-    for (const p of photos ?? []) {
-      const url = urlMap[p.storage_path];
-      if (!url) continue;
-      const list = photosByProfile.get(p.profile_id) ?? [];
-      list.push(url);
-      photosByProfile.set(p.profile_id, list);
-    }
+    const photoMap = await resolveEnrollmentPhotos(admin, candidates);
 
     for (const e of candidates) {
-      const urls = photosByProfile.get(e.profile_id as string) ?? [];
+      const urls = photoMap.get(e.id) ?? [];
       if (urls.length > 0) {
         players.push({
           enrollmentId: e.id,

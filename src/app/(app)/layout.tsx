@@ -1,6 +1,19 @@
 import { redirect } from "next/navigation";
 import { getProfile } from "@/lib/auth";
-import { AppNav } from "@/components/features/AppNav";
+import { Sidebar } from "@/components/features/Sidebar";
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+
+function initials(name: string | null): string {
+  if (!name) return "ME";
+  return name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
 
 export default async function AppLayout({
   children,
@@ -17,11 +30,33 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <AppNav role={profile.role} name={profile.full_name} />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        {children}
-      </main>
+    <div className="flex min-h-screen">
+      <Sidebar role={profile.role} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-border/60 bg-background/80 px-6 backdrop-blur-md">
+          <span className="font-[family-name:var(--font-heading)] text-lg font-medium tracking-tight">
+            ClassAct
+          </span>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="hidden text-sm text-muted-foreground sm:inline">
+              {profile.full_name ?? ""}
+            </span>
+            <form action="/auth/signout" method="post">
+              <Button variant="outline" size="sm" type="submit">
+                Sign out
+              </Button>
+            </form>
+            <Avatar className="size-9">
+              <AvatarFallback className="bg-gradient-to-br from-[var(--gold)] to-[#c9822a] text-sm font-bold text-white">
+                {initials(profile.full_name)}
+              </AvatarFallback>
+            </Avatar>
+          </div>
+        </header>
+        <main className="mx-auto w-full max-w-6xl flex-1 px-8 py-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

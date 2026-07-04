@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { generateSeatMap } from "@/server/actions/seatmap";
 import { updateIcebreakerFields } from "@/server/actions/courses";
+import { syncCanvasRoster } from "@/server/actions/canvas";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { buildSeatGrid } from "@/lib/seatlabels";
 
@@ -214,6 +215,38 @@ function RosterTab({
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [canvasId, setCanvasId] = useState("");
+  const [syncing, setSyncing] = useState(false);
+
+  async function handleCanvasSync() {
+    if (!canvasId.trim()) return;
+    setSyncing(true);
+    const result = await syncCanvasRoster({
+      courseId,
+      canvasCourseId: canvasId.trim(),
+    });
+    setSyncing(false);
+    if (result.ok && result.data) {
+      toast.success(
+        `Synced ${result.data.imported} student(s) from Canvas${
+          result.data.skipped ? `, skipped ${result.data.skipped} already added` : ""
+        }.`
+      );
+      if (result.data.photosStored > 0) {
+        toast.message(
+          `Ported ${result.data.photosStored} Canvas photo(s) — faces show in the name games, directory, and seat map now.`
+        );
+      }
+      if (result.data.noEmail > 0) {
+        toast.message(
+          `${result.data.noEmail} student(s) had no shared email and were skipped.`
+        );
+      }
+      router.refresh();
+    } else {
+      toast.error(result.ok ? "Sync failed." : result.error);
+    }
+  }
 
   async function handleFile(file: File) {
     setImporting(true);
@@ -263,6 +296,32 @@ function RosterTab({
           <Button onClick={() => fileRef.current?.click()} disabled={importing}>
             {importing ? "Importing…" : "Upload roster CSV"}
           </Button>
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-dashed p-4">
+          <Label htmlFor="canvasId">Or sync from Canvas</Label>
+          <p className="text-sm text-muted-foreground">
+            Paste your Canvas course ID — the number in your course URL, e.g.{" "}
+            <span className="font-mono">…/courses/</span>
+            <span className="font-mono font-semibold">123456</span>.
+          </p>
+          <div className="flex gap-2">
+            <Input
+              id="canvasId"
+              inputMode="numeric"
+              placeholder="123456"
+              value={canvasId}
+              onChange={(e) => setCanvasId(e.target.value.replace(/[^0-9]/g, ""))}
+              className="max-w-[160px] font-mono"
+            />
+            <Button
+              variant="outline"
+              onClick={handleCanvasSync}
+              disabled={syncing || !canvasId}
+            >
+              {syncing ? "Syncing…" : "Sync from Canvas"}
+            </Button>
+          </div>
         </div>
 
         {initial.length === 0 ? (

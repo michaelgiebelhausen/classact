@@ -37,3 +37,61 @@ export async function getSignedPhotoUrls(
   }
   return map
 }
+
+export interface EnrollmentPhotoInput {
+  id: string
+  profile_id: string | null
+  roster_photo_path: string | null
+}
+
+/**
+ * Resolve display photos per enrollment. A student's own uploaded photos take
+ * precedence; if they have none, their seeded roster photo (e.g. from Canvas)
+ * is the fallback. Returns a map of enrollment id -> signed photo URLs.
+ */
+export async function resolveEnrollmentPhotos(
+  client: SupabaseClient<Database>,
+  enrollments: EnrollmentPhotoInput[]
+): Promise<Map<string, string[]>> {
+  const profileIds = enrollments
+    .map((e) => e.profile_id)
+    .filter((id): id is string => Boolean(id))
+
+  const { data: uploaded } =
+    profileIds.length > 0
+      ? await client
+          .from("profile_photos")
+          .select("profile_id, storage_path")
+          .in("profile_id", profileIds)
+      : { data: [] as { profile_id: string; storage_path: string }[] }
+
+  const allPaths = [
+    ...(uploaded ?? []).map((p) => p.storage_path),
+    ...enrollments
+      .map((e) => e.roster_photo_path)
+      .filter((p): p is string => Boolean(p)),
+  ]
+  const urlMap = await getSignedPhotoUrls(client, allPaths)
+
+  const uploadedByProfile = new Map<string, string[]>()
+  for (const p of uploaded ?? []) {
+    const url = urlMap[p.storage_path]
+    if (!url) continue
+    const list = uploadedByProfile.get(p.profile_id) ?? []
+    list.push(url)
+    uploadedByProfile.set(p.profile_id, list)
+  }
+
+  const result = new Map<string, string[]>()
+  for (const e of enrollments) {
+    const own = e.profile_id ? uploadedByProfile.get(e.profile_id) ?? [] : []
+    if (own.length > 0) {
+      result.set(e.id, own)
+    } else if (e.roster_photo_path && urlMap[e.roster_photo_path]) {
+      result.set(e.id, [urlMap[e.roster_photo_path]])
+    } else {
+      result.set(e.id, [])
+    }
+  }
+  return result
+}

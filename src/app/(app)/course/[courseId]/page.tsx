@@ -13,7 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { getSignedPhotoUrls } from "@/lib/storage";
+import { resolveEnrollmentPhotos } from "@/lib/storage";
 
 function initials(name: string): string {
   return name
@@ -53,34 +53,11 @@ export default async function CourseHomePage({
 
   const { data: enrollments } = await directory
     .from("enrollments")
-    .select("id, roster_name, profile_id, status")
+    .select("id, roster_name, profile_id, status, roster_photo_path")
     .eq("course_id", courseId)
-    .eq("status", "active")
     .order("roster_name");
 
-  const memberIds = (enrollments ?? [])
-    .map((e) => e.profile_id)
-    .filter((id): id is string => Boolean(id));
-
-  const { data: photos } =
-    memberIds.length > 0
-      ? await directory
-          .from("profile_photos")
-          .select("profile_id, storage_path")
-          .in("profile_id", memberIds)
-      : { data: [] as { profile_id: string; storage_path: string }[] };
-
-  const urlMap = await getSignedPhotoUrls(
-    directory,
-    (photos ?? []).map((p) => p.storage_path)
-  );
-  const photoByProfile = new Map<string, string>();
-  for (const p of photos ?? []) {
-    const url = urlMap[p.storage_path];
-    if (url && !photoByProfile.has(p.profile_id)) {
-      photoByProfile.set(p.profile_id, url);
-    }
-  }
+  const photoMap = await resolveEnrollmentPhotos(directory, enrollments ?? []);
 
   return (
     <div className="grid gap-6">
@@ -124,20 +101,18 @@ export default async function CourseHomePage({
         <CardHeader>
           <CardTitle>Who&apos;s in this class</CardTitle>
           <CardDescription>
-            {enrollments?.length ?? 0} activated so far.
+            {enrollments?.length ?? 0} students on the roster.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {!enrollments || enrollments.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No one has activated yet. The room fills in as students join.
+              No students yet — import your roster from Canvas or CSV in Setup.
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
               {enrollments.map((e) => {
-                const url = e.profile_id
-                  ? photoByProfile.get(e.profile_id)
-                  : undefined;
+                const url = photoMap.get(e.id)?.[0];
                 return (
                   <div
                     key={e.id}

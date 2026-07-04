@@ -45,6 +45,7 @@ export type EnrollmentRow = {
   roster_name: string
   roster_email: string
   status: EnrollmentStatus
+  roster_photo_path: string | null
   created_at: string
 }
 
