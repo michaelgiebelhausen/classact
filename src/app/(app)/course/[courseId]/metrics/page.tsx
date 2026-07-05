@@ -16,8 +16,11 @@ import {
 } from "@/components/ui/table";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
+import { formatMinutes } from "@/lib/projects";
 import {
   getCourseMetrics,
+  getCourseProjectStats,
+  getMyProjectStats,
   getStudentMetrics,
 } from "@/server/actions/metrics";
 
@@ -53,6 +56,7 @@ export default async function MetricsPage({
   if (isProfessor) {
     const metrics = await getCourseMetrics(courseId);
     if (!metrics) notFound();
+    const projectStats = (await getCourseProjectStats(courseId)) ?? [];
     const hasActivity = metrics.totalCheckIns > 0;
     return (
       <div className="grid gap-6">
@@ -116,12 +120,102 @@ export default async function MetricsPage({
             )}
           </CardContent>
         </Card>
+        {projectStats.map((project) => (
+          <Card key={project.projectId}>
+            <CardHeader>
+              <CardTitle>Project: {project.projectTitle}</CardTitle>
+              <CardDescription>
+                Done counts actual minutes when logged (estimate otherwise);
+                flagged work earns nothing until you settle the flag. Students
+                see these same numbers about themselves.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-6">
+              {project.teams.map((team) => (
+                <div key={team.teamId}>
+                  <p className="mb-2 text-sm font-medium">
+                    {team.teamName}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      team total {formatMinutes(team.teamDoneMinutes)}
+                    </span>
+                  </p>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Student</TableHead>
+                        <TableHead className="text-right">Done</TableHead>
+                        <TableHead className="text-right">Share</TableHead>
+                        <TableHead className="text-right">
+                          Biggest task
+                        </TableHead>
+                        <TableHead className="text-right">Handed out</TableHead>
+                        <TableHead className="text-right">Queued</TableHead>
+                        <TableHead className="text-right">Flagged</TableHead>
+                        <TableHead className="text-right">Contract</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {team.members.map((m) => (
+                        <TableRow key={m.enrollmentId}>
+                          <TableCell>
+                            {m.name}
+                            {m.role === "lead" && (
+                              <span className="ml-1 text-xs text-muted-foreground">
+                                (lead)
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatMinutes(m.stats.doneMinutes)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {team.teamDoneMinutes > 0
+                              ? `${Math.round(m.stats.shareOfTeamDone * 100)}%`
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {m.stats.biggestTaskMinutes > 0
+                              ? formatMinutes(m.stats.biggestTaskMinutes)
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {m.stats.distributedTasks}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {m.stats.queuedMinutes > 0
+                              ? formatMinutes(m.stats.queuedMinutes)
+                              : "—"}
+                          </TableCell>
+                          <TableCell
+                            className={
+                              m.stats.flaggedTasks > 0
+                                ? "text-right font-medium text-red-600"
+                                : "text-right"
+                            }
+                          >
+                            {m.stats.flaggedTasks > 0
+                              ? formatMinutes(m.stats.flaggedMinutes)
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {m.signedContract ? "Signed" : "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ))}
       </div>
     );
   }
 
   const metrics = await getStudentMetrics(courseId);
   if (!metrics) notFound();
+  const myProjects = (await getMyProjectStats(courseId)) ?? [];
   const noActivity =
     metrics.sessionsAttended === 0 && metrics.gamesPlayed === 0;
 
@@ -157,6 +251,75 @@ export default async function MetricsPage({
           <Metric label="Best matching" value={metrics.bestMatching ?? "—"} />
         </div>
       )}
+      {myProjects.map((p) => (
+        <Card key={`${p.projectId}-team`}>
+          <CardHeader>
+            <CardTitle>Project: {p.projectTitle}</CardTitle>
+            <CardDescription>
+              {p.teamName} ·{" "}
+              {p.signedContract
+                ? "contract signed"
+                : "contract not signed yet"}{" "}
+              · team total {formatMinutes(p.teamDoneMinutes)}. These are the
+              same numbers your professor sees — your work, your data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+            <div>
+              <p className="text-xs text-muted-foreground">Done work</p>
+              <p className="text-xl font-semibold">
+                {formatMinutes(p.stats.doneMinutes)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Share of team</p>
+              <p className="text-xl font-semibold">
+                {p.teamDoneMinutes > 0
+                  ? `${Math.round(p.stats.shareOfTeamDone * 100)}%`
+                  : "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Biggest task</p>
+              <p className="text-xl font-semibold">
+                {p.stats.biggestTaskMinutes > 0
+                  ? formatMinutes(p.stats.biggestTaskMinutes)
+                  : "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Tasks handed out
+              </p>
+              <p className="text-xl font-semibold">
+                {p.stats.distributedTasks}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">On my plate</p>
+              <p className="text-xl font-semibold">
+                {p.stats.queuedMinutes > 0
+                  ? formatMinutes(p.stats.queuedMinutes)
+                  : "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Flagged work</p>
+              <p
+                className={
+                  p.stats.flaggedTasks > 0
+                    ? "text-xl font-semibold text-red-600"
+                    : "text-xl font-semibold"
+                }
+              >
+                {p.stats.flaggedTasks > 0
+                  ? formatMinutes(p.stats.flaggedMinutes)
+                  : "—"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
