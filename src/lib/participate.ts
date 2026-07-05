@@ -21,8 +21,8 @@ export function pairKey(a: string, b: string): string {
 }
 
 function proximityScore(
-  a: PairingParticipant,
-  b: PairingParticipant
+  a: { seat?: { row: number; col: number } },
+  b: { seat?: { row: number; col: number } }
 ): number {
   if (!a.seat || !b.seat) return 0;
   const distance =
@@ -110,6 +110,101 @@ export function assignPairs(
   }
 
   return groups.map((group) => group.map((i) => participants[i].enrollmentId));
+}
+
+// ---------------------------------------------------------------------------
+// Small-group exercises (one-minute papers): seat-based groups, no votes.
+// ---------------------------------------------------------------------------
+
+export interface GroupingParticipant {
+  enrollmentId: string;
+  /** Seat position from today's check-in, when the student has one. */
+  seat?: { row: number; col: number };
+}
+
+/** Deterministic order: seated students first (reading order), then seatless. */
+function groupingOrder(
+  a: GroupingParticipant,
+  b: GroupingParticipant
+): number {
+  if (a.seat && b.seat) {
+    return (
+      a.seat.row - b.seat.row ||
+      a.seat.col - b.seat.col ||
+      a.enrollmentId.localeCompare(b.enrollmentId)
+    );
+  }
+  if (a.seat) return -1;
+  if (b.seat) return 1;
+  return a.enrollmentId.localeCompare(b.enrollmentId);
+}
+
+/**
+ * Cluster students into small groups by where they're sitting — the
+ * assigned-groups counterpart to think-pair-share pairing, for one-minute
+ * papers and other small-group exercises. Greedy nearest-neighbour growth
+ * from a seed, so each group is a seat neighbourhood. Deterministic for a
+ * given input. A trailing lone student is folded into the nearest group
+ * rather than left alone.
+ */
+export function assignGroups(
+  participants: GroupingParticipant[],
+  targetSize: number
+): string[][] {
+  if (participants.length === 0) return [];
+  const size = Math.max(2, Math.floor(targetSize));
+
+  const ordered = [...participants].sort(groupingOrder);
+  const remaining = new Set(ordered.map((_, i) => i));
+  const groups: number[][] = [];
+
+  while (remaining.size > 0) {
+    // Seed = first still-unused participant in deterministic order.
+    const seed = ordered.findIndex((_, i) => remaining.has(i));
+    remaining.delete(seed);
+    const group = [seed];
+
+    while (group.length < size && remaining.size > 0) {
+      let best = -1;
+      let bestScore = -Infinity;
+      for (const i of remaining) {
+        // Closeness to the nearest current group member.
+        const score = Math.max(
+          ...group.map((m) => proximityScore(ordered[i], ordered[m]))
+        );
+        if (score > bestScore) {
+          bestScore = score;
+          best = i;
+        }
+      }
+      remaining.delete(best);
+      group.push(best);
+    }
+    groups.push(group);
+  }
+
+  // A trailing singleton joins the nearest existing group.
+  if (groups.length > 1) {
+    const last = groups[groups.length - 1];
+    if (last.length === 1) {
+      groups.pop();
+      const lone = last[0];
+      let bestGroup = 0;
+      let bestScore = -Infinity;
+      groups.forEach((g, gi) => {
+        const score = Math.max(
+          ...g.map((m) => proximityScore(ordered[lone], ordered[m]))
+        );
+        if (score > bestScore) {
+          bestScore = score;
+          bestGroup = gi;
+        }
+      });
+      groups[bestGroup].push(lone);
+    }
+  }
+
+  return groups.map((g) => g.map((i) => ordered[i].enrollmentId));
 }
 
 /** Count votes per option index for each phase; out-of-range choices dropped. */

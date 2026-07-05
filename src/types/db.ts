@@ -281,6 +281,44 @@ export type TeamContractSignatureRow = {
   signed_at: string
 }
 
+export type ExerciseStage = "open" | "closed"
+
+export type ExerciseRoundRow = {
+  id: string
+  course_id: string
+  session_id: string | null
+  prompt: string
+  stage: ExerciseStage
+  created_at: string
+  closed_at: string | null
+}
+
+export type ExerciseGroupRow = {
+  id: string
+  round_id: string
+  course_id: string
+  label: string
+  created_at: string
+}
+
+export type ExerciseGroupMemberRow = {
+  id: string
+  group_id: string
+  course_id: string
+  enrollment_id: string
+  created_at: string
+}
+
+export type ExerciseResponseRow = {
+  id: string
+  group_id: string
+  round_id: string
+  course_id: string
+  content: string
+  updated_by_enrollment_id: string | null
+  updated_at: string
+}
+
 type TableShape<Row> = {
   Row: Row
   Insert: Partial<Row>
@@ -316,6 +354,10 @@ export type Database = {
       team_tasks: TableShape<TeamTaskRow>
       task_flags: TableShape<TaskFlagRow>
       team_contract_signatures: TableShape<TeamContractSignatureRow>
+      exercise_rounds: TableShape<ExerciseRoundRow>
+      exercise_groups: TableShape<ExerciseGroupRow>
+      exercise_group_members: TableShape<ExerciseGroupMemberRow>
+      exercise_responses: TableShape<ExerciseResponseRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

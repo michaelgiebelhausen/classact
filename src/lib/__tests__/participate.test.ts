@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  assignGroups,
   assignPairs,
   firstVoteGuidance,
   pairKey,
   summarizeParticipation,
   tallyVotes,
+  type GroupingParticipant,
   type PairingParticipant,
 } from "@/lib/participate";
 
@@ -13,6 +15,60 @@ const NO_HISTORY = new Set<string>();
 function seatAt(row: number, col: number) {
   return { row, col };
 }
+
+describe("assignGroups", () => {
+  function inRow(count: number, targetSize: number) {
+    const participants: GroupingParticipant[] = Array.from(
+      { length: count },
+      (_, c) => ({ enrollmentId: `s${c}`, seat: seatAt(0, c) })
+    );
+    return assignGroups(participants, targetSize);
+  }
+
+  it("returns empty for no participants", () => {
+    expect(assignGroups([], 4)).toEqual([]);
+  });
+
+  it("groups adjacent seats together", () => {
+    const groups = inRow(6, 3);
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups[0])).toEqual(new Set(["s0", "s1", "s2"]));
+    expect(new Set(groups[1])).toEqual(new Set(["s3", "s4", "s5"]));
+  });
+
+  it("keeps every student in exactly one group", () => {
+    const groups = inRow(10, 4);
+    const all = groups.flat();
+    expect(all).toHaveLength(10);
+    expect(new Set(all).size).toBe(10);
+  });
+
+  it("folds a trailing singleton into a neighbouring group", () => {
+    // 4 in a row, target 3 => would be [3] + [1]; the lone one merges.
+    const groups = inRow(4, 3);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toHaveLength(4);
+  });
+
+  it("is deterministic for the same input", () => {
+    expect(inRow(9, 3)).toEqual(inRow(9, 3));
+  });
+
+  it("still groups students who never checked in (no seats)", () => {
+    const participants: GroupingParticipant[] = [
+      { enrollmentId: "a" },
+      { enrollmentId: "b" },
+      { enrollmentId: "c" },
+    ];
+    const groups = assignGroups(participants, 2);
+    expect(groups.flat().sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("clamps a nonsensical target size up to 2", () => {
+    const groups = inRow(4, 1);
+    expect(groups.every((g) => g.length >= 2)).toBe(true);
+  });
+});
 
 describe("assignPairs", () => {
   it("returns empty for no participants and a singleton for one", () => {

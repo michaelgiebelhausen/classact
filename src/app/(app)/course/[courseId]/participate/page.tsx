@@ -14,6 +14,82 @@ import {
   type QuestionItem,
 } from "@/components/features/follow/DeckQuestions";
 import { DeckReading } from "@/components/features/follow/DeckReading";
+import {
+  ExerciseProfessor,
+  type OpenExerciseView,
+} from "@/components/features/participate/ExerciseProfessor";
+import {
+  ExerciseStudent,
+  type MyExerciseGroup,
+} from "@/components/features/participate/ExerciseStudent";
+
+/**
+ * The open one-minute-paper round for a course, with each group's members and
+ * shared response. RLS decides what the caller sees: professor gets every
+ * group; a student gets their own group's response only.
+ */
+async function loadOpenExercise(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  courseId: string
+): Promise<{
+  roundId: string;
+  prompt: string;
+  groups: {
+    id: string;
+    label: string;
+    memberEnrollmentIds: string[];
+    memberNames: string[];
+    response: string;
+  }[];
+} | null> {
+  const { data: round } = await supabase
+    .from("exercise_rounds")
+    .select("id, prompt")
+    .eq("course_id", courseId)
+    .eq("stage", "open")
+    .maybeSingle();
+  if (!round) return null;
+
+  const { data: groupRows } = await supabase
+    .from("exercise_groups")
+    .select("id, label")
+    .eq("round_id", round.id)
+    .order("label");
+  const groupIds = (groupRows ?? []).map((g) => g.id);
+
+  const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
+    supabase
+      .from("exercise_group_members")
+      .select("group_id, enrollment_id, enrollments(roster_name)")
+      .in("group_id", groupIds),
+    supabase
+      .from("exercise_responses")
+      .select("group_id, content")
+      .in("group_id", groupIds),
+  ]);
+  const responseByGroup = new Map(
+    (responseRows ?? []).map((r) => [r.group_id, r.content])
+  );
+
+  return {
+    roundId: round.id,
+    prompt: round.prompt,
+    groups: (groupRows ?? []).map((g) => {
+      const members = (memberRows ?? []).filter((m) => m.group_id === g.id);
+      return {
+        id: g.id,
+        label: g.label,
+        memberEnrollmentIds: members.map((m) => m.enrollment_id),
+        memberNames: members.map(
+          (m) =>
+            (m.enrollments as unknown as { roster_name: string } | null)
+              ?.roster_name ?? "Someone"
+        ),
+        response: responseByGroup.get(g.id) ?? "",
+      };
+    }),
+  };
+}
 
 /**
  * Participate — the think-pair-share home. Professors manage each deck's
@@ -75,9 +151,24 @@ export default async function ParticipatePage({
       questionsByDeck.set(q.deck_id, list);
     }
 
+    const exercise = await loadOpenExercise(supabase, courseId);
+    const professorRound: OpenExerciseView | null = exercise
+      ? {
+          roundId: exercise.roundId,
+          prompt: exercise.prompt,
+          groups: exercise.groups.map((g) => ({
+            id: g.id,
+            label: g.label,
+            memberNames: g.memberNames,
+            response: g.response,
+          })),
+        }
+      : null;
+
     return (
       <div className="grid gap-6">
         {header}
+        <ExerciseProfessor courseId={courseId} round={professorRound} />
         <Card>
           <CardHeader>
             <CardTitle>Think-Pair-Share questions</CardTitle>
@@ -159,9 +250,38 @@ export default async function ParticipatePage({
     );
   }
 
+  const exercise = await loadOpenExercise(supabase, courseId);
+  let myGroup: MyExerciseGroup | null = null;
+  let openButUngrouped = false;
+  if (exercise) {
+    const mine = myEnrollment
+      ? exercise.groups.find((g) =>
+          g.memberEnrollmentIds.includes(myEnrollment.id)
+        )
+      : undefined;
+    if (mine) {
+      myGroup = {
+        groupId: mine.id,
+        label: mine.label,
+        prompt: exercise.prompt,
+        memberNames: mine.memberNames,
+        response: mine.response,
+      };
+    } else {
+      openButUngrouped = true;
+    }
+  }
+
   return (
     <div className="grid gap-6">
       {header}
+      {exercise && (
+        <ExerciseStudent
+          courseId={courseId}
+          group={myGroup}
+          openButUngrouped={openButUngrouped}
+        />
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Your participation</CardTitle>
