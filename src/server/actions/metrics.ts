@@ -8,6 +8,11 @@ import {
   type MemberProjectStats,
   type ProjectTaskInput,
 } from "@/lib/projectstats";
+import { summarizeParticipation } from "@/lib/participate";
+import {
+  computeWorkReadiness,
+  type WorkReadiness,
+} from "@/lib/employability";
 
 export interface StudentMetrics {
   sessionsAttended: number;
@@ -464,4 +469,128 @@ export async function getMyProjectStats(
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Work readiness — the employability lens on a student's own ClassAct habits.
+// Student-facing only; a growth mirror, not a ranking (students own their data).
+// ---------------------------------------------------------------------------
+
+/** The signed-in student's work-readiness signals for a course. */
+export async function getStudentWorkReadiness(
+  courseId: string
+): Promise<WorkReadiness | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: enrollment } = await supabase
+    .from("enrollments")
+    .select("id")
+    .eq("course_id", courseId)
+    .eq("profile_id", user.id)
+    .eq("status", "active")
+    .maybeSingle();
+  if (!enrollment) return null;
+
+  const [
+    { data: sessions },
+    { data: checkins },
+    { data: verifs },
+    { data: closedRounds },
+    { data: answers },
+    { data: exerciseMemberships },
+    { data: teamRoles },
+    myProjects,
+  ] = await Promise.all([
+    supabase.from("class_sessions").select("id").eq("course_id", courseId),
+    supabase
+      .from("check_ins")
+      .select("verified, is_new_seat")
+      .eq("enrollment_id", enrollment.id),
+    supabase
+      .from("seat_verifications")
+      .select("verifier_enrollment_id, subject_enrollment_id")
+      .or(
+        `verifier_enrollment_id.eq.${enrollment.id},subject_enrollment_id.eq.${enrollment.id}`
+      ),
+    supabase
+      .from("poll_rounds")
+      .select("id, correct_indices")
+      .eq("course_id", courseId)
+      .eq("stage", "closed"),
+    supabase
+      .from("poll_answers")
+      .select("round_id, phase, choice")
+      .eq("enrollment_id", enrollment.id),
+    supabase
+      .from("exercise_group_members")
+      .select("group_id")
+      .eq("enrollment_id", enrollment.id),
+    supabase
+      .from("project_team_members")
+      .select("role")
+      .eq("enrollment_id", enrollment.id),
+    getMyProjectStats(courseId),
+  ]);
+
+  const met = new Set<string>();
+  let neighborsVerified = 0;
+  for (const v of verifs ?? []) {
+    if (v.verifier_enrollment_id === enrollment.id) neighborsVerified++;
+    met.add(
+      v.verifier_enrollment_id === enrollment.id
+        ? v.subject_enrollment_id
+        : v.verifier_enrollment_id
+    );
+  }
+  met.delete(enrollment.id);
+
+  const roundIds = new Set((closedRounds ?? []).map((r) => r.id));
+  const participation = summarizeParticipation(
+    closedRounds ?? [],
+    (answers ?? []).filter((a) => roundIds.has(a.round_id))
+  );
+
+  // Aggregate project contribution across the student's teams.
+  const projects = myProjects ?? [];
+  const withWork = projects.filter((p) => p.teamDoneMinutes > 0);
+  const avgShareOfTeam =
+    withWork.length > 0
+      ? withWork.reduce((sum, p) => sum + p.stats.shareOfTeamDone, 0) /
+        withWork.length
+      : 0;
+
+  return computeWorkReadiness({
+    sessionsHeld: (sessions ?? []).length,
+    sessionsAttended: (checkins ?? []).length,
+    verifiedAttendances: (checkins ?? []).filter((c) => c.verified).length,
+    newSeats: (checkins ?? []).filter((c) => c.is_new_seat).length,
+    peopleMet: met.size,
+    neighborsVerified,
+    exercisesJoined: (exerciseMemberships ?? []).length,
+    answered: participation.answered,
+    changedToCorrect: participation.changedToCorrect,
+    teams: projects.length,
+    contractsSigned: projects.filter((p) => p.signedContract).length,
+    leadRoles: (teamRoles ?? []).filter((r) => r.role === "lead").length,
+    doneMinutes: projects.reduce((sum, p) => sum + p.stats.doneMinutes, 0),
+    doneTasks: projects.reduce((sum, p) => sum + p.stats.doneTasks, 0),
+    biggestTaskMinutes: projects.reduce(
+      (max, p) => Math.max(max, p.stats.biggestTaskMinutes),
+      0
+    ),
+    distributedTasks: projects.reduce(
+      (sum, p) => sum + p.stats.distributedTasks,
+      0
+    ),
+    selfAssignedTasks: projects.reduce(
+      (sum, p) => sum + p.stats.selfAssignedTasks,
+      0
+    ),
+    flaggedTasks: projects.reduce((sum, p) => sum + p.stats.flaggedTasks, 0),
+    avgShareOfTeam,
+  });
 }

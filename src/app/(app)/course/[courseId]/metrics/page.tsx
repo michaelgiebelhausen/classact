@@ -17,12 +17,27 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { formatMinutes } from "@/lib/projects";
+import type { SignalLevel } from "@/lib/employability";
 import {
   getCourseMetrics,
   getCourseProjectStats,
   getMyProjectStats,
   getStudentMetrics,
+  getStudentWorkReadiness,
 } from "@/server/actions/metrics";
+
+const LEVEL_META: Record<
+  SignalLevel,
+  { label: string; badge: string }
+> = {
+  "getting-started": {
+    label: "Getting started",
+    badge: "bg-muted text-muted-foreground",
+  },
+  building: { label: "Building", badge: "bg-amber-100 text-amber-800" },
+  strong: { label: "Strong", badge: "bg-sky-100 text-sky-800" },
+  standout: { label: "Standout", badge: "bg-green-100 text-green-800" },
+};
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
@@ -216,6 +231,7 @@ export default async function MetricsPage({
   const metrics = await getStudentMetrics(courseId);
   if (!metrics) notFound();
   const myProjects = (await getMyProjectStats(courseId)) ?? [];
+  const readiness = await getStudentWorkReadiness(courseId);
   const noActivity =
     metrics.sessionsAttended === 0 && metrics.gamesPlayed === 0;
 
@@ -250,6 +266,75 @@ export default async function MetricsPage({
           />
           <Metric label="Best matching" value={metrics.bestMatching ?? "—"} />
         </div>
+      )}
+      {readiness && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Work readiness</CardTitle>
+            <CardDescription>
+              The habits employers actually screen for, read from your own
+              ClassAct activity. These are the same signals your professor can
+              see — it&apos;s your data. Use it to spot where you&apos;re strong
+              and where to push before you hit the job market.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            {readiness.hasSignal &&
+              (readiness.strengths.length > 0 ||
+                readiness.growth.length > 0) && (
+                <div className="flex flex-wrap gap-4 text-sm">
+                  {readiness.strengths.length > 0 && (
+                    <p>
+                      <span className="font-medium text-green-700">
+                        Your standout strengths:
+                      </span>{" "}
+                      {readiness.strengths.join(", ")}
+                    </p>
+                  )}
+                  {readiness.growth.length > 0 && (
+                    <p>
+                      <span className="font-medium text-amber-700">
+                        Where to grow:
+                      </span>{" "}
+                      {readiness.growth.join(", ")}
+                    </p>
+                  )}
+                </div>
+              )}
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {readiness.competencies.map((c) => (
+                <div key={c.key} className="rounded-lg border p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{c.label}</p>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${LEVEL_META[c.level].badge}`}
+                    >
+                      {LEVEL_META[c.level].label}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {c.blurb}
+                  </p>
+                  <ul className="mt-2 grid gap-1">
+                    {c.evidence.map((e, i) => (
+                      <li
+                        key={i}
+                        className="text-xs leading-snug text-muted-foreground"
+                      >
+                        • {e}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              These are honest proxies, not a grade — a nudge toward the
+              behaviours that make someone worth hiring, and eventually the
+              basis for Job Offers.
+            </p>
+          </CardContent>
+        </Card>
       )}
       {myProjects.map((p) => (
         <Card key={`${p.projectId}-team`}>
