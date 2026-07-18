@@ -41,7 +41,7 @@ const FEATURES: Feature[] = [
   {
     id: "name-games",
     eyebrow: "Names",
-    title: "Name Games",
+    title: "Networking",
     body: "Learning forty names isn't quite a pain, but it's a real challenge — for the professor and every student in the room. ClassAct makes a game of it, rewarding students for learning each other's faces and names, and helping you do the same. By week three, nobody's a stranger — and a class that knows its own names simply works better.",
     Icon: Sparkles,
     soft: "var(--gold-soft)",
@@ -52,7 +52,7 @@ const FEATURES: Feature[] = [
   {
     id: "lockdown-lectures",
     eyebrow: "Focus",
-    title: "Lockdown Lectures",
+    title: "Lockdown Laptops",
     body: "Dopamine is a formidable opponent, and enforcing a no-laptop policy is a losing battle. So instead of banning the screen, ClassAct puts something worth watching on it: your slides, synced to wherever you are, with a private space to take notes. When a student drifts off toward the cat videos, a gentle nudge brings them back to class.",
     Icon: MonitorPlay,
     soft: "var(--sky-soft)",
@@ -63,7 +63,7 @@ const FEATURES: Feature[] = [
   {
     id: "active-learning",
     eyebrow: "Discussion",
-    title: "Active Learning",
+    title: "Automated Active Learning",
     body: "Peer instruction works — when it's run well, which takes prep most weeks don't allow. ClassAct reads your slides and drafts research-backed think-pair-share questions, then runs the whole choreography for you: pose the question, poll the room, pair up students who disagree, and re-vote once they've argued it out. You get the rich discussion; ClassAct handles the logistics.",
     Icon: Vote,
     soft: "var(--sage-soft)",
@@ -74,7 +74,7 @@ const FEATURES: Feature[] = [
   {
     id: "group-projects",
     eyebrow: "Teamwork",
-    title: "Group Projects",
+    title: "Group Project Monitoring",
     body: "Upload the assignment and ClassAct breaks it into manageable tasks, then hands each student team a simple Kanban board to divide and track the work. Built-in accountability — time estimates, contribution shares, and a way to flag work that didn't really get done — keeps the load fair and heads off the group-project disputes that usually land on your desk.",
     Icon: FolderKanban,
     soft: "var(--plum-soft)",
@@ -205,7 +205,7 @@ export default function Home() {
               </span>
             </h1>
             <p className="max-w-xl text-lg text-muted-foreground">
-              ClassAct turns the classroom chores you dread — attendance,
+              ClassAct turns the classroom chores everyone dreads — attendance,
               laptops, participation, group projects — into a single process
               that leaves students more connected, more engaged, and more
               employable.
