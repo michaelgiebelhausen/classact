@@ -2,9 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { neighborCoords } from "@/lib/seatlabels";
 import type { ActionResult } from "@/server/actions/auth";
-import type { SeatRelation } from "@/types/db";
+import type { SeatNeighbors, SeatRelation } from "@/types/db";
 
 /** Today's date in the server's local calendar, YYYY-MM-DD. */
 function todayDate(): string {
@@ -205,9 +204,11 @@ export async function verifyNeighbor(
   if (!me) return { ok: false, error: "You're not in this course." };
 
   // Both parties must be checked in; subject must occupy an adjacent seat.
+  // Adjacency comes from the seat's persisted neighbor links, so this works
+  // for any room shape — grids, curved auditorium rows, seminar tables.
   const { data: checkins } = await supabase
     .from("check_ins")
-    .select("enrollment_id, seat_id, seats(row_index, col_index)")
+    .select("enrollment_id, seat_id, seats(label, neighbors)")
     .eq("session_id", sessionId)
     .in("enrollment_id", [me.id, subjectEnrollmentId]);
 
@@ -218,16 +219,13 @@ export async function verifyNeighbor(
   if (!mine) return { ok: false, error: "Check in before confirming neighbors." };
   if (!theirs) return { ok: false, error: "They haven't checked in yet." };
 
-  const mySeat = mine.seats as unknown as { row_index: number; col_index: number };
-  const theirSeat = theirs.seats as unknown as {
-    row_index: number;
-    col_index: number;
+  const mySeat = mine.seats as unknown as {
+    label: string;
+    neighbors: SeatNeighbors;
   };
-  const expected = neighborCoords(mySeat.row_index, mySeat.col_index)[relation];
-  if (
-    expected.row !== theirSeat.row_index ||
-    expected.col !== theirSeat.col_index
-  ) {
+  const theirSeat = theirs.seats as unknown as { label: string };
+  const expected = (mySeat.neighbors ?? {})[relation];
+  if (!expected || expected !== theirSeat.label) {
     return { ok: false, error: "That person isn't in that seat." };
   }
 

@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
+import type { RoomLayout } from "@/lib/roomlayout";
+import type { RoomLocation } from "@/server/actions/rooms";
 
 export default async function CourseSetupPage({
   params,
@@ -16,17 +18,17 @@ export default async function CourseSetupPage({
   const supabase = await createClient();
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, join_code, icebreaker_fields, professor_id")
+    .select("id, name, join_code, icebreaker_fields, professor_id, room_id")
     .eq("id", courseId)
     .single();
 
   if (!course) notFound();
   if (course.professor_id !== profile.id) redirect(`/course/${courseId}`);
 
-  const [{ data: seats }, { data: enrollments }] = await Promise.all([
+  const [{ count: seatCount }, { data: enrollments }] = await Promise.all([
     supabase
       .from("seats")
-      .select("row_index, col_index")
+      .select("id", { count: "exact", head: true })
       .eq("course_id", courseId),
     supabase
       .from("enrollments")
@@ -35,13 +37,60 @@ export default async function CourseSetupPage({
       .order("roster_name"),
   ]);
 
-  const seatDims =
-    seats && seats.length > 0
-      ? {
-          rows: Math.max(...seats.map((s) => s.row_index)) + 1,
-          cols: Math.max(...seats.map((s) => s.col_index)) + 1,
-        }
-      : null;
+  // The course's room (layout + campus location) for re-editing.
+  let initialLayout: RoomLayout | null = null;
+  let initialLocation: RoomLocation | null = null;
+  if (course.room_id) {
+    const { data: room } = await supabase
+      .from("rooms")
+      .select("layout, room_number, buildings(name, universities(name))")
+      .eq("id", course.room_id)
+      .maybeSingle();
+    if (room) {
+      initialLayout = room.layout as unknown as RoomLayout;
+      const building = room.buildings as unknown as {
+        name: string;
+        universities: { name: string };
+      } | null;
+      if (building && room.room_number) {
+        initialLocation = {
+          universityName: building.universities.name,
+          buildingName: building.name,
+          roomNumber: room.room_number,
+        };
+      }
+    }
+  }
+
+  // University suggestion: saved affiliation first, then email domain match.
+  let universitySuggestion = "";
+  const { data: fullProfile } = await supabase
+    .from("profiles")
+    .select("university_id")
+    .eq("id", profile.id)
+    .single();
+  if (fullProfile?.university_id) {
+    const { data: uni } = await supabase
+      .from("universities")
+      .select("name")
+      .eq("id", fullProfile.university_id)
+      .maybeSingle();
+    universitySuggestion = uni?.name ?? "";
+  }
+  if (!universitySuggestion) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const domain = user?.email?.split("@")[1]?.toLowerCase();
+    if (domain) {
+      const { data: uni } = await supabase
+        .from("universities")
+        .select("name")
+        .eq("domain", domain)
+        .maybeSingle();
+      universitySuggestion = uni?.name ?? "";
+    }
+  }
 
   return (
     <div className="grid gap-6">
@@ -58,7 +107,12 @@ export default async function CourseSetupPage({
           join_code: course.join_code,
           icebreaker_fields: (course.icebreaker_fields as string[]) ?? [],
         }}
-        seatDims={seatDims}
+        roomSetup={{
+          hasExistingRoom: (seatCount ?? 0) > 0,
+          initialLayout,
+          initialLocation,
+          universitySuggestion,
+        }}
         enrollments={enrollments ?? []}
         siteUrl={env.siteUrl}
       />

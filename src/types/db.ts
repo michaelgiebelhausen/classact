@@ -22,12 +22,15 @@ export type TeamTaskSource = "ai" | "professor" | "team"
 export type TeamTaskStatus = "unassigned" | "assigned" | "done"
 export type TeamRole = "lead" | "member"
 
+export type RoomSource = "professor" | "ai_import" | "seed"
+
 export type ProfileRow = {
   id: string
   role: Role
   full_name: string | null
   name_phonetic: string | null
   onboarding_complete: boolean
+  university_id: string | null
   created_at: string
 }
 
@@ -38,15 +41,53 @@ export type CourseRow = {
   term: string | null
   join_code: string
   icebreaker_fields: string[]
+  room_id: string | null
   created_at: string
 }
+
+/** Neighbor seat labels by relation — persisted, layout-agnostic adjacency. */
+export type SeatNeighbors = Partial<Record<SeatRelation, string>>
 
 export type SeatRow = {
   id: string
   course_id: string
   label: string
-  row_index: number
-  col_index: number
+  row_index: number | null
+  col_index: number | null
+  x: number | null
+  y: number | null
+  section: string
+  table_id: string | null
+  neighbors: SeatNeighbors
+}
+
+export type UniversityRow = {
+  id: string
+  name: string
+  domain: string | null
+  created_at: string
+}
+
+export type BuildingRow = {
+  id: string
+  university_id: string
+  name: string
+  created_at: string
+}
+
+export type RoomRow = {
+  id: string
+  building_id: string | null
+  room_number: string | null
+  layout: unknown
+  layout_version: number
+  capacity: number
+  layout_type: string
+  source: RoomSource
+  verified: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type EnrollmentRow = {
@@ -332,6 +373,9 @@ export type Database = {
       profiles: TableShape<ProfileRow>
       courses: TableShape<CourseRow>
       seats: TableShape<SeatRow>
+      universities: TableShape<UniversityRow>
+      buildings: TableShape<BuildingRow>
+      rooms: TableShape<RoomRow>
       enrollments: TableShape<EnrollmentRow>
       profile_photos: TableShape<ProfilePhotoRow>
       student_answers: TableShape<StudentAnswerRow>

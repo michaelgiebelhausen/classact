@@ -13,7 +13,8 @@ import {
 const NO_HISTORY = new Set<string>();
 
 function seatAt(row: number, col: number) {
-  return { row, col };
+  // Seat-unit geometry: columns are 1 apart, rows 1.25 apart (ROW_GAP).
+  return { x: col, y: row * 1.25 };
 }
 
 describe("assignGroups", () => {

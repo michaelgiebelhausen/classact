@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -23,19 +23,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { generateSeatMap } from "@/server/actions/seatmap";
 import { updateIcebreakerFields } from "@/server/actions/courses";
 import { syncCanvasRoster } from "@/server/actions/canvas";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
-import { buildSeatGrid } from "@/lib/seatlabels";
+import { RoomDesigner } from "@/components/features/setup/RoomDesigner";
+import type { RoomLayout } from "@/lib/roomlayout";
+import type { RoomLocation } from "@/server/actions/rooms";
 
 interface EnrollmentItem {
   id: string;
@@ -51,22 +44,33 @@ interface Props {
     join_code: string;
     icebreaker_fields: string[];
   };
-  seatDims: { rows: number; cols: number } | null;
+  roomSetup: {
+    hasExistingRoom: boolean;
+    initialLayout: RoomLayout | null;
+    initialLocation: RoomLocation | null;
+    universitySuggestion: string;
+  };
   enrollments: EnrollmentItem[];
   siteUrl: string;
 }
 
-export function CourseSetupTabs({ course, seatDims, enrollments, siteUrl }: Props) {
+export function CourseSetupTabs({ course, roomSetup, enrollments, siteUrl }: Props) {
   return (
     <Tabs defaultValue="seatmap" className="w-full">
       <TabsList>
-        <TabsTrigger value="seatmap">Seat map</TabsTrigger>
+        <TabsTrigger value="seatmap">Room</TabsTrigger>
         <TabsTrigger value="roster">Roster</TabsTrigger>
         <TabsTrigger value="icebreakers">Icebreakers</TabsTrigger>
         <TabsTrigger value="invite">Invite</TabsTrigger>
       </TabsList>
       <TabsContent value="seatmap">
-        <SeatMapTab courseId={course.id} seatDims={seatDims} />
+        <RoomDesigner
+          courseId={course.id}
+          hasExistingRoom={roomSetup.hasExistingRoom}
+          initialLayout={roomSetup.initialLayout}
+          initialLocation={roomSetup.initialLocation}
+          universitySuggestion={roomSetup.universitySuggestion}
+        />
       </TabsContent>
       <TabsContent value="roster">
         <RosterTab courseId={course.id} initial={enrollments} />
@@ -78,128 +82,6 @@ export function CourseSetupTabs({ course, seatDims, enrollments, siteUrl }: Prop
         <InviteTab course={course} enrollments={enrollments} siteUrl={siteUrl} />
       </TabsContent>
     </Tabs>
-  );
-}
-
-/* ---------------- Seat map (TASK-020) ---------------- */
-
-function SeatMapTab({
-  courseId,
-  seatDims,
-}: {
-  courseId: string;
-  seatDims: { rows: number; cols: number } | null;
-}) {
-  const router = useRouter();
-  const [rows, setRows] = useState(seatDims?.rows ?? 6);
-  const [cols, setCols] = useState(seatDims?.cols ?? 8);
-  const [saving, setSaving] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-
-  const preview = useMemo(() => {
-    try {
-      return buildSeatGrid(rows, cols);
-    } catch {
-      return [];
-    }
-  }, [rows, cols]);
-
-  async function save(force = false) {
-    setSaving(true);
-    const result = await generateSeatMap(courseId, { rows, cols }, force);
-    setSaving(false);
-    if (result.ok) {
-      toast.success(`Room saved — ${result.data?.seatCount} seats.`);
-      setConfirmOpen(false);
-      router.refresh();
-    } else if (result.error.includes("Confirm to continue")) {
-      setConfirmOpen(true);
-    } else {
-      toast.error(result.error);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Your room</CardTitle>
-        <CardDescription>
-          Rows count from the front of the room. Row A, seat 1 is front-left.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="rows">Rows</Label>
-            <Input
-              id="rows"
-              type="number"
-              min={1}
-              max={40}
-              value={rows}
-              onChange={(e) => setRows(Number(e.target.value))}
-              className="w-24"
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="cols">Seats per row</Label>
-            <Input
-              id="cols"
-              type="number"
-              min={1}
-              max={40}
-              value={cols}
-              onChange={(e) => setCols(Number(e.target.value))}
-              className="w-24"
-            />
-          </div>
-          <Button onClick={() => save(false)} disabled={saving || preview.length === 0}>
-            {saving ? "Saving…" : seatDims ? "Rebuild room" : "Save room"}
-          </Button>
-        </div>
-
-        {preview.length > 0 && (
-          <div className="overflow-x-auto">
-            <p className="mb-2 text-center text-xs uppercase tracking-wide text-muted-foreground">
-              Front of room
-            </p>
-            <div
-              className="grid w-max gap-1"
-              style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-            >
-              {preview.map((s) => (
-                <div
-                  key={s.label}
-                  className="flex h-8 w-10 items-center justify-center rounded border bg-muted text-[10px] text-muted-foreground"
-                >
-                  {s.label}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </CardContent>
-
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Rebuild the room?</DialogTitle>
-            <DialogDescription>
-              This room already has recorded check-ins. Rebuilding the map
-              erases them. This can&apos;t be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
-              Keep the current room
-            </Button>
-            <Button variant="destructive" onClick={() => save(true)} disabled={saving}>
-              Rebuild and erase check-ins
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </Card>
   );
 }
 

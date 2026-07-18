@@ -16,15 +16,18 @@ import {
 } from "@/components/ui/card";
 import { checkIn, verifyNeighbor } from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
-import { neighborCoords } from "@/lib/seatlabels";
-import type { SeatRelation } from "@/types/db";
+import { RoomMap } from "@/components/features/rooms/RoomMap";
+import type { SeatNeighbors, SeatRelation } from "@/types/db";
 import Link from "next/link";
 
 export interface SeatInfo {
   id: string;
   label: string;
-  row: number;
-  col: number;
+  x: number;
+  y: number;
+  section: string;
+  tableId: string | null;
+  neighbors: SeatNeighbors;
 }
 
 export interface OccupantInfo {
@@ -81,17 +84,9 @@ export function CheckInLive({
   const [live, setLive] = useState(true);
   const unknownEnrollment = useRef(false);
 
-  const rows = useMemo(
-    () => (seats.length > 0 ? Math.max(...seats.map((s) => s.row)) + 1 : 0),
-    [seats]
-  );
-  const cols = useMemo(
-    () => (seats.length > 0 ? Math.max(...seats.map((s) => s.col)) + 1 : 0),
-    [seats]
-  );
-  const seatByCoord = useMemo(() => {
+  const seatByLabel = useMemo(() => {
     const m = new Map<string, SeatInfo>();
-    for (const s of seats) m.set(`${s.row}:${s.col}`, s);
+    for (const s of seats) m.set(s.label, s);
     return m;
   }, [seats]);
 
@@ -169,7 +164,7 @@ export function CheckInLive({
     };
   }, [sessionId, applyChange, directory, router]);
 
-  async function handleSeatTap(seat: SeatInfo) {
+  async function handleSeatTap(seat: { id: string; label: string }) {
     if (!sessionId || !myEnrollmentId || myCheckIn || pendingSeat) return;
     if (occupants.has(seat.id)) return;
 
@@ -243,10 +238,9 @@ export function CheckInLive({
     entry: DirectoryEntry | undefined;
   }[] = [];
   if (mySeat) {
-    const coords = neighborCoords(mySeat.row, mySeat.col);
-    (Object.keys(coords) as SeatRelation[]).forEach((relation) => {
-      const c = coords[relation];
-      const seat = seatByCoord.get(`${c.row}:${c.col}`);
+    (["front", "back", "left", "right"] as SeatRelation[]).forEach((relation) => {
+      const neighborLabel = mySeat.neighbors?.[relation];
+      const seat = neighborLabel ? seatByLabel.get(neighborLabel) : undefined;
       if (!seat) return;
       const occupant = occupants.get(seat.id);
       if (!occupant || occupant.enrollmentId === myEnrollmentId) return;
@@ -282,66 +276,39 @@ export function CheckInLive({
       </div>
 
       <div className="overflow-x-auto rounded-lg border p-4">
-        <p className="mb-3 text-center text-xs uppercase tracking-wide text-muted-foreground">
-          Front of room
-        </p>
-        <div
-          role="grid"
-          aria-label="Classroom seat map"
-          className="mx-auto grid w-max gap-1.5"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-        >
-          {Array.from({ length: rows * cols }, (_, i) => {
-            const row = Math.floor(i / cols);
-            const col = i % cols;
-            const seat = seatByCoord.get(`${row}:${col}`);
-            if (!seat) return <div key={i} className="h-11 w-11" />;
+        <RoomMap
+          seats={seats}
+          onSeatTap={handleSeatTap}
+          stateFor={(seat) => {
             const occupant = occupants.get(seat.id);
             const isMine = occupant?.enrollmentId === myEnrollmentId;
             const entry = occupant ? directory[occupant.enrollmentId] : undefined;
-            const stateLabel = occupant
-              ? isMine
-                ? "yours"
-                : `taken by ${entry?.name ?? "a classmate"}`
-              : "empty";
-            return (
-              <button
-                key={seat.id}
-                type="button"
-                role="gridcell"
-                aria-label={`Seat ${seat.label}, ${stateLabel}`}
-                disabled={Boolean(occupant) || Boolean(myCheckIn) || pendingSeat !== null}
-                onClick={() => handleSeatTap(seat)}
-                className={[
-                  "flex h-11 w-11 items-center justify-center rounded-md border text-[10px] font-medium transition-colors",
-                  "focus-visible:ring-3 focus-visible:ring-ring/50 outline-none",
-                  isMine
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : occupant
-                      ? occupant.verified
-                        ? "border-transparent bg-muted-foreground/30"
-                        : "border-transparent bg-muted-foreground/15"
-                      : myCheckIn
-                        ? "bg-background text-muted-foreground/50"
-                        : "bg-background hover:border-primary hover:text-primary",
-                  pendingSeat === seat.id ? "animate-pulse" : "",
-                ].join(" ")}
-              >
-                {occupant && entry ? (
-                  <Avatar className="h-8 w-8">
-                    {entry.photoUrl && (
-                      <AvatarImage src={entry.photoUrl} alt={entry.name} />
-                    )}
-                    <AvatarFallback className="text-[9px]">
-                      {initials(entry.name)}
-                    </AvatarFallback>
-                  </Avatar>
-                ) : (
-                  seat.label
-                )}
-              </button>
-            );
-          })}
+            return {
+              kind: isMine
+                ? "mine"
+                : occupant
+                  ? occupant.verified
+                    ? "verified"
+                    : "taken"
+                  : "empty",
+              name: entry?.name ?? (occupant ? "A classmate" : null),
+              photoUrl: entry?.photoUrl ?? null,
+              pending: pendingSeat === seat.id,
+              tappable:
+                !occupant && !myCheckIn && pendingSeat === null && Boolean(myEnrollmentId),
+            };
+          }}
+        />
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-3 rounded-sm border bg-card" /> Open
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-3 rounded-sm bg-muted-foreground/20" /> Taken
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-3 rounded-sm bg-primary" /> You
+          </span>
         </div>
       </div>
 

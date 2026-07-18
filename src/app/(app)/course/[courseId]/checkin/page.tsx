@@ -42,16 +42,20 @@ export default async function CheckInPage({
     .maybeSingle();
   const sessionId = session?.id ?? null;
 
-  // Seats.
+  // Seats with geometry. Pre-migration rows without x/y fall back to their
+  // grid coords so the map never comes up blank.
   const { data: seatRows } = await supabase
     .from("seats")
-    .select("id, label, row_index, col_index")
+    .select("id, label, row_index, col_index, x, y, section, table_id, neighbors")
     .eq("course_id", courseId);
   const seats: SeatInfo[] = (seatRows ?? []).map((s) => ({
     id: s.id,
     label: s.label,
-    row: s.row_index,
-    col: s.col_index,
+    x: s.x ?? s.col_index ?? 0,
+    y: s.y ?? (s.row_index ?? 0) * 1.25,
+    section: s.section ?? "main",
+    tableId: s.table_id ?? null,
+    neighbors: s.neighbors ?? {},
   }));
 
   // Occupants + my enrollment + my score + who I've verified today.

@@ -527,21 +527,26 @@ export async function setPollStage(
         .order("opened_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      const seatByEnrollment = new Map<string, { row: number; col: number }>();
+      const seatByEnrollment = new Map<
+        string,
+        { x: number; y: number; tableId: string | null }
+      >();
       if (session) {
         const { data: checkIns } = await supabase
           .from("check_ins")
-          .select("enrollment_id, seats(row_index, col_index)")
+          .select("enrollment_id, seats(x, y, table_id)")
           .eq("session_id", session.id);
         for (const c of checkIns ?? []) {
           const seat = c.seats as unknown as {
-            row_index: number;
-            col_index: number;
+            x: number | null;
+            y: number | null;
+            table_id: string | null;
           } | null;
-          if (seat) {
+          if (seat && seat.x !== null && seat.y !== null) {
             seatByEnrollment.set(c.enrollment_id, {
-              row: seat.row_index,
-              col: seat.col_index,
+              x: seat.x,
+              y: seat.y,
+              tableId: seat.table_id,
             });
           }
         }

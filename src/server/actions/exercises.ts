@@ -78,16 +78,20 @@ export async function startExercise(input: {
 
   const { data: checkIns } = await supabase
     .from("check_ins")
-    .select("enrollment_id, seats(row_index, col_index)")
+    .select("enrollment_id, seats(x, y, table_id)")
     .eq("session_id", session.id);
   const participants: GroupingParticipant[] = (checkIns ?? []).map((c) => {
     const seat = c.seats as unknown as {
-      row_index: number;
-      col_index: number;
+      x: number | null;
+      y: number | null;
+      table_id: string | null;
     } | null;
     return {
       enrollmentId: c.enrollment_id,
-      seat: seat ? { row: seat.row_index, col: seat.col_index } : undefined,
+      seat:
+        seat && seat.x !== null && seat.y !== null
+          ? { x: seat.x, y: seat.y, tableId: seat.table_id }
+          : undefined,
     };
   });
   if (participants.length < 2) {

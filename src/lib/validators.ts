@@ -28,11 +28,6 @@ export const createCourseSchema = z.object({
   term: z.string().trim().max(40).optional().or(z.literal("")),
 });
 
-export const seatGridSchema = z.object({
-  rows: z.coerce.number().int().min(1).max(40),
-  cols: z.coerce.number().int().min(1).max(40),
-});
-
 export const icebreakerFieldsSchema = z.array(z.string().min(1)).max(12);
 
 export const rosterRowSchema = z.object({

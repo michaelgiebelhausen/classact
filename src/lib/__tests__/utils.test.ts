@@ -5,7 +5,7 @@ import {
   isValidJoinCodeFormat,
   normalizeJoinCode,
 } from "@/lib/joincode";
-import { buildSeatGrid, neighborCoords, rowLetter } from "@/lib/seatlabels";
+import { rowLetter } from "@/lib/seatlabels";
 
 describe("cn", () => {
   it("merges tailwind classes", () => {
@@ -31,33 +31,11 @@ describe("joincode", () => {
   });
 });
 
-describe("seat grid", () => {
-  it("produces rows*cols uniquely labeled seats", () => {
-    const seats = buildSeatGrid(5, 8);
-    expect(seats).toHaveLength(40);
-    expect(new Set(seats.map((s) => s.label)).size).toBe(40);
-    expect(seats[0]).toEqual({ label: "A1", row: 0, col: 0 });
-    expect(seats.at(-1)).toEqual({ label: "E8", row: 4, col: 7 });
-  });
-
+describe("row letters", () => {
+  // Grid building and adjacency moved to lib/roomlayout (see roomlayout.test.ts).
   it("extends row letters past Z", () => {
     expect(rowLetter(0)).toBe("A");
     expect(rowLetter(25)).toBe("Z");
     expect(rowLetter(26)).toBe("AA");
-  });
-
-  it("rejects invalid dimensions", () => {
-    expect(() => buildSeatGrid(0, 5)).toThrow();
-    expect(() => buildSeatGrid(41, 5)).toThrow();
-    expect(() => buildSeatGrid(2.5, 5)).toThrow();
-  });
-
-  it("computes the four neighbor coordinates", () => {
-    expect(neighborCoords(2, 3)).toEqual({
-      front: { row: 1, col: 3 },
-      back: { row: 3, col: 3 },
-      left: { row: 2, col: 2 },
-      right: { row: 2, col: 4 },
-    });
   });
 });

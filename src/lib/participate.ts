@@ -7,12 +7,22 @@ import type { PollPhase, PollResults } from "@/types/db";
  * on the first vote, peaking near 50%).
  */
 
+/**
+ * Seat geometry from today's check-in: position in seat units (adjacent
+ * seats ≈ 1 apart) plus table membership for pod/seminar rooms.
+ */
+export interface SeatPosition {
+  x: number;
+  y: number;
+  tableId?: string | null;
+}
+
 export interface PairingParticipant {
   enrollmentId: string;
   /** Think-phase answer (option index). */
   choice: number;
   /** Seat position from today's check-in, when the student has one. */
-  seat?: { row: number; col: number };
+  seat?: SeatPosition;
 }
 
 /** Canonical key for "these two have discussed before" history. */
@@ -21,12 +31,14 @@ export function pairKey(a: string, b: string): string {
 }
 
 function proximityScore(
-  a: { seat?: { row: number; col: number } },
-  b: { seat?: { row: number; col: number } }
+  a: { seat?: SeatPosition },
+  b: { seat?: SeatPosition }
 ): number {
   if (!a.seat || !b.seat) return 0;
-  const distance =
-    Math.abs(a.seat.row - b.seat.row) + Math.abs(a.seat.col - b.seat.col);
+  // Sharing a table is the strongest "you're sitting together" signal —
+  // stronger than raw distance, which can be shorter across a walkway.
+  if (a.seat.tableId && a.seat.tableId === b.seat.tableId) return 60;
+  const distance = Math.hypot(a.seat.x - b.seat.x, a.seat.y - b.seat.y);
   // Adjacent seats score highest; beyond ~4 seats apart proximity is moot.
   return Math.max(0, 60 - 20 * (distance - 1));
 }
@@ -119,7 +131,7 @@ export function assignPairs(
 export interface GroupingParticipant {
   enrollmentId: string;
   /** Seat position from today's check-in, when the student has one. */
-  seat?: { row: number; col: number };
+  seat?: SeatPosition;
 }
 
 /** Deterministic order: seated students first (reading order), then seatless. */
@@ -129,8 +141,8 @@ function groupingOrder(
 ): number {
   if (a.seat && b.seat) {
     return (
-      a.seat.row - b.seat.row ||
-      a.seat.col - b.seat.col ||
+      a.seat.y - b.seat.y ||
+      a.seat.x - b.seat.x ||
       a.enrollmentId.localeCompare(b.enrollmentId)
     );
   }
