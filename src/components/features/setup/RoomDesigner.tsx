@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ import {
 } from "@/lib/roomlayout";
 import {
   adoptRoom,
+  draftRoomFromPhoto,
   saveRoomLayout,
   searchRooms,
   type RoomLocation,
@@ -130,6 +131,10 @@ export function RoomDesigner({
   );
   const [editSeats, setEditSeats] = useState(false);
   const [saving, setSaving] = useState(false);
+  const photoRef = useRef<HTMLInputElement>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [aiDrafted, setAiDrafted] = useState(false);
+  const [aiNotes, setAiNotes] = useState("");
   const [confirm, setConfirm] = useState<
     null | { kind: "save" } | { kind: "adopt"; roomId: string }
   >(null);
@@ -165,7 +170,42 @@ export function RoomDesigner({
     setSelectedHit(null);
     setRemovedSeats(new Set());
     setEditSeats(false);
+    setAiDrafted(false);
+    setAiNotes("");
     setParams(defaultParams(type));
+  }
+
+  async function handlePhoto(file: File) {
+    if (file.size > 6 * 1024 * 1024) {
+      toast.error("That image is too large — keep it under ~6 MB.");
+      return;
+    }
+    setDrafting(true);
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    }).catch(() => "");
+    const base64 = dataUrl.split(",")[1] ?? "";
+    if (!base64) {
+      setDrafting(false);
+      toast.error("Couldn't read that image — try another file.");
+      return;
+    }
+    const result = await draftRoomFromPhoto(courseId, base64, file.type);
+    setDrafting(false);
+    if (result.ok && result.data) {
+      setSelectedHit(null);
+      setRemovedSeats(new Set());
+      setEditSeats(false);
+      setParams(result.data.params);
+      setAiDrafted(true);
+      setAiNotes(result.data.notes);
+      toast.success("Draft ready — check it against your room, tweak, then save.");
+    } else {
+      toast.error(result.ok ? "Drafting failed." : result.error);
+    }
   }
 
   async function runSearch() {
@@ -197,7 +237,7 @@ export function RoomDesigner({
       universityName.trim() && buildingName.trim() && roomNumber.trim()
         ? { universityName, buildingName, roomNumber }
         : null;
-    const result = await saveRoomLayout(courseId, layout, location, force);
+    const result = await saveRoomLayout(courseId, layout, location, force, aiDrafted);
     setSaving(false);
     if (result.ok) {
       toast.success(
@@ -334,6 +374,36 @@ export function RoomDesigner({
         <CardContent className="grid gap-5">
           {!selectedHit && (
             <>
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed p-3">
+                <input
+                  ref={photoRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handlePhoto(f);
+                    e.target.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => photoRef.current?.click()}
+                  disabled={drafting}
+                >
+                  {drafting ? "Reading your room…" : "Upload a photo of your room"}
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  AI drafts the layout — you review and tweak before saving.
+                </span>
+              </div>
+              {aiDrafted && aiNotes && (
+                <div className="rounded-lg border bg-muted/40 p-3 text-sm">
+                  <span className="font-medium">AI draft notes:</span> {aiNotes}
+                </div>
+              )}
+
               <div className="grid gap-2 sm:grid-cols-5">
                 {PRESETS.map((preset) => (
                   <button

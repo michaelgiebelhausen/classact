@@ -1,8 +1,9 @@
 # Room Setup v2 — Plan
 
-**Status:** Phases 1–3 built (geometry, presets/designer, room database) —
-migration `0011_rooms.sql` pending in Supabase. Phase 4 (AI photo import) and
-Phase 5 (moderation/dedup) not started. Visual test bench at `/dev/roommap`.
+**Status:** Phases 1–4 built (geometry, presets/designer, room database, AI
+photo import via OpenRouter → preset knobs) — migration `0011_rooms.sql`
+pending in Supabase. Phase 5 (moderation/dedup) not started. Visual test
+bench at `/dev/roommap`.
 **Date:** 2026-07-18
 
 ## Why

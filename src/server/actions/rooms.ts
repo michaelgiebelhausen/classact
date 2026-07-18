@@ -7,6 +7,7 @@ import {
   validateLayout,
   type RoomLayout,
 } from "@/lib/roomlayout";
+import { draftRoomFromImage, type RoomDraft } from "@/server/roomvision";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -193,7 +194,8 @@ export async function saveRoomLayout(
   courseId: string,
   layout: RoomLayout,
   location: RoomLocation | null,
-  force = false
+  force = false,
+  aiDrafted = false
 ): Promise<ActionResult<{ seatCount: number; hadCheckIns: boolean }>> {
   const invalid = validateLayout(layout);
   if (invalid) return { ok: false, error: invalid };
@@ -239,6 +241,7 @@ export async function saveRoomLayout(
     layout: layout as unknown as Record<string, unknown>,
     capacity,
     layout_type: layout.type,
+    source: aiDrafted ? ("ai_import" as const) : ("professor" as const),
     updated_at: new Date().toISOString(),
   };
 
@@ -368,4 +371,38 @@ export async function searchRooms(input: {
     if (hits.length >= 8) break;
   }
   return { ok: true, data: hits };
+}
+
+/** ~6 MB of image, after base64's 4/3 overhead. */
+const MAX_IMAGE_BASE64_CHARS = 8_000_000;
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
+
+/**
+ * AI draft: photo of the classroom in, designer preset knobs out. The
+ * draft is only a starting point — it opens in the designer for the
+ * professor to review and tweak; nothing is saved here.
+ */
+export async function draftRoomFromPhoto(
+  courseId: string,
+  imageBase64: string,
+  mimeType: string
+): Promise<ActionResult<RoomDraft>> {
+  const { error: authError, user } = await requireProfessorCourse(courseId);
+  if (authError || !user) return { ok: false, error: authError ?? "Sign in first." };
+
+  if (!ALLOWED_IMAGE_TYPES.has(mimeType)) {
+    return { ok: false, error: "Upload a photo (JPEG, PNG, WebP, or GIF)." };
+  }
+  if (!imageBase64 || imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
+    return { ok: false, error: "That image is too large — keep it under ~6 MB." };
+  }
+
+  const result = await draftRoomFromImage({ imageBase64, mimeType });
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, data: result.draft };
 }
