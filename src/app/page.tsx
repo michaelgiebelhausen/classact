@@ -7,6 +7,7 @@ import {
   FolderKanban,
   ImageIcon,
   MonitorPlay,
+  Scale,
   Sparkles,
   Vote,
   type LucideIcon,
@@ -83,6 +84,17 @@ const FEATURES: Feature[] = [
       "The team task board: Unassigned → a column per student → Done, each card showing a time estimate, with one card flagged.",
   },
   {
+    id: "tasty-grading",
+    eyebrow: "AI/Peer/Instructor Grading",
+    title: "Tasty Grading",
+    body: "Grading a stack of forty papers is the loneliest, slowest work in teaching — and students learn almost nothing from the letter that comes back. ClassAct turns grading into a class-wide exercise in taste: students define the standard for the assignment themselves, hold their own work to it, and learn to recognize excellence by judging real work side by side. AI drafts the rankings; your students and you refine them. You stay the judge — the click that publishes every grade is yours — but the reading-every-paper-twice part is over. And the work that reads like it came from a vending machine? The whole room can tell.",
+    Icon: Scale,
+    soft: "var(--flame-soft)",
+    solid: "var(--flame)",
+    image:
+      "The professor's grading histogram — stacked student avatars in columns with draggable A/B/C grade markers beneath, and two anonymous PDFs side by side mid-comparison.",
+  },
+  {
     id: "participation-stats",
     eyebrow: "Feedback",
     title: "Participation Statistics",
@@ -116,6 +128,10 @@ const DUAL_BENEFIT: { pain: string; payoff: string }[] = [
   {
     pain: "Refereeing group projects",
     payoff: "Teams share the load fairly and build skills",
+  },
+  {
+    pain: "Grading a mountain of submissions",
+    payoff: "Students learn what excellent work looks like — and hold themselves to it",
   },
   {
     pain: "Guessing at participation grades",
