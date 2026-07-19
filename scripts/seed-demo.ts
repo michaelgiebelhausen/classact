@@ -65,7 +65,8 @@ async function main() {
     onboarding_complete: true,
   });
 
-  // 2. Course.
+  // 2. Course — with a MWF schedule so auto-open sessions work (0012).
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const { data: course, error: courseErr } = await admin
     .from("courses")
     .insert({
@@ -74,6 +75,11 @@ async function main() {
       term: "Fall 2026",
       join_code: `DEM-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
       icebreaker_fields: ["two_truths_and_a_lie", "first_job", "fun_fact"],
+      meeting_days: [1, 3, 5],
+      meeting_start: "09:30",
+      meeting_end: "10:20",
+      timezone,
+      auto_open: true,
     })
     .select("id, join_code")
     .single();
@@ -82,15 +88,30 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. 5x8 room.
+  // 3. 5x8 room with full seat geometry + neighbor links (rooms v2 / 0011).
+  // Mirrors lib/roomlayout gridLayout(): x = col, y = row * 1.25, grid
+  // adjacency as persisted neighbor labels.
+  const ROWS = 5;
+  const COLS = 8;
+  const label = (r: number, c: number) => `${rowLetter(r)}${c + 1}`;
   const seats = [];
-  for (let r = 0; r < 5; r++) {
-    for (let c = 0; c < 8; c++) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const neighbors: Record<string, string> = {};
+      if (c > 0) neighbors.left = label(r, c - 1);
+      if (c < COLS - 1) neighbors.right = label(r, c + 1);
+      if (r > 0) neighbors.front = label(r - 1, c);
+      if (r < ROWS - 1) neighbors.back = label(r + 1, c);
       seats.push({
         course_id: course.id,
-        label: `${rowLetter(r)}${c + 1}`,
+        label: label(r, c),
         row_index: r,
         col_index: c,
+        x: c,
+        y: r * 1.25,
+        section: "main",
+        table_id: null,
+        neighbors,
       });
     }
   }
@@ -115,7 +136,8 @@ async function main() {
   console.log(`  Course id:  ${course.id}`);
   console.log(`  Join code:  ${course.join_code}`);
   console.log(`  Professor:  ${professorEmail} (sign in via magic link)`);
-  console.log(`  Roster:     30 synthetic students, 40-seat room, session open`);
+  console.log(`  Roster:     30 synthetic students, 40-seat room (full geometry), session open`);
+  console.log(`  Schedule:   MWF 9:30-10:20 ${timezone}, auto-open on`);
 }
 
 main();
