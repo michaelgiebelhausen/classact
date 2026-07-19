@@ -48,7 +48,130 @@ export type CourseRow = {
   meeting_end: string | null
   timezone: string | null
   auto_open: boolean
+  /** Course-level Tasty Grading defaults (cut points, weights, windows). */
+  grading_defaults: Record<string, unknown>
   created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Tasty Grading (docs/tasty-grading-plan.md)
+// ---------------------------------------------------------------------------
+
+export type AssignmentState =
+  | "open"
+  | "analyzing"
+  | "peer_review"
+  | "finalizing"
+  | "published"
+export type PairType = "exceptional" | "self" | "refine" | "professor"
+export type ThemeProvenance = "professor" | "class" | "both"
+
+/** One criterion in a taste file: a named standard in the student's words. */
+export type TasteCriterion = { name: string; standard: string }
+
+export type AssignmentRow = {
+  id: string
+  course_id: string
+  title: string
+  storage_path: string | null
+  deadline: string
+  peer_close_at: string
+  settings: Record<string, unknown>
+  state: AssignmentState
+  analysis: Record<string, unknown>
+  published_at: string | null
+  created_at: string
+}
+
+export type TasteFileRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  /** Null = the professor's optional benchmark taste file. */
+  enrollment_id: string | null
+  criteria: TasteCriterion[]
+  bar_statement: string
+  is_default_untouched: boolean
+  first_edit_at: string | null
+  last_edit_at: string | null
+  created_at: string
+}
+
+export type SubmissionRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  enrollment_id: string
+  storage_path: string
+  note: string
+  submitted_at: string
+  last_edit_at: string
+}
+
+/** An item evidencing a theme: a student's own sentence. */
+export type ThemeItem = { quote: string; enrollment_id: string | null }
+
+export type RubricThemeRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  name: string
+  description: string
+  provenance: ThemeProvenance
+  items: ThemeItem[]
+  position: number
+  created_at: string
+}
+
+export type ThemeScore = { themeId: string; score: number; evidence: string }
+
+export type AiScoreRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  submission_id: string
+  theme_scores: ThemeScore[]
+  overall: number
+  own_bar: number | null
+  distinctiveness: number | null
+  summary: string
+  created_at: string
+}
+
+export type ComparisonRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  /** Null = the professor judging. */
+  judge_enrollment_id: string | null
+  left_submission_id: string
+  right_submission_id: string
+  pair_type: PairType
+  position: number
+  /** −2..+2, "right is clearly worse" … "right is clearly better"; null = undecided. */
+  verdict: number | null
+  assigned_at: string
+  decided_at: string | null
+}
+
+export type RankingRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  submission_id: string
+  bt_score: number
+  rank: number
+  letter: string | null
+  updated_at: string
+}
+
+export type RubricViewRow = {
+  id: string
+  assignment_id: string
+  course_id: string
+  enrollment_id: string
+  seconds: number
+  first_viewed_at: string
 }
 
 /** Neighbor seat labels by relation — persisted, layout-agnostic adjacency. */
@@ -408,6 +531,14 @@ export type Database = {
       exercise_groups: TableShape<ExerciseGroupRow>
       exercise_group_members: TableShape<ExerciseGroupMemberRow>
       exercise_responses: TableShape<ExerciseResponseRow>
+      assignments: TableShape<AssignmentRow>
+      taste_files: TableShape<TasteFileRow>
+      submissions: TableShape<SubmissionRow>
+      rubric_themes: TableShape<RubricThemeRow>
+      ai_scores: TableShape<AiScoreRow>
+      comparisons: TableShape<ComparisonRow>
+      rankings: TableShape<RankingRow>
+      rubric_views: TableShape<RubricViewRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }
