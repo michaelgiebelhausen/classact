@@ -50,6 +50,8 @@ interface Props {
   myEnrollmentId: string | null;
   networkingScore: number;
   verifiedByMe: string[]; // subject enrollment ids I already confirmed today
+  /** "Class meets Mon, Wed, Fri · 9:30 AM…" — shown while check-in is closed. */
+  scheduleHint?: string | null;
 }
 
 function initials(name: string): string {
@@ -71,6 +73,7 @@ export function CheckInLive({
   myEnrollmentId,
   networkingScore,
   verifiedByMe,
+  scheduleHint,
 }: Props) {
   const router = useRouter();
   const [occupants, setOccupants] = useState<Map<string, OccupantInfo>>(
@@ -110,6 +113,14 @@ export function CheckInLive({
       return next;
     });
   }, []);
+
+  // Waiting room: with a schedule set, re-check every 30s so the map
+  // appears on its own the moment auto-open fires — no manual reload.
+  useEffect(() => {
+    if (sessionId || !scheduleHint) return;
+    const timer = setInterval(() => router.refresh(), 30_000);
+    return () => clearInterval(timer);
+  }, [sessionId, scheduleHint, router]);
 
   // Realtime subscription with 5s polling fallback (FR-010).
   useEffect(() => {
@@ -211,9 +222,14 @@ export function CheckInLive({
   if (!sessionId) {
     return (
       <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          Class hasn&apos;t started yet. The seat map opens when your professor
-          starts today&apos;s session.
+        <CardContent className="grid gap-2 py-12 text-center text-muted-foreground">
+          <p>
+            Class hasn&apos;t started yet.{" "}
+            {scheduleHint
+              ? "The seat map opens automatically at class time."
+              : "The seat map opens when your professor starts today's session."}
+          </p>
+          {scheduleHint && <p className="text-sm">{scheduleHint}</p>}
         </CardContent>
       </Card>
     );

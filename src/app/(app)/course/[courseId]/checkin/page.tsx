@@ -5,6 +5,13 @@ import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
 import {
+  formatSchedule,
+  isMeetingWindow,
+  isScheduleComplete,
+  sessionDateFor,
+  type CourseSchedule,
+} from "@/lib/schedule";
+import {
   CheckInLive,
   type DirectoryEntry,
   type OccupantInfo,
@@ -25,14 +32,34 @@ export default async function CheckInPage({
   // RLS membership gate — non-members get null.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, professor_id")
+    .select(
+      "id, name, professor_id, meeting_days, meeting_start, meeting_end, timezone, auto_open"
+    )
     .eq("id", courseId)
     .single();
   if (!course) notFound();
   const isProfessor = course.professor_id === profile.id;
 
-  // Today's open session (if any).
-  const today = new Date().toISOString().slice(0, 10);
+  // The course's schedule, when the professor has set one.
+  const schedule: CourseSchedule | null = isScheduleComplete({
+    days: (course.meeting_days as number[]) ?? [],
+    start: course.meeting_start,
+    end: course.meeting_end,
+    timezone: course.timezone,
+  })
+    ? {
+        days: course.meeting_days as number[],
+        start: course.meeting_start as string,
+        end: course.meeting_end as string,
+        timezone: course.timezone as string,
+      }
+    : null;
+
+  // "Today" in the course's timezone (falls back to server UTC date).
+  const now = new Date();
+  const today = schedule
+    ? sessionDateFor(schedule, now)
+    : now.toISOString().slice(0, 10);
   const { data: session } = await supabase
     .from("class_sessions")
     .select("id, closed_at")
@@ -40,7 +67,39 @@ export default async function CheckInPage({
     .eq("session_date", today)
     .is("closed_at", null)
     .maybeSingle();
-  const sessionId = session?.id ?? null;
+  let sessionId = session?.id ?? null;
+
+  // Scheduled auto-open: inside the meeting window (start − 15 min → end),
+  // the first person to load this page opens the session — no professor
+  // click needed. The unique (course_id, session_date) constraint makes
+  // concurrent opens race-safe.
+  if (
+    !sessionId &&
+    schedule &&
+    course.auto_open &&
+    isConfigured.supabaseAdmin &&
+    isMeetingWindow(schedule, now)
+  ) {
+    const admin = createAdminClient();
+    const { data: opened, error: openError } = await admin
+      .from("class_sessions")
+      .insert({ course_id: courseId, session_date: today })
+      .select("id")
+      .maybeSingle();
+    if (opened) {
+      sessionId = opened.id;
+    } else if (openError?.code === "23505") {
+      // Someone else opened it between our check and insert.
+      const { data: raced } = await supabase
+        .from("class_sessions")
+        .select("id")
+        .eq("course_id", courseId)
+        .eq("session_date", today)
+        .is("closed_at", null)
+        .maybeSingle();
+      sessionId = raced?.id ?? null;
+    }
+  }
 
   // Seats with geometry. Pre-migration rows without x/y fall back to their
   // grid coords so the map never comes up blank.
@@ -145,6 +204,13 @@ export default async function CheckInPage({
         myEnrollmentId={isProfessor ? null : myEnrollmentId}
         networkingScore={networkingScore}
         verifiedByMe={verifiedByMe}
+        scheduleHint={
+          schedule
+            ? `Class meets ${formatSchedule(schedule)}${
+                course.auto_open ? " — check-in opens automatically 15 minutes before class." : "."
+              }`
+            : null
+        }
       />
     </div>
   );

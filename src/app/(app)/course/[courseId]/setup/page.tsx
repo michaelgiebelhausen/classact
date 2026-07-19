@@ -18,7 +18,9 @@ export default async function CourseSetupPage({
   const supabase = await createClient();
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, join_code, icebreaker_fields, professor_id, room_id")
+    .select(
+      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open"
+    )
     .eq("id", courseId)
     .single();
 
@@ -112,6 +114,13 @@ export default async function CourseSetupPage({
           initialLayout,
           initialLocation,
           universitySuggestion,
+        }}
+        schedule={{
+          days: (course.meeting_days as number[]) ?? [],
+          start: course.meeting_start,
+          end: course.meeting_end,
+          timezone: course.timezone,
+          autoOpen: course.auto_open ?? true,
         }}
         enrollments={enrollments ?? []}
         siteUrl={env.siteUrl}

@@ -8,6 +8,7 @@ import {
   icebreakerFieldsSchema,
 } from "@/lib/validators";
 import { DEFAULT_ICEBREAKER_KEYS, ICEBREAKER_CATALOG } from "@/lib/icebreakers";
+import { isScheduleComplete } from "@/lib/schedule";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -82,5 +83,59 @@ export async function updateIcebreakerFields(
 
   if (error) return { ok: false, error: "Couldn't save. Try again." };
   revalidatePath(`/course/${courseId}/setup`);
+  return { ok: true };
+}
+
+/**
+ * Set the meeting schedule. With auto-open on, check-in opens itself 15
+ * minutes before start on meeting days — no professor click required.
+ * An empty days list clears the schedule (manual open only).
+ */
+export async function updateSchedule(
+  courseId: string,
+  input: {
+    days: number[];
+    start: string | null;
+    end: string | null;
+    timezone: string | null;
+    autoOpen: boolean;
+  }
+): Promise<ActionResult> {
+  const clearing = input.days.length === 0;
+  if (!clearing && !isScheduleComplete(input)) {
+    return {
+      ok: false,
+      error: "Pick at least one day and a start time before the end time.",
+    };
+  }
+  if (!clearing) {
+    try {
+      // Throws on unknown IANA names — reject rather than store garbage.
+      new Intl.DateTimeFormat("en-US", { timeZone: input.timezone! });
+    } catch {
+      return { ok: false, error: "Unrecognized timezone — try saving again." };
+    }
+  }
+
+  const supabase = await createClient();
+  // RLS restricts the update to the owning professor.
+  const { error } = await supabase
+    .from("courses")
+    .update(
+      clearing
+        ? { meeting_days: [], meeting_start: null, meeting_end: null, auto_open: input.autoOpen }
+        : {
+            meeting_days: [...new Set(input.days)].sort((a, b) => a - b),
+            meeting_start: input.start,
+            meeting_end: input.end,
+            timezone: input.timezone,
+            auto_open: input.autoOpen,
+          }
+    )
+    .eq("id", courseId);
+
+  if (error) return { ok: false, error: "Couldn't save the schedule. Try again." };
+  revalidatePath(`/course/${courseId}/setup`);
+  revalidatePath(`/course/${courseId}/checkin`);
   return { ok: true };
 }

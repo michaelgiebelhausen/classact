@@ -23,12 +23,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { updateIcebreakerFields } from "@/server/actions/courses";
+import { updateIcebreakerFields, updateSchedule } from "@/server/actions/courses";
 import { syncCanvasRoster } from "@/server/actions/canvas";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { RoomDesigner } from "@/components/features/setup/RoomDesigner";
 import type { RoomLayout } from "@/lib/roomlayout";
 import type { RoomLocation } from "@/server/actions/rooms";
+
+export interface ScheduleValue {
+  days: number[];
+  start: string | null;
+  end: string | null;
+  timezone: string | null;
+  autoOpen: boolean;
+}
 
 interface EnrollmentItem {
   id: string;
@@ -50,15 +58,23 @@ interface Props {
     initialLocation: RoomLocation | null;
     universitySuggestion: string;
   };
+  schedule: ScheduleValue;
   enrollments: EnrollmentItem[];
   siteUrl: string;
 }
 
-export function CourseSetupTabs({ course, roomSetup, enrollments, siteUrl }: Props) {
+export function CourseSetupTabs({
+  course,
+  roomSetup,
+  schedule,
+  enrollments,
+  siteUrl,
+}: Props) {
   return (
     <Tabs defaultValue="seatmap" className="w-full">
       <TabsList>
         <TabsTrigger value="seatmap">Room</TabsTrigger>
+        <TabsTrigger value="schedule">Schedule</TabsTrigger>
         <TabsTrigger value="roster">Roster</TabsTrigger>
         <TabsTrigger value="icebreakers">Icebreakers</TabsTrigger>
         <TabsTrigger value="invite">Invite</TabsTrigger>
@@ -72,6 +88,9 @@ export function CourseSetupTabs({ course, roomSetup, enrollments, siteUrl }: Pro
           universitySuggestion={roomSetup.universitySuggestion}
         />
       </TabsContent>
+      <TabsContent value="schedule">
+        <ScheduleTab courseId={course.id} initial={schedule} />
+      </TabsContent>
       <TabsContent value="roster">
         <RosterTab courseId={course.id} initial={enrollments} />
       </TabsContent>
@@ -82,6 +101,135 @@ export function CourseSetupTabs({ course, roomSetup, enrollments, siteUrl }: Pro
         <InviteTab course={course} enrollments={enrollments} siteUrl={siteUrl} />
       </TabsContent>
     </Tabs>
+  );
+}
+
+/* ---------------- Schedule (auto-open sessions) ---------------- */
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function ScheduleTab({
+  courseId,
+  initial,
+}: {
+  courseId: string;
+  initial: ScheduleValue;
+}) {
+  const router = useRouter();
+  const [days, setDays] = useState<Set<number>>(() => new Set(initial.days));
+  // Postgres `time` comes back as "09:30:00"; <input type="time"> wants "09:30".
+  const [start, setStart] = useState(initial.start?.slice(0, 5) ?? "");
+  const [end, setEnd] = useState(initial.end?.slice(0, 5) ?? "");
+  const [autoOpen, setAutoOpen] = useState(initial.autoOpen);
+  const [saving, setSaving] = useState(false);
+
+  const browserTz =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : "UTC";
+  const timezone = initial.timezone ?? browserTz;
+
+  function toggleDay(day: number) {
+    setDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(day)) next.delete(day);
+      else next.add(day);
+      return next;
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    const result = await updateSchedule(courseId, {
+      days: Array.from(days),
+      start: start || null,
+      end: end || null,
+      timezone,
+      autoOpen,
+    });
+    setSaving(false);
+    if (result.ok) {
+      toast.success(
+        days.size === 0
+          ? "Schedule cleared — sessions open manually."
+          : "Schedule saved."
+      );
+      router.refresh();
+    } else {
+      toast.error(result.error);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Class schedule</CardTitle>
+        <CardDescription>
+          Set when this class meets and check-in opens itself 15 minutes
+          before start — nobody has to press a button. You can still open or
+          close a session manually any time.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div className="grid gap-2">
+          <Label>Meeting days</Label>
+          <div className="flex gap-1">
+            {DAY_LABELS.map((label, day) => (
+              <Button
+                key={label}
+                type="button"
+                size="sm"
+                variant={days.has(day) ? "default" : "outline"}
+                onClick={() => toggleDay(day)}
+                aria-pressed={days.has(day)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="meeting-start">Starts</Label>
+            <Input
+              id="meeting-start"
+              type="time"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              className="w-32"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="meeting-end">Ends</Label>
+            <Input
+              id="meeting-end"
+              type="time"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              className="w-32"
+            />
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 pb-2 text-sm">
+            <input
+              type="checkbox"
+              checked={autoOpen}
+              onChange={(e) => setAutoOpen(e.target.checked)}
+            />
+            Open check-in automatically
+          </label>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          Times are in <span className="font-medium">{timezone}</span>
+          {initial.timezone ? "" : " (detected from your browser)"}.
+        </p>
+
+        <Button onClick={save} disabled={saving} className="w-fit">
+          {saving ? "Saving…" : "Save schedule"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -42,6 +42,12 @@ export type CourseRow = {
   join_code: string
   icebreaker_fields: string[]
   room_id: string | null
+  /** Weekdays the class meets, 0 = Sunday … 6 = Saturday. */
+  meeting_days: number[]
+  meeting_start: string | null
+  meeting_end: string | null
+  timezone: string | null
+  auto_open: boolean
   created_at: string
 }
 
