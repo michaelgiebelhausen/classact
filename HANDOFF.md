@@ -43,11 +43,12 @@ You already created the "Class Act" project at supabase.com. Now:
    `0004_canvas_photos.sql`, `0005_follow_along.sql`,
    `0006_participate.sql`, `0007_name_phonetics.sql`,
    `0008_roster_phonetics.sql`, `0009_projects.sql`,
-   `0010_exercises.sql`, `0011_rooms.sql`, `0012_schedule.sql`, then
-   `0013_assignments.sql` (order matters). Each should say "Success".
-   *(0011 adds seat geometry + the shared room database; 0012 adds the
-   class schedule that auto-opens check-in; 0013 adds Tasty Grading —
-   assignments, taste files, rankings — the app queries these columns, so
+   `0010_exercises.sql`, `0011_rooms.sql`, `0012_schedule.sql`,
+   `0013_assignments.sql`, then `0014_shoutouts_participation.sql` (order
+   matters). Each should say "Success". *(0011 adds seat geometry + the
+   shared room database; 0012 adds the class schedule that auto-opens
+   check-in; 0013 adds Tasty Grading; 0014 adds shout-outs + the
+   professor's participation cockpit — the app queries these columns, so
    it breaks without them.)*
 3. **Check Realtime is on:** dashboard → Database → Replication → make sure
    the `supabase_realtime` publication includes `check_ins`, `lectures`,

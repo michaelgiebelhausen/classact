@@ -36,7 +36,7 @@ describe("computeWorkReadiness", () => {
   it("reports no signal and all getting-started for an empty record", () => {
     const w = computeWorkReadiness(EMPTY);
     expect(w.hasSignal).toBe(false);
-    expect(w.competencies).toHaveLength(6);
+    expect(w.competencies).toHaveLength(8);
     expect(w.competencies.every((c) => c.level === "getting-started")).toBe(true);
     expect(w.strengths).toEqual([]);
   });

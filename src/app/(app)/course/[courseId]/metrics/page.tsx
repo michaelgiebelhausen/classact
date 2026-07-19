@@ -25,6 +25,11 @@ import {
   getStudentMetrics,
   getStudentWorkReadiness,
 } from "@/server/actions/metrics";
+import {
+  getMyMetricsV2,
+  getParticipationCockpit,
+} from "@/server/actions/participation";
+import { ParticipationCockpit } from "@/components/features/metrics/ParticipationCockpit";
 
 const LEVEL_META: Record<
   SignalLevel,
@@ -72,6 +77,7 @@ export default async function MetricsPage({
     const metrics = await getCourseMetrics(courseId);
     if (!metrics) notFound();
     const projectStats = (await getCourseProjectStats(courseId)) ?? [];
+    const cockpit = await getParticipationCockpit(courseId);
     const hasActivity = metrics.totalCheckIns > 0;
     return (
       <div className="grid gap-6">
@@ -93,6 +99,9 @@ export default async function MetricsPage({
             }
           />
         </div>
+        {cockpit && cockpit.participants.length > 0 && (
+          <ParticipationCockpit courseId={courseId} data={cockpit} />
+        )}
         <Card>
           <CardHeader>
             <CardTitle>Per student</CardTitle>
@@ -231,7 +240,10 @@ export default async function MetricsPage({
   const metrics = await getStudentMetrics(courseId);
   if (!metrics) notFound();
   const myProjects = (await getMyProjectStats(courseId)) ?? [];
-  const readiness = await getStudentWorkReadiness(courseId);
+  // v2 (all signals + 8 competencies) with graceful fallback to v1.
+  const v2 = await getMyMetricsV2(courseId);
+  const readiness = v2?.workReadiness ?? (await getStudentWorkReadiness(courseId));
+  const extras = v2?.extras ?? null;
   const noActivity =
     metrics.sessionsAttended === 0 && metrics.gamesPlayed === 0;
 
@@ -336,6 +348,134 @@ export default async function MetricsPage({
           </CardContent>
         </Card>
       )}
+
+      {extras && (extras.answered > 0 || extras.lecturesFollowed > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>In class</CardTitle>
+            <CardDescription>
+              Active learning and staying on task — the habits the room can feel.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Metric label="Questions answered" value={extras.answered} />
+            <Metric label="First vote right" value={extras.firstCorrect} />
+            <Metric
+              label="Changed to correct"
+              value={extras.changedToCorrect}
+            />
+            <Metric
+              label="Group answers you wrote"
+              value={extras.groupAnswersWritten}
+            />
+            <Metric
+              label="On-task rate"
+              value={
+                extras.onTaskRate !== null
+                  ? `${Math.round(extras.onTaskRate * 100)}%`
+                  : "—"
+              }
+            />
+            <Metric label="Lectures followed" value={extras.lecturesFollowed} />
+            <Metric label="Drifts off task" value={extras.driftCount} />
+            <Metric label="Groups joined" value={extras.groupsJoined} />
+          </CardContent>
+        </Card>
+      )}
+
+      {extras && extras.assignmentsSubmitted > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Taste &amp; judgment</CardTitle>
+            <CardDescription>
+              From your assignments: the standard you set, whether you met
+              it, and how well you judge other people&apos;s work.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Metric
+              label="Assignments submitted"
+              value={extras.assignmentsSubmitted}
+            />
+            <Metric
+              label="Met your own bar"
+              value={
+                extras.avgOwnBar !== null
+                  ? `${extras.avgOwnBar.toFixed(1)}/10`
+                  : "—"
+              }
+            />
+            <Metric
+              label="Distinctive ↔ generic"
+              value={
+                extras.avgDistinctiveness !== null
+                  ? `${extras.avgDistinctiveness.toFixed(1)}/10`
+                  : "—"
+              }
+            />
+            <Metric
+              label="Recognizes good work"
+              value={
+                extras.avgTasteAgreement !== null
+                  ? `${Math.round(extras.avgTasteAgreement)}%`
+                  : "—"
+              }
+            />
+            <Metric
+              label="Self-honesty"
+              value={
+                extras.avgSelfHonesty !== null
+                  ? `${Math.round(extras.avgSelfHonesty)}%`
+                  : "—"
+              }
+            />
+            <Metric
+              label="Turned in early by"
+              value={
+                extras.medianHoursBeforeDeadline !== null
+                  ? `${Math.max(0, Math.round(extras.medianHoursBeforeDeadline))}h`
+                  : "—"
+              }
+            />
+            <Metric label="Rubric study time" value={`${extras.rubricMinutes}m`} />
+            <Metric
+              label="Spots excellence"
+              value={
+                extras.spotsExcellence.given > 0
+                  ? `${extras.spotsExcellence.hits}/${extras.spotsExcellence.given}`
+                  : "—"
+              }
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {v2 && (v2.shoutOutsReceived.length > 0 || (extras?.shoutOutsGiven ?? 0) > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Shout-outs</CardTitle>
+            <CardDescription>
+              Received {extras?.shoutOutsReceived ?? 0} · given{" "}
+              {extras?.shoutOutsGiven ?? 0} — noticing good work counts too.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            {v2.shoutOutsReceived.slice(0, 6).map((s, i) => (
+              <div key={i} className="rounded-lg border p-3 text-sm">
+                <p className="font-medium">
+                  {s.context === "peer_review"
+                    ? "Someone admired your work in peer grading"
+                    : "A classmate shouted you out"}
+                </p>
+                {s.message && (
+                  <p className="text-muted-foreground">{s.message}</p>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {myProjects.map((p) => (
         <Card key={`${p.projectId}-team`}>
           <CardHeader>

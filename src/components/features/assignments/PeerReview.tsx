@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { rubricPing } from "@/server/actions/assignments";
 import { getPairPdfUrls, submitVerdict } from "@/server/actions/grading";
+import { shoutOutPairSide } from "@/server/actions/shoutouts";
 import { ComparePair, VERDICT_LABELS } from "./ComparePair";
 import type { PairType, RubricThemeRow } from "@/types/db";
 
@@ -34,6 +35,7 @@ export interface PeerPairView {
 }
 
 interface Props {
+  courseId: string;
   assignmentId: string;
   themes: Array<
     Pick<RubricThemeRow, "id" | "name" | "description" | "provenance"> & {
@@ -44,7 +46,13 @@ interface Props {
   peerCloseAt: string;
 }
 
-export function PeerReview({ assignmentId, themes, pairs, peerCloseAt }: Props) {
+export function PeerReview({
+  courseId,
+  assignmentId,
+  themes,
+  pairs,
+  peerCloseAt,
+}: Props) {
   const router = useRouter();
   const [entered, setEntered] = useState(false);
   const [activePair, setActivePair] = useState(0);
@@ -208,6 +216,45 @@ export function PeerReview({ assignmentId, themes, pairs, peerCloseAt }: Props) 
         busy={submitting === pair.comparisonId}
         onVerdict={(v) => decide(pair.comparisonId, v)}
       />
+
+      {verdicts[pair.comparisonId] !== null &&
+        verdicts[pair.comparisonId] !== undefined && (
+          <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
+            <span className="text-muted-foreground">
+              Genuinely impressed? Calling out great work is a stat too:
+            </span>
+            {(["left", "right"] as const).map((side) => {
+              const mineOnThisSide = pair.containsMine
+                ? (side === "right") === pair.mineIsRight
+                : false;
+              if (mineOnThisSide) return null;
+              return (
+                <Button
+                  key={side}
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    const result = await shoutOutPairSide(
+                      courseId,
+                      pair.comparisonId,
+                      side,
+                      "Admired in peer grading"
+                    );
+                    if (result.ok) {
+                      toast.success(
+                        "Shout-out sent — they'll learn someone admired this after grades publish."
+                      );
+                    } else {
+                      toast.error(result.error);
+                    }
+                  }}
+                >
+                  Shout out the {side} work
+                </Button>
+              );
+            })}
+          </div>
+        )}
     </div>
   );
 }

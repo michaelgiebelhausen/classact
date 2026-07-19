@@ -37,7 +37,50 @@ export interface WorkReadinessInput {
   flaggedTasks: number;
   /** Mean share of team credited work, 0..1, across teams that have any. */
   avgShareOfTeam: number;
+
+  // --- Metrics v2 signals (optional: absent = feature not used yet) ---
+  // Focus (Follow-Along lectures)
+  lecturesFollowed?: number;
+  /** 0..1 share of followed lecture time on task; null/undefined = no data. */
+  onTaskRate?: number | null;
+  // Active learning extras
+  firstCorrect?: number;
+  /** Group exercise answers this student personally wrote/edited. */
+  groupAnswersWritten?: number;
+  // Assignments (Tasty Grading)
+  assignmentsSubmitted?: number;
+  /** Of those, how many taste files were edited beyond the AI default. */
+  tastesSharpened?: number;
+  /** Mean "met your own bar" 0..10; null = none graded yet. */
+  avgOwnBar?: number | null;
+  /** Mean Distinctive↔Generic 0..10; null = none graded yet. */
+  avgDistinctiveness?: number | null;
+  /** Mean taste-agreement 0..100 across published assignments; null = none. */
+  avgTasteAgreement?: number | null;
+  /** Mean self-honesty 0..100; null = no self pairs decided. */
+  avgSelfHonesty?: number | null;
+  peerPairsAssigned?: number;
+  peerPairsDone?: number;
+  rubricMinutes?: number;
+  // Shout-outs
+  shoutOutsReceived?: number;
+  shoutOutsGiven?: number;
 }
+
+/**
+ * The attribute set the professor's participation cockpit weighs —
+ * exactly the competency keys/labels computeWorkReadiness emits.
+ */
+export const PARTICIPATION_ATTRIBUTES: Array<{ key: string; label: string }> = [
+  { key: "dependability", label: "Dependability" },
+  { key: "work-ethic", label: "Work ethic" },
+  { key: "initiative", label: "Initiative" },
+  { key: "leadership", label: "Leadership" },
+  { key: "collaboration", label: "Collaboration & network" },
+  { key: "coachability", label: "Coachability" },
+  { key: "focus", label: "Focus" },
+  { key: "judgment", label: "Taste & judgment" },
+];
 
 export type SignalLevel =
   | "getting-started"
@@ -185,11 +228,17 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
       "Claiming work before you're asked is how initiative shows — grab a task off your team board"
     );
   }
+  const shoutOutsGiven = input.shoutOutsGiven ?? 0;
+  if (shoutOutsGiven > 0) {
+    initEvidence.push(
+      `Gave ${shoutOutsGiven} shout-out(s) — you call out good work unprompted`
+    );
+  }
   const initiative = signal(
     "initiative",
     "Initiative",
     "Acts without being told.",
-    15 * input.selfAssignedTasks + 8 * input.newSeats,
+    15 * input.selfAssignedTasks + 8 * input.newSeats + 5 * shoutOutsGiven,
     initEvidence
   );
 
@@ -236,11 +285,27 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
       "A real network is career capital — meet a few classmates and vouch for your neighbours"
     );
   }
+  const shoutOutsReceived = input.shoutOutsReceived ?? 0;
+  const groupAnswersWritten = input.groupAnswersWritten ?? 0;
+  if (shoutOutsReceived > 0) {
+    collabEvidence.push(
+      `Classmates shouted you out ${shoutOutsReceived} time(s)`
+    );
+  }
+  if (groupAnswersWritten > 0) {
+    collabEvidence.push(
+      `Carried the pen on ${groupAnswersWritten} group answer(s)`
+    );
+  }
   const collaboration = signal(
     "collaboration",
     "Collaboration & network",
     "Builds a real network and works well with others.",
-    3 * input.peopleMet + 6 * input.neighborsVerified + 10 * input.exercisesJoined,
+    3 * input.peopleMet +
+      6 * input.neighborsVerified +
+      10 * input.exercisesJoined +
+      6 * shoutOutsReceived +
+      4 * groupAnswersWritten,
     collabEvidence
   );
 
@@ -260,12 +325,99 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
   } else {
     coachEvidence.push("Jump into think-pair-share during lectures to build this");
   }
+  const firstCorrect = input.firstCorrect ?? 0;
+  if (firstCorrect > 0) {
+    coachEvidence.push(
+      `Got ${firstCorrect} first vote(s) right before any discussion`
+    );
+  }
   const coachability = signal(
     "coachability",
     "Coachability",
     "Updates their thinking when the argument is better.",
-    Math.min(50, input.answered * 5) + Math.min(50, input.changedToCorrect * 17),
+    Math.min(45, input.answered * 5) +
+      Math.min(45, input.changedToCorrect * 17) +
+      Math.min(10, firstCorrect * 2),
     coachEvidence
+  );
+
+  // ---- Focus (Follow-Along lectures) ----
+  const lecturesFollowed = input.lecturesFollowed ?? 0;
+  const onTaskRate = input.onTaskRate ?? null;
+  const focusEvidence: string[] = [];
+  let focusScore = 0;
+  if (lecturesFollowed > 0 && onTaskRate !== null) {
+    focusScore = 100 * onTaskRate;
+    focusEvidence.push(
+      `Stayed with the room ${pct(onTaskRate)}% of the time across ${lecturesFollowed} lecture(s)`
+    );
+    if (onTaskRate < 0.8) {
+      focusEvidence.push(
+        "Every drift is visible to you here first — closing the other tabs is the cheapest stat boost in the app"
+      );
+    }
+  } else {
+    focusEvidence.push(
+      "Follow a lecture on your laptop to start this signal — staying on task is a hiring signal employers ask about"
+    );
+  }
+  const focus = signal(
+    "focus",
+    "Focus",
+    "Stays on task when the screen is full of alternatives.",
+    focusScore,
+    focusEvidence
+  );
+
+  // ---- Taste & judgment (Tasty Grading) ----
+  const assignmentsSubmitted = input.assignmentsSubmitted ?? 0;
+  const tastesSharpened = input.tastesSharpened ?? 0;
+  const judgmentEvidence: string[] = [];
+  let judgmentScore = 0;
+  if (assignmentsSubmitted > 0) {
+    const agreement = input.avgTasteAgreement ?? null;
+    const honesty = input.avgSelfHonesty ?? null;
+    const ownBar = input.avgOwnBar ?? null;
+    const sharpenRate = tastesSharpened / assignmentsSubmitted;
+    judgmentScore =
+      (agreement !== null ? 0.4 * agreement : 0) +
+      (honesty !== null ? 0.2 * honesty : 0) +
+      12 * sharpenRate +
+      (ownBar !== null ? 1.2 * ownBar : 0) +
+      Math.min(8, input.rubricMinutes ?? 0);
+    if (tastesSharpened > 0) {
+      judgmentEvidence.push(
+        `Sharpened your own standard on ${tastesSharpened} of ${assignmentsSubmitted} assignment(s)`
+      );
+    } else {
+      judgmentEvidence.push(
+        "You've been shipping the AI's default taste file — rewriting it is how you show your own standard"
+      );
+    }
+    if (agreement !== null) {
+      judgmentEvidence.push(
+        `Your judging calls matched the settled ranking ${Math.round(agreement)}% of the time`
+      );
+    }
+    if (honesty !== null) {
+      judgmentEvidence.push(
+        `Placed your own work honestly ${Math.round(honesty)}% of the time`
+      );
+    }
+    if (ownBar !== null) {
+      judgmentEvidence.push(`Met your own bar at ${ownBar.toFixed(1)}/10`);
+    }
+  } else {
+    judgmentEvidence.push(
+      "Taste is a skill: submit an assignment, sharpen your taste file, and judge your pairs to build this"
+    );
+  }
+  const judgment = signal(
+    "judgment",
+    "Taste & judgment",
+    "Knows what good looks like — and holds themselves to it.",
+    judgmentScore,
+    judgmentEvidence
   );
 
   const competencies = [
@@ -275,6 +427,8 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
     leadership,
     collaboration,
     coachability,
+    focus,
+    judgment,
   ];
 
   const hasSignal =
@@ -284,7 +438,11 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
     input.peopleMet > 0 ||
     input.exercisesJoined > 0 ||
     input.selfAssignedTasks > 0 ||
-    input.distributedTasks > 0;
+    input.distributedTasks > 0 ||
+    lecturesFollowed > 0 ||
+    assignmentsSubmitted > 0 ||
+    (input.shoutOutsGiven ?? 0) > 0 ||
+    (input.shoutOutsReceived ?? 0) > 0;
 
   const ranked = [...competencies].sort((a, b) => b.score - a.score);
   const strengths = ranked

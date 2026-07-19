@@ -32,7 +32,7 @@ const COURSE_NAV: NavItem[] = [
   { label: "Learn Names", icon: Sparkles, seg: "games", status: "live" },
   { label: "Follow Along", icon: MonitorPlay, seg: "follow", status: "live" },
   { label: "Participate", icon: Vote, seg: "participate", status: "live" },
-  { label: "Shout-outs", icon: Megaphone, seg: "shoutouts", status: "soon" },
+  { label: "Shout-outs", icon: Megaphone, seg: "shoutouts", status: "live" },
   { label: "Projects", icon: Users, seg: "projects", status: "live" },
   { label: "Assignments", icon: ClipboardCheck, seg: "assignments", status: "live" },
   { label: "My Metrics", icon: BarChart3, seg: "metrics", status: "live" },

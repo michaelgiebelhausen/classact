@@ -50,7 +50,41 @@ export type CourseRow = {
   auto_open: boolean
   /** Course-level Tasty Grading defaults (cut points, weights, windows). */
   grading_defaults: Record<string, unknown>
+  /** Professor's participation-score weights (competency key → 0..1). */
+  participation_weights: Record<string, unknown>
   created_at: string
+}
+
+export type ShoutOutContext = "general" | "exercise" | "project" | "peer_review"
+
+export type ShoutOutRow = {
+  id: string
+  course_id: string
+  giver_enrollment_id: string
+  recipient_enrollment_id: string
+  context: ShoutOutContext
+  context_id: string | null
+  message: string
+  created_at: string
+}
+
+export type ParticipationComparisonRow = {
+  id: string
+  course_id: string
+  left_enrollment_id: string
+  right_enrollment_id: string
+  /** −2..+2, positive = right student participates better. */
+  verdict: number
+  created_at: string
+}
+
+export type StudentFlagRow = {
+  id: string
+  course_id: string
+  enrollment_id: string
+  reason: string
+  created_at: string
+  resolved_at: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -539,6 +573,9 @@ export type Database = {
       comparisons: TableShape<ComparisonRow>
       rankings: TableShape<RankingRow>
       rubric_views: TableShape<RubricViewRow>
+      shout_outs: TableShape<ShoutOutRow>
+      participation_comparisons: TableShape<ParticipationComparisonRow>
+      student_flags: TableShape<StudentFlagRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

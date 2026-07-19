@@ -324,6 +324,7 @@ export default async function AssignmentPage({
           </Card>
         ) : (
           <PeerReview
+            courseId={courseId}
             assignmentId={assignmentId}
             themes={(themes ?? []).map((t) => ({
               id: t.id,
