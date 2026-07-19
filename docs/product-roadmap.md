@@ -361,6 +361,64 @@
 
 ---
 
+## Phase 6: Tasty Grading (AI/Peer/Instructor Grading)
+
+> **Goal:** A professor uploads an assignment PDF and sets a deadline — nothing else. Students edit AI-drafted taste files, submit PDFs, a rubric emerges from the class's own words, AI drafts a ranking, peers refine it through assigned pairwise comparisons, and the professor drags cut points on an avatar histogram and clicks Publish. **No grade is published without professor review.**
+
+**Reference sections:**
+- Spec: `docs/tasty-grading-plan.md` (canonical — all design decisions, data model, principles)
+- PRD: § Data Model (patterns), § Non-Functional Requirements
+- Existing patterns: `src/server/questiongen.ts` + `src/server/roomvision.ts` (OpenRouter), `src/server/actions/projects.ts` (PDF upload), `src/lib/participate.ts` (pure algorithm + tests style)
+
+**Phase prompt:**
+> "Read docs/tasty-grading-plan.md in full, then this phase's tasks. Honor the non-negotiable principles (zero required professor input; no publish without professor; never an accusation; left→right = low→high; FERPA). Continue from the first unchecked task, marking each complete. Verify each task before checking it off."
+
+- [ ] **TASK-065** — Assignments schema + types.
+  Files: `supabase/migrations/0013_assignments.sql`, `src/types/db.ts`
+  Notes: Tables per spec § Data model sketch (assignments, taste_files, submissions, rubric_themes, ai_scores, comparisons, rankings) + RLS (students see own rows; comparisons anonymized; rankings visible to owner post-publish only). Verify: migration runs clean; RLS spot-checks.
+
+- [ ] **TASK-066** — Professor creates an assignment; AI default taste file.
+  Files: `src/server/actions/assignments.ts`, `src/server/tastegen.ts`, assignments page + course-nav entry
+  Notes: Upload PDF + pick deadline (+ optional peer-window override); everything else defaulted. On publish, generate the default taste file from the PDF (questiongen pattern). Verify: create → students see the assignment with a pre-filled taste file.
+
+- [ ] **TASK-067** — Student submission page.
+  Files: `src/components/features/assignments/SubmissionEditor.tsx`, taste editor
+  Notes: PDF upload (≤20 MB) + taste editor (criteria + "my bar"), first/last edit timestamps, "don't put your name in the file" instruction, both lock at deadline. Verify: edits tracked; post-deadline edits rejected.
+
+- [ ] **TASK-068** — Rubric emergence (grounded-theory batch).
+  Files: `src/server/rubricgen.ts`, `src/server/actions/analysis.ts`
+  Notes: Themes from all locked taste files (constructs + student-quote items, provenance tags; professor materials as surviving seeds when present). Resumable batches — must survive serverless timeouts at 100 students. Verify: themes with real quotes on a seeded corpus.
+
+- [ ] **TASK-069** — Scoring + distinctiveness + draft ranking.
+  Files: `src/server/scoregen.ts`, `src/lib/shingle.ts` (+ tests), `src/lib/ranking.ts` (+ tests)
+  Notes: Per-theme scores with evidence quotes, overall, met-own-bar; ~3 generated one-shot baselines → distinctiveness; shingling near-duplicate pairs (professor-private); Bradley–Terry prior from overall scores. Distinctiveness weight dial applied here. Verify: unit tests for shingle + BT math; seeded class ranks sensibly.
+
+- [ ] **TASK-070** — Peer pair assignment + rubric-first flow.
+  Files: `src/lib/pairing.ts` (+ tests), `src/server/actions/peerreview.ts`, rubric review page
+  Notes: Three pair types (exceptional probe / self-vs-other disclosed / near-tie), professor-adjustable mix, randomized order, no teammates/reciprocals, revisitable before final submit. Consensus rubric is the mandatory first stop; time-on-rubric tracked. Verify: pairing invariants unit-tested.
+
+- [ ] **TASK-071** — Comparison UI (shared professor/peer).
+  Files: `src/components/features/assignments/ComparePair.tsx`
+  Notes: Side-by-side pdfjs render, 5-position slider (clearly worse → clearly better, left→right), equal submittable; "slightly"=1, "clearly"=2 in BT; professor votes weighted (editable, default 8×). Verify: comparisons persist and shift the ranking.
+
+- [ ] **TASK-072** — Judging statistics.
+  Files: `src/lib/tastestats.ts` (+ tests), metrics actions
+  Notes: Taste-agreement (vs settled ranking), self-honesty (self-pair placement), participation, timeliness (last-edit), time-on-rubric, holds-self-to-high-standard (taste-file quality + diff from default). Verify: unit tests on synthetic histories.
+
+- [ ] **TASK-073** — Professor cockpit.
+  Files: `src/components/features/assignments/GradingCockpit.tsx`
+  Notes: Avatar histogram (stacked photo dots, adjustable bins), draggable triangular cut-point markers (course-level defaults), boundary-weighted + uncertainty-sampled "next pair", bar-click serves within-bar pair, stability meter, settings panel, pre-publish checkpoint → Publish. Verify: cut points → letters; publish gate enforced server-side.
+
+- [ ] **TASK-074** — Student report + My Metrics integration.
+  Files: report page, `src/lib/employability.ts` integration
+  Notes: Rank ("26 of 34"), letter, per-theme scores with evidence quotes, met-own-bar, distinctiveness (Distinctive ↔ Generic framing), judging stats; durable stats onto My Metrics/work-readiness. FERPA: own standing only. Verify: student sees own report post-publish, nothing about others.
+
+- [ ] **TASK-075** — Landing page section.
+  Files: `src/app/page.tsx`
+  Notes: Eyebrow "AI/Peer/Instructor Grading", title "Tasty Grading", approved pitch + dual-benefit row (spec § Landing page), marquee placement after Group Projects. Verify: renders; copy matches spec.
+
+---
+
 ## Agent Session Guide
 
 ### How to Use This Roadmap with Your Coding Agent

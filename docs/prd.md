@@ -803,3 +803,20 @@ Not applicable. The MVP is **free** and no payment provider is configured. The l
 - **Q4: Minimum players for name games (N)** — *Default:* 6 classmates with at least one photo; below that, show the "not enough players yet" state.
 - **Q5: Seat-map generation from a photo** — Vision mentions photo/AI room capture. *Default for MVP:* manual rows×cols builder + optional text description; defer photo-to-map (AI) to a later phase to keep MVP tight.
 - **Q6: Off-roster joiners** — Allow pending self-join or hard-require roster match? *Default:* allow pending, professor approves; keeps Mike's pilot flexible.
+
+---
+
+## Post-MVP Feature Specs (canonical addenda)
+
+The MVP shipped; later features are specified in standalone docs that
+supersede any conflicting MVP-era text above:
+
+- **Room Setup v2** — `docs/room-setup-v2-plan.md`. Seat geometry (x/y +
+  persisted neighbors), layout presets (seminar/horseshoe/auditorium/pods),
+  shared university→building→room database, AI photo-to-layout (resolves
+  Open Q5 above: photo capture is now built). Class schedule + auto-open
+  sessions shipped alongside (migration 0012).
+- **Tasty Grading** — `docs/tasty-grading-plan.md`. AI/Peer/Instructor
+  grading: student taste files → grounded-theory emergent rubric → AI
+  scoring → Bradley–Terry pairwise refinement → professor cut points +
+  publish. Roadmap Phase 6 (TASK-065–075).
