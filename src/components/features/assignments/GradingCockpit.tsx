@@ -93,6 +93,8 @@ export function GradingCockpit({
     comparisonId: string;
     left: string;
     right: string;
+    leftKind: "pdf" | "md";
+    rightKind: "pdf" | "md";
   } | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
   const [verdictBusy, setVerdictBusy] = useState(false);
@@ -334,6 +336,8 @@ export function GradingCockpit({
         <ComparePair
           leftUrl={pair.left}
           rightUrl={pair.right}
+          leftKind={pair.leftKind}
+          rightKind={pair.rightKind}
           verdict={null}
           busy={verdictBusy}
           onVerdict={decide}

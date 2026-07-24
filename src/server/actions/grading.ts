@@ -19,6 +19,7 @@ import {
 import { assignPeerPairs } from "@/lib/pairing";
 import { findSimilarPairs } from "@/lib/shingle";
 import {
+  docKindFromPath,
   emergeRubric,
   generateBaselines,
   scoreSubmission,
@@ -294,7 +295,13 @@ export async function advanceAnalysis(assignmentId: string): Promise<
         ? await downloadBase64(admin, assignment.storage_path)
         : null;
       const baselines = await generateBaselines(
-        { assignmentTitle: assignment.title, briefPdfBase64: briefBase64 },
+        {
+          assignmentTitle: assignment.title,
+          brief:
+            briefBase64 && assignment.storage_path
+              ? { base64: briefBase64, kind: docKindFromPath(assignment.storage_path) }
+              : null,
+        },
         creds!
       );
       await done({
@@ -349,12 +356,15 @@ export async function advanceAnalysis(assignmentId: string): Promise<
 
       const texts = { ...(analysis.texts ?? {}) };
       for (const sub of pending.slice(0, SCORE_BATCH)) {
-        const pdf = await downloadBase64(admin, sub.storage_path);
-        if (!pdf) continue;
+        const fileBase64 = await downloadBase64(admin, sub.storage_path);
+        if (!fileBase64) continue;
         const score = await scoreSubmission(
           {
             assignmentTitle: assignment.title,
-            submissionPdfBase64: pdf,
+            submission: {
+              base64: fileBase64,
+              kind: docKindFromPath(sub.storage_path),
+            },
             themes: themeInputs,
             ownTaste: tasteByEnrollment.get(sub.enrollment_id) ?? null,
             baselines: analysis.baselines ?? [],
@@ -463,10 +473,15 @@ export async function advanceAnalysis(assignmentId: string): Promise<
   }
 }
 
-/** Signed URLs for a comparison's two PDFs — judge or professor only. */
-export async function getPairPdfUrls(
-  comparisonId: string
-): Promise<ActionResult<{ left: string; right: string }>> {
+/** Signed URLs (+ doc kinds) for a comparison's two files — judge or professor only. */
+export async function getPairPdfUrls(comparisonId: string): Promise<
+  ActionResult<{
+    left: string;
+    right: string;
+    leftKind: "pdf" | "md";
+    rightKind: "pdf" | "md";
+  }>
+> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -496,9 +511,17 @@ export async function getPairPdfUrls(
     admin.storage.from(ASSIGNMENT_BUCKET).createSignedUrl(rightPath, SIGNED_URL_SECONDS),
   ]);
   if (!left.data?.signedUrl || !right.data?.signedUrl) {
-    return { ok: false, error: "Couldn't open the PDFs — try again." };
+    return { ok: false, error: "Couldn't open the files — try again." };
   }
-  return { ok: true, data: { left: left.data.signedUrl, right: right.data.signedUrl } };
+  return {
+    ok: true,
+    data: {
+      left: left.data.signedUrl,
+      right: right.data.signedUrl,
+      leftKind: docKindFromPath(leftPath),
+      rightKind: docKindFromPath(rightPath),
+    },
+  };
 }
 
 /**

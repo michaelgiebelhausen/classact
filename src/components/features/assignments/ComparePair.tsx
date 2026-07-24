@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -22,20 +22,58 @@ export const VERDICT_LABELS = [
 interface Props {
   leftUrl: string | null;
   rightUrl: string | null;
+  leftKind?: "pdf" | "md";
+  rightKind?: "pdf" | "md";
   verdict: number | null;
   busy: boolean;
   onVerdict: (verdict: number) => void;
 }
 
-export function ComparePair({ leftUrl, rightUrl, verdict, busy, onVerdict }: Props) {
+/** Markdown submissions render as readable plain text (that's the format's point). */
+function MdPane({ url, label }: { url: string; label: string }) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(url, { signal: controller.signal })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+      .then((t) => setText(t.slice(0, 200_000)))
+      .catch(() => setText("Couldn't load this file — reopen the pair."));
+    return () => controller.abort();
+  }, [url]);
+  if (text === null) {
+    return (
+      <div className="grid h-[540px] place-items-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
+  }
+  return (
+    <pre
+      aria-label={`${label} submission (Markdown)`}
+      className="h-[540px] w-full overflow-auto whitespace-pre-wrap p-4 font-sans text-sm leading-relaxed"
+    >
+      {text}
+    </pre>
+  );
+}
+
+export function ComparePair({
+  leftUrl,
+  rightUrl,
+  leftKind = "pdf",
+  rightKind = "pdf",
+  verdict,
+  busy,
+  onVerdict,
+}: Props) {
   const [selected, setSelected] = useState<number | null>(verdict);
 
   return (
     <div className="grid gap-4">
       <div className="grid gap-3 lg:grid-cols-2">
         {[
-          { label: "Left", url: leftUrl },
-          { label: "Right", url: rightUrl },
+          { label: "Left", url: leftUrl, kind: leftKind },
+          { label: "Right", url: rightUrl, kind: rightKind },
         ].map((side) => (
           <Card key={side.label} className="overflow-hidden">
             <CardContent className="p-0">
@@ -43,14 +81,18 @@ export function ComparePair({ leftUrl, rightUrl, verdict, busy, onVerdict }: Pro
                 {side.label}
               </p>
               {side.url ? (
-                <iframe
-                  src={side.url}
-                  title={`${side.label} submission`}
-                  className="h-[540px] w-full"
-                />
+                side.kind === "md" ? (
+                  <MdPane url={side.url} label={side.label} />
+                ) : (
+                  <iframe
+                    src={side.url}
+                    title={`${side.label} submission`}
+                    className="h-[540px] w-full"
+                  />
+                )
               ) : (
                 <div className="grid h-[540px] place-items-center text-sm text-muted-foreground">
-                  Loading PDF…
+                  Loading…
                 </div>
               )}
             </CardContent>

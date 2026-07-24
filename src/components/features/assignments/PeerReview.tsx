@@ -56,7 +56,12 @@ export function PeerReview({
   const router = useRouter();
   const [entered, setEntered] = useState(false);
   const [activePair, setActivePair] = useState(0);
-  const [urls, setUrls] = useState<Record<string, { left: string; right: string }>>({});
+  const [urls, setUrls] = useState<
+    Record<
+      string,
+      { left: string; right: string; leftKind: "pdf" | "md"; rightKind: "pdf" | "md" }
+    >
+  >({});
   const [verdicts, setVerdicts] = useState<Record<string, number | null>>(() =>
     Object.fromEntries(pairs.map((p) => [p.comparisonId, p.verdict]))
   );
@@ -212,6 +217,8 @@ export function PeerReview({
       <ComparePair
         leftUrl={pairUrls?.left ?? null}
         rightUrl={pairUrls?.right ?? null}
+        leftKind={pairUrls?.leftKind ?? "pdf"}
+        rightKind={pairUrls?.rightKind ?? "pdf"}
         verdict={verdicts[pair.comparisonId] ?? null}
         busy={submitting === pair.comparisonId}
         onVerdict={(v) => decide(pair.comparisonId, v)}

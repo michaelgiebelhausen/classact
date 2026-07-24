@@ -79,15 +79,19 @@ export function SubmissionEditor({
 
   async function handleFile(file: File) {
     if (file.size > 20 * 1024 * 1024) {
-      toast.error("Keep your PDF under 20 MB.");
+      toast.error("Keep your file under 20 MB.");
       return;
     }
     setUploading(true);
     const supabase = createClient();
-    const storagePath = `${courseId}/sub/${enrollmentId}/${crypto.randomUUID()}.pdf`;
+    const isMd =
+      file.name.toLowerCase().endsWith(".md") || file.type === "text/markdown";
+    const storagePath = `${courseId}/sub/${enrollmentId}/${crypto.randomUUID()}.${isMd ? "md" : "pdf"}`;
     const { error } = await supabase.storage
       .from(ASSIGNMENT_BUCKET)
-      .upload(storagePath, file, { contentType: "application/pdf" });
+      .upload(storagePath, file, {
+        contentType: isMd ? "text/markdown" : "application/pdf",
+      });
     if (error) {
       setUploading(false);
       toast.error("Upload failed — try again.");
@@ -187,11 +191,11 @@ export function SubmissionEditor({
             {submittedAt ? "Your submission" : "Submit your work"}
           </CardTitle>
           <CardDescription>
-            One PDF, up to 20 MB — your entire submission for this
-            assignment, so combine any parts into a single file. Don&apos;t
-            put your name in it — your work is judged anonymously.
-            Resubmitting before the deadline replaces the file (your last
-            edit is what counts for timeliness).
+            One file — PDF or Markdown, up to 20 MB — your entire
+            submission for this assignment, so combine any parts into a
+            single file. Don&apos;t put your name in it — your work is
+            judged anonymously. Resubmitting before the deadline replaces
+            the file (your last edit is what counts for timeliness).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -213,7 +217,7 @@ export function SubmissionEditor({
           <input
             ref={fileRef}
             type="file"
-            accept="application/pdf"
+            accept="application/pdf,.md,text/markdown"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -229,8 +233,8 @@ export function SubmissionEditor({
             {uploading
               ? "Uploading…"
               : submittedAt
-                ? "Replace PDF"
-                : "Upload PDF"}
+                ? "Replace file"
+                : "Upload PDF or Markdown"}
           </Button>
         </CardContent>
       </Card>

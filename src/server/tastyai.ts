@@ -20,10 +20,36 @@ function extractJson(text: string): string {
   return text.trim();
 }
 
+/** A submission/brief document: PDF (model file attachment) or Markdown. */
+export type DocKind = "pdf" | "md";
+export interface DocInput {
+  base64: string;
+  kind: DocKind;
+}
+
+export function docKindFromPath(path: string): DocKind {
+  return path.toLowerCase().endsWith(".md") ? "md" : "pdf";
+}
+
 function pdfPart(filename: string, base64: string) {
   return {
     type: "file" as const,
     file: { filename, file_data: `data:application/pdf;base64,${base64}` },
+  };
+}
+
+/**
+ * Attach a document to a message: PDFs ride as file parts; Markdown is
+ * decoded and inlined as text (cheaper, and exact for similarity checks).
+ */
+function docPart(name: string, doc: DocInput): unknown {
+  if (doc.kind === "pdf") return pdfPart(`${name}.pdf`, doc.base64);
+  const text = Buffer.from(doc.base64, "base64")
+    .toString("utf8")
+    .slice(0, 120_000);
+  return {
+    type: "text" as const,
+    text: `--- ${name}.md (Markdown submission, verbatim) ---\n${text}\n--- end of ${name}.md ---`,
   };
 }
 
@@ -119,7 +145,7 @@ function cleanCriteria(raw: unknown, max = 10): TasteCriterion[] {
 export async function generateDefaultTaste(
   input: {
     assignmentTitle: string;
-    briefPdfBase64: string | null;
+    brief: DocInput | null;
   },
   creds: AiCallCreds
 ): Promise<AiResult<TasteDraft>> {
@@ -133,7 +159,7 @@ export async function generateDefaultTaste(
   const content: unknown[] = [
     { type: "text", text: `Assignment: "${input.assignmentTitle}". Draft the default taste file.` },
   ];
-  if (input.briefPdfBase64) content.push(pdfPart("assignment.pdf", input.briefPdfBase64));
+  if (input.brief) content.push(docPart("assignment", input.brief));
   const result = await callModel(
     [
       { role: "system", content: system },
@@ -270,7 +296,7 @@ export async function emergeRubric(
 export async function generateBaselines(
   input: {
     assignmentTitle: string;
-    briefPdfBase64: string | null;
+    brief: DocInput | null;
   },
   creds: AiCallCreds
 ): Promise<AiResult<string[]>> {
@@ -280,7 +306,7 @@ export async function generateBaselines(
       text: `Complete this assignment: "${input.assignmentTitle}". Give a competent, complete answer.`,
     },
   ];
-  if (input.briefPdfBase64) content.push(pdfPart("assignment.pdf", input.briefPdfBase64));
+  if (input.brief) content.push(docPart("assignment", input.brief));
   const results = await Promise.all(
     [0, 1, 2].map(() =>
       callModel([{ role: "user", content }], 120_000, "baseline", creds)
@@ -317,7 +343,7 @@ function clampScore(value: unknown): number {
 export async function scoreSubmission(
   input: {
     assignmentTitle: string;
-    submissionPdfBase64: string;
+    submission: DocInput;
     themes: Array<{ id: string; name: string; description: string; itemQuotes: string[] }>;
     ownTaste: { criteria: TasteCriterion[]; barStatement: string } | null;
     baselines: string[];
@@ -339,7 +365,7 @@ export async function scoreSubmission(
     .join("\n\n");
 
   const system = [
-    "You are grading one student submission (PDF attached) for a college assignment, against the class's emergent rubric.",
+    "You are grading one student submission (attached as a PDF file or inlined Markdown) for a college assignment, against the class's emergent rubric.",
     "Score each theme 0-10, anchored: 5 = solid/typical, 8 = clearly strong, 10 = exceptional. For each theme give one short evidence quote FROM THE SUBMISSION.",
     "overall: 0-10 holistic quality.",
     "ownBar: 0-10 — did the work meet the STUDENT'S OWN taste file (provided)?",
@@ -359,7 +385,7 @@ export async function scoreSubmission(
             type: "text",
             text: `Assignment: "${input.assignmentTitle}".\n\nRubric:\n${rubric}\n\nThe student's own taste file:\n${ownTasteText}\n\nGeneric one-shot answers for distinctiveness reference:\n${baselineText}`,
           },
-          pdfPart("submission.pdf", input.submissionPdfBase64),
+          docPart("submission", input.submission),
         ],
       },
     ],

@@ -46,10 +46,14 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
     let storagePath: string | null = null;
     if (file) {
       const supabase = createClient();
-      storagePath = `${courseId}/brief/${crypto.randomUUID()}.pdf`;
+      const isMd =
+        file.name.toLowerCase().endsWith(".md") || file.type === "text/markdown";
+      storagePath = `${courseId}/brief/${crypto.randomUUID()}.${isMd ? "md" : "pdf"}`;
       const { error } = await supabase.storage
         .from(ASSIGNMENT_BUCKET)
-        .upload(storagePath, file, { contentType: "application/pdf" });
+        .upload(storagePath, file, {
+          contentType: isMd ? "text/markdown" : "application/pdf",
+        });
       if (error) {
         setSaving(false);
         toast.error("Upload failed — try again.");
@@ -102,11 +106,11 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
         </div>
         <div className="flex flex-wrap items-end gap-4">
           <div className="grid gap-2">
-            <Label>Assignment brief (PDF, optional)</Label>
+            <Label>Assignment brief (PDF or Markdown, optional)</Label>
             <input
               ref={fileRef}
               type="file"
-              accept="application/pdf"
+              accept="application/pdf,.md,text/markdown"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -123,7 +127,7 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
               variant="outline"
               onClick={() => fileRef.current?.click()}
             >
-              {file ? file.name : "Choose PDF"}
+              {file ? file.name : "Choose file"}
             </Button>
           </div>
           <div className="grid gap-2">

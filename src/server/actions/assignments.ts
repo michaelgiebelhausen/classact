@@ -5,7 +5,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { resolveSettings } from "@/lib/tastegrading";
-import { generateDefaultTaste, type TasteDraft } from "@/server/tastyai";
+import {
+  docKindFromPath,
+  generateDefaultTaste,
+  type TasteDraft,
+} from "@/server/tastyai";
 import { resolveCourseAi } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
 import type { TasteCriterion } from "@/types/db";
@@ -106,7 +110,13 @@ export async function createAssignment(input: {
   const creds = await resolveCourseAi(input.courseId, "taste");
   if (creds) {
     const draft = await generateDefaultTaste(
-      { assignmentTitle: title, briefPdfBase64: briefBase64 },
+      {
+        assignmentTitle: title,
+        brief:
+          briefBase64 && input.storagePath
+            ? { base64: briefBase64, kind: docKindFromPath(input.storagePath) }
+            : null,
+      },
       creds
     );
     if (draft.ok) defaultTaste = draft.data;
