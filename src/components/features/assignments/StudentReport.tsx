@@ -137,6 +137,10 @@ export function StudentReport({
         </Card>
       </div>
 
+      {(stats.tasteAgreement !== null ||
+        stats.selfHonesty !== null ||
+        stats.participation > 0 ||
+        stats.rubricSeconds > 0) && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">You as a judge</CardTitle>
@@ -158,6 +162,7 @@ export function StudentReport({
           </Badge>
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }
