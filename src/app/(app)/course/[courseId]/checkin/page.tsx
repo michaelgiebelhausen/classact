@@ -132,13 +132,32 @@ export default async function CheckInPage({
     .maybeSingle();
   myEnrollmentId = myEnrollment?.id ?? null;
 
+  // Seat-variety nudge data: which seats I've already tried and how many
+  // classmates I've met — surfaced at the moment of choosing a seat.
+  let mySeatIds: string[] = [];
+  let peopleMet = 0;
   if (myEnrollmentId) {
-    const { count } = await supabase
-      .from("check_ins")
-      .select("id", { count: "exact", head: true })
-      .eq("enrollment_id", myEnrollmentId)
-      .eq("is_new_seat", true);
-    networkingScore = count ?? 0;
+    const [{ data: myCheckIns }, { data: myVerifs }] = await Promise.all([
+      supabase
+        .from("check_ins")
+        .select("seat_id, is_new_seat")
+        .eq("enrollment_id", myEnrollmentId),
+      supabase
+        .from("seat_verifications")
+        .select("verifier_enrollment_id, subject_enrollment_id")
+        .or(
+          `verifier_enrollment_id.eq.${myEnrollmentId},subject_enrollment_id.eq.${myEnrollmentId}`
+        ),
+    ]);
+    networkingScore = (myCheckIns ?? []).filter((c) => c.is_new_seat).length;
+    mySeatIds = [...new Set((myCheckIns ?? []).map((c) => c.seat_id))];
+    peopleMet = new Set(
+      (myVerifs ?? []).map((v) =>
+        v.verifier_enrollment_id === myEnrollmentId
+          ? v.subject_enrollment_id
+          : v.verifier_enrollment_id
+      )
+    ).size;
   }
 
   if (sessionId) {
@@ -204,6 +223,8 @@ export default async function CheckInPage({
         myEnrollmentId={isProfessor ? null : myEnrollmentId}
         networkingScore={networkingScore}
         verifiedByMe={verifiedByMe}
+        mySeatIds={mySeatIds}
+        peopleMet={peopleMet}
         scheduleHint={
           schedule
             ? `Class meets ${formatSchedule(schedule)}${

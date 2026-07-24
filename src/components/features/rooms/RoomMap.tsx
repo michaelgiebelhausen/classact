@@ -30,6 +30,8 @@ export interface RoomMapSeatState {
   name?: string | null;
   pending?: boolean;
   tappable?: boolean;
+  /** Empty seats only: "you haven't sat here yet" cue (dot + tinted border). */
+  highlight?: boolean;
 }
 
 interface Props {
@@ -243,7 +245,9 @@ export function RoomMap({
               ? `taken by ${state.name ?? "a classmate"}`
               : state.kind === "off"
                 ? "not in use"
-                : "empty";
+                : state.highlight
+                  ? "empty — you haven't sat here yet"
+                  : "empty";
         return (
           <button
             key={seat.id}
@@ -263,7 +267,9 @@ export function RoomMap({
                     : state.kind === "off"
                       ? "border-dashed border-border bg-transparent text-muted-foreground/40"
                       : tappable
-                        ? "bg-card hover:border-primary hover:text-primary"
+                        ? state.highlight
+                          ? "border-primary/40 bg-card hover:border-primary hover:text-primary"
+                          : "bg-card hover:border-primary hover:text-primary"
                         : "bg-card text-muted-foreground/60",
               state.pending ? "animate-pulse" : "",
             ].join(" ")}
@@ -284,6 +290,12 @@ export function RoomMap({
               </Avatar>
             ) : (
               seat.label
+            )}
+            {state.kind === "empty" && state.highlight && (
+              <span
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary/70"
+              />
             )}
           </button>
         );

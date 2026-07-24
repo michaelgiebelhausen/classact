@@ -52,6 +52,10 @@ interface Props {
   verifiedByMe: string[]; // subject enrollment ids I already confirmed today
   /** "Class meets Mon, Wed, Fri · 9:30 AM…" — shown while check-in is closed. */
   scheduleHint?: string | null;
+  /** Seat ids I've checked into before (any session) — powers the new-seat nudge. */
+  mySeatIds?: string[];
+  /** Distinct classmates I've verified with, either direction. */
+  peopleMet?: number;
 }
 
 function initials(name: string): string {
@@ -74,6 +78,8 @@ export function CheckInLive({
   networkingScore,
   verifiedByMe,
   scheduleHint,
+  mySeatIds = [],
+  peopleMet = 0,
 }: Props) {
   const router = useRouter();
   const [occupants, setOccupants] = useState<Map<string, OccupantInfo>>(
@@ -92,6 +98,8 @@ export function CheckInLive({
     for (const s of seats) m.set(s.label, s);
     return m;
   }, [seats]);
+
+  const mySeatSet = useMemo(() => new Set(mySeatIds), [mySeatIds]);
 
   const myCheckIn = useMemo(
     () =>
@@ -291,6 +299,24 @@ export function CheckInLive({
         )}
       </div>
 
+      {!myCheckIn && myEnrollmentId && (
+        <p className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <span className="font-medium">Sit somewhere new today.</span> A seat
+          you haven&apos;t tried (marked with a dot) is +1 to your networking
+          score, and confirming a neighbor you haven&apos;t met before grows
+          your people-met count — both feed your work-readiness metrics.
+          So far you&apos;ve tried{" "}
+          <span className="font-medium">
+            {mySeatSet.size} {mySeatSet.size === 1 ? "seat" : "seats"}
+          </span>{" "}
+          and met{" "}
+          <span className="font-medium">
+            {peopleMet} {peopleMet === 1 ? "classmate" : "classmates"}
+          </span>
+          .
+        </p>
+      )}
+
       <div className="overflow-x-auto rounded-lg border p-4">
         <RoomMap
           seats={seats}
@@ -312,6 +338,11 @@ export function CheckInLive({
               pending: pendingSeat === seat.id,
               tappable:
                 !occupant && !myCheckIn && pendingSeat === null && Boolean(myEnrollmentId),
+              highlight:
+                !occupant &&
+                !myCheckIn &&
+                Boolean(myEnrollmentId) &&
+                !mySeatSet.has(seat.id),
             };
           }}
         />
@@ -319,6 +350,14 @@ export function CheckInLive({
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-3 w-3 rounded-sm border bg-card" /> Open
           </span>
+          {!myCheckIn && myEnrollmentId && (
+            <span className="flex items-center gap-1.5">
+              <span className="relative inline-block h-3 w-3 rounded-sm border border-primary/40 bg-card">
+                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-primary/70" />
+              </span>{" "}
+              New to you (+1)
+            </span>
+          )}
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-3 w-3 rounded-sm bg-muted-foreground/20" /> Taken
           </span>
