@@ -1,0 +1,164 @@
+"use server";
+
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isConfigured } from "@/lib/env";
+import { encryptSecret } from "@/lib/aicrypto";
+import { normalizeCanvasBaseUrl } from "@/lib/canvasurl";
+import {
+  fetchTeacherCourses,
+  resolveCanvasCreds,
+  validateCanvasToken,
+  type CanvasTeacherCourse,
+} from "@/server/canvascreds";
+import type { ActionResult } from "@/server/actions/auth";
+
+/**
+ * Canvas connection settings — each professor connects their own Canvas
+ * access token (the env token only saw the founder's courses). Tokens are
+ * validated live, encrypted at rest, and only their last 4 characters ever
+ * return to a client.
+ */
+
+async function requireProfessor() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { user: null };
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id, role")
+    .eq("id", user.id)
+    .single();
+  if (!profile || profile.role !== "professor") return { user: null };
+  return { user };
+}
+
+export interface CanvasConnectionView {
+  connected: boolean;
+  /** "professor" = own vaulted token; "env" = server fallback (founder). */
+  source: "professor" | "env" | null;
+  baseUrl: string;
+  tokenLast4: string;
+  connectedName: string | null;
+}
+
+/** Current connection state for the signed-in professor (never the token). */
+export async function getCanvasConnection(): Promise<CanvasConnectionView> {
+  const empty: CanvasConnectionView = {
+    connected: false,
+    source: null,
+    baseUrl: "",
+    tokenLast4: "",
+    connectedName: null,
+  };
+  const { user } = await requireProfessor();
+  if (!user) return empty;
+  if (isConfigured.supabaseAdmin && isConfigured.keyVault) {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("professor_canvas")
+      .select("base_url, token_last4, connected_name")
+      .eq("profile_id", user.id)
+      .maybeSingle();
+    if (data) {
+      return {
+        connected: true,
+        source: "professor",
+        baseUrl: data.base_url,
+        tokenLast4: data.token_last4,
+        connectedName: data.connected_name,
+      };
+    }
+  }
+  if (isConfigured.canvas) {
+    const creds = await resolveCanvasCreds(user.id);
+    if (creds?.source === "env") {
+      return {
+        connected: true,
+        source: "env",
+        baseUrl: creds.baseUrl,
+        tokenLast4: "",
+        connectedName: null,
+      };
+    }
+  }
+  return empty;
+}
+
+/** Connect (or replace) a Canvas token. Validates against Canvas first. */
+export async function saveCanvasConnection(input: {
+  baseUrl: string;
+  token: string;
+}): Promise<ActionResult<{ name: string }>> {
+  const { user } = await requireProfessor();
+  if (!user) return { ok: false, error: "Professors only." };
+  if (!isConfigured.supabaseAdmin || !isConfigured.keyVault) {
+    return {
+      ok: false,
+      error: "The key vault isn't configured on this server (APP_ENCRYPTION_KEY).",
+    };
+  }
+  const baseUrl = normalizeCanvasBaseUrl(input.baseUrl);
+  if (!baseUrl) {
+    return {
+      ok: false,
+      error:
+        'That web address doesn\'t look right — it\'s usually "yourschool.instructure.com".',
+    };
+  }
+  const token = input.token.trim();
+  if (token.length < 10 || /\s/.test(token)) {
+    return { ok: false, error: "That doesn't look like a Canvas access token." };
+  }
+  const check = await validateCanvasToken(baseUrl, token);
+  if (!check.ok) return { ok: false, error: check.error };
+
+  const admin = createAdminClient();
+  const { error } = await admin.from("professor_canvas").upsert(
+    {
+      profile_id: user.id,
+      base_url: baseUrl,
+      token_ciphertext: encryptSecret(token),
+      token_last4: token.slice(-4),
+      connected_name: check.name,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "profile_id" }
+  );
+  if (error) return { ok: false, error: "Couldn't save the connection — try again." };
+  return { ok: true, data: { name: check.name } };
+}
+
+/** Remove the stored Canvas token. */
+export async function disconnectCanvas(): Promise<ActionResult> {
+  const { user } = await requireProfessor();
+  if (!user || !isConfigured.supabaseAdmin) {
+    return { ok: false, error: "Professors only." };
+  }
+  const admin = createAdminClient();
+  await admin.from("professor_canvas").delete().eq("profile_id", user.id);
+  return { ok: true };
+}
+
+/** Courses the professor teaches, for the pick-a-course sync list. */
+export async function listCanvasCourses(): Promise<
+  ActionResult<{ courses: CanvasTeacherCourse[] }>
+> {
+  const { user } = await requireProfessor();
+  if (!user) return { ok: false, error: "Professors only." };
+  const creds = await resolveCanvasCreds(user.id);
+  if (!creds) {
+    return { ok: false, error: "Connect your Canvas account first." };
+  }
+  try {
+    const courses = await fetchTeacherCourses(creds);
+    return { ok: true, data: { courses } };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Couldn't list your Canvas courses.",
+    };
+  }
+}

@@ -45,14 +45,16 @@ You already created the "Class Act" project at supabase.com. Now:
    `0008_roster_phonetics.sql`, `0009_projects.sql`,
    `0010_exercises.sql`, `0011_rooms.sql`, `0012_schedule.sql`,
    `0013_assignments.sql`, `0014_shoutouts_participation.sql`,
-   `0015_byok_billing.sql`, then `0016_lecture_pause.sql` (order matters).
-   Each should say "Success".
+   `0015_byok_billing.sql`, `0016_lecture_pause.sql`, then
+   `0017_canvas_connections.sql` (order matters). Each should say "Success".
    *(0011 adds seat geometry + the shared room database; 0012 adds the
    class schedule that auto-opens check-in; 0013 adds Tasty Grading; 0014
    adds shout-outs + the professor's participation cockpit; 0015 adds the
    BYOK key vault + billing flags; 0016 adds lecture pause windows so
-   professor-sanctioned browsing never dings focus scores — the app
-   queries these columns, so it breaks without them.)* After 0015, mark
+   professor-sanctioned browsing never dings focus scores; 0017 adds the
+   per-professor Canvas token vault (professors connect their own token in
+   Setup → Roster; the env CANVAS_* pair becomes a founder fallback) — the
+   app queries these columns, so it breaks without them.)* After 0015, mark
    your own account founder so
    your courses keep using the env OpenRouter key:
    `update profiles set founder = true where id = '<your-user-uuid>';`

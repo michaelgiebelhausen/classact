@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
+import { getCanvasConnection } from "@/server/actions/canvassettings";
 import type { RoomLayout } from "@/lib/roomlayout";
 import type { RoomLocation } from "@/server/actions/rooms";
 
@@ -27,6 +28,7 @@ export default async function CourseSetupPage({
   if (!course) notFound();
   if (course.professor_id !== profile.id) redirect(`/course/${courseId}`);
 
+  const canvasConnection = await getCanvasConnection();
   const [{ count: seatCount }, { data: enrollments }] = await Promise.all([
     supabase
       .from("seats")
@@ -124,6 +126,7 @@ export default async function CourseSetupPage({
         }}
         enrollments={enrollments ?? []}
         siteUrl={env.siteUrl}
+        canvasConnection={canvasConnection}
       />
     </div>
   );

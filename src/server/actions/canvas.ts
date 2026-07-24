@@ -6,7 +6,8 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PHOTO_BUCKET } from "@/lib/storage";
-import { env, isConfigured } from "@/lib/env";
+import { isConfigured } from "@/lib/env";
+import { resolveCanvasCreds, type CanvasCreds } from "@/server/canvascreds";
 import { phoneticsForNames } from "@/server/phonetics";
 import type { ActionResult } from "@/server/actions/auth";
 
@@ -72,12 +73,15 @@ async function downloadImage(
  * token. Follows pagination. `withPhoto` counts students whose Canvas avatar
  * looks like a real photo rather than the generic default.
  */
-async function fetchCanvasRoster(canvasCourseId: string): Promise<{
+async function fetchCanvasRoster(
+  canvasCourseId: string,
+  creds: CanvasCreds
+): Promise<{
   students: CanvasStudent[];
   noEmail: number;
   withPhoto: number;
 }> {
-  const base = env.canvasBaseUrl!.replace(/\/+$/, "");
+  const base = creds.baseUrl.replace(/\/+$/, "");
   let url:
     | string
     | null = `${base}/api/v1/courses/${encodeURIComponent(canvasCourseId)}/users?enrollment_type[]=student&include[]=email&include[]=avatar_url&per_page=100`;
@@ -91,7 +95,7 @@ async function fetchCanvasRoster(canvasCourseId: string): Promise<{
     pages++;
     const res = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${env.canvasToken}`,
+        Authorization: `Bearer ${creds.token}`,
         Accept: "application/json",
       },
       cache: "no-store",
@@ -152,14 +156,6 @@ export async function syncCanvasRoster(input: {
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0].message };
   }
-  if (!isConfigured.canvas) {
-    return {
-      ok: false,
-      error:
-        "Canvas isn't connected yet. Add CANVAS_BASE_URL and CANVAS_API_TOKEN to .env.local (see HANDOFF.md).",
-    };
-  }
-
   const supabase = await createClient();
   const {
     data: { user },
@@ -176,13 +172,22 @@ export async function syncCanvasRoster(input: {
     return { ok: false, error: "Only the course owner can sync the roster." };
   }
 
+  // The professor's own vaulted Canvas token (env pair = founder fallback).
+  const creds = await resolveCanvasCreds(user.id);
+  if (!creds) {
+    return {
+      ok: false,
+      error: "Connect your Canvas account first — the Connect Canvas card above walks you through it.",
+    };
+  }
+
   let roster: {
     students: CanvasStudent[];
     noEmail: number;
     withPhoto: number;
   };
   try {
-    roster = await fetchCanvasRoster(parsed.data.canvasCourseId);
+    roster = await fetchCanvasRoster(parsed.data.canvasCourseId, creds);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Canvas sync failed." };
   }

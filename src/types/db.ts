@@ -50,6 +50,15 @@ export type ProfessorAiRow = {
   updated_at: string
 }
 
+export type ProfessorCanvasRow = {
+  profile_id: string
+  base_url: string
+  token_ciphertext: string
+  token_last4: string
+  connected_name: string | null
+  updated_at: string
+}
+
 export type CourseRow = {
   id: string
   professor_id: string
@@ -598,6 +607,7 @@ export type Database = {
       participation_comparisons: TableShape<ParticipationComparisonRow>
       student_flags: TableShape<StudentFlagRow>
       professor_ai: TableShape<ProfessorAiRow>
+      professor_canvas: TableShape<ProfessorCanvasRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

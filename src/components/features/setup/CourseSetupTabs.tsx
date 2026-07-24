@@ -24,7 +24,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { updateIcebreakerFields, updateSchedule } from "@/server/actions/courses";
-import { syncCanvasRoster } from "@/server/actions/canvas";
+import type { CanvasConnectionView } from "@/server/actions/canvassettings";
+import { CanvasSync } from "@/components/features/setup/CanvasSync";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { RoomDesigner } from "@/components/features/setup/RoomDesigner";
 import type { RoomLayout } from "@/lib/roomlayout";
@@ -61,6 +62,7 @@ interface Props {
   schedule: ScheduleValue;
   enrollments: EnrollmentItem[];
   siteUrl: string;
+  canvasConnection: CanvasConnectionView;
 }
 
 export function CourseSetupTabs({
@@ -69,6 +71,7 @@ export function CourseSetupTabs({
   schedule,
   enrollments,
   siteUrl,
+  canvasConnection,
 }: Props) {
   return (
     <Tabs defaultValue="seatmap" className="w-full">
@@ -92,7 +95,11 @@ export function CourseSetupTabs({
         <ScheduleTab courseId={course.id} initial={schedule} />
       </TabsContent>
       <TabsContent value="roster">
-        <RosterTab courseId={course.id} initial={enrollments} />
+        <RosterTab
+          courseId={course.id}
+          initial={enrollments}
+          canvasConnection={canvasConnection}
+        />
       </TabsContent>
       <TabsContent value="icebreakers">
         <IcebreakerTab courseId={course.id} initialKeys={course.icebreaker_fields} />
@@ -238,45 +245,15 @@ function ScheduleTab({
 function RosterTab({
   courseId,
   initial,
+  canvasConnection,
 }: {
   courseId: string;
   initial: EnrollmentItem[];
+  canvasConnection: CanvasConnectionView;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
-  const [canvasId, setCanvasId] = useState("");
-  const [syncing, setSyncing] = useState(false);
-
-  async function handleCanvasSync() {
-    if (!canvasId.trim()) return;
-    setSyncing(true);
-    const result = await syncCanvasRoster({
-      courseId,
-      canvasCourseId: canvasId.trim(),
-    });
-    setSyncing(false);
-    if (result.ok && result.data) {
-      toast.success(
-        `Synced ${result.data.imported} student(s) from Canvas${
-          result.data.skipped ? `, skipped ${result.data.skipped} already added` : ""
-        }.`
-      );
-      if (result.data.photosStored > 0) {
-        toast.message(
-          `Ported ${result.data.photosStored} Canvas photo(s) — faces show in the name games, directory, and seat map now.`
-        );
-      }
-      if (result.data.noEmail > 0) {
-        toast.message(
-          `${result.data.noEmail} student(s) had no shared email and were skipped.`
-        );
-      }
-      router.refresh();
-    } else {
-      toast.error(result.ok ? "Sync failed." : result.error);
-    }
-  }
 
   async function handleFile(file: File) {
     setImporting(true);
@@ -306,11 +283,13 @@ function RosterTab({
       <CardHeader>
         <CardTitle>Roster</CardTitle>
         <CardDescription>
-          Upload a CSV with name and email columns — export it straight from
-          Canvas or Blackboard.
+          Sync straight from Canvas (names, emails, photos) — or upload a CSV
+          with name and email columns.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <CanvasSync courseId={courseId} connection={canvasConnection} />
+
         <div>
           <input
             ref={fileRef}
@@ -323,35 +302,13 @@ function RosterTab({
               e.target.value = "";
             }}
           />
-          <Button onClick={() => fileRef.current?.click()} disabled={importing}>
-            {importing ? "Importing…" : "Upload roster CSV"}
+          <Button
+            variant="outline"
+            onClick={() => fileRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? "Importing…" : "Or upload a roster CSV"}
           </Button>
-        </div>
-
-        <div className="grid gap-2 rounded-lg border border-dashed p-4">
-          <Label htmlFor="canvasId">Or sync from Canvas</Label>
-          <p className="text-sm text-muted-foreground">
-            Paste your Canvas course ID — the number in your course URL, e.g.{" "}
-            <span className="font-mono">…/courses/</span>
-            <span className="font-mono font-semibold">123456</span>.
-          </p>
-          <div className="flex gap-2">
-            <Input
-              id="canvasId"
-              inputMode="numeric"
-              placeholder="123456"
-              value={canvasId}
-              onChange={(e) => setCanvasId(e.target.value.replace(/[^0-9]/g, ""))}
-              className="max-w-[160px] font-mono"
-            />
-            <Button
-              variant="outline"
-              onClick={handleCanvasSync}
-              disabled={syncing || !canvasId}
-            >
-              {syncing ? "Syncing…" : "Sync from Canvas"}
-            </Button>
-          </div>
         </div>
 
         {initial.length === 0 ? (
