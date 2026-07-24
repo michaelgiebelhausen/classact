@@ -181,6 +181,16 @@ looks like — and hold themselves to it."
 5. **Student report + metrics + landing** — full report, My Metrics /
    work-readiness integration, homepage section.
 
+## Multi-part assignments (decision, Mike 2026-07-24)
+
+**One assignment = one submitted PDF = one taste file** — enforced by
+schema (unique submission per student per assignment; re-upload replaces)
+and stated in the create + submission UI copy. Peer pairs are drawn only
+within one assignment, so judges always compare like with like. A
+four-part assignment is published as four assignments (each with its own
+taste file, emergent rubric, and peer round) or combined by students into
+a single PDF when it's really one deliverable. No multi-file upload.
+
 ## Known edges (accepted for v1)
 
 - PDF name anonymity is honest-effort (instruction, not stripping).

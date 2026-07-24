@@ -187,9 +187,11 @@ export function SubmissionEditor({
             {submittedAt ? "Your submission" : "Submit your work"}
           </CardTitle>
           <CardDescription>
-            One PDF, up to 20 MB. Don&apos;t put your name in the file —
-            your work is judged anonymously. Resubmitting before the deadline
-            replaces the file (your last edit is what counts for timeliness).
+            One PDF, up to 20 MB — your entire submission for this
+            assignment, so combine any parts into a single file. Don&apos;t
+            put your name in it — your work is judged anonymously.
+            Resubmitting before the deadline replaces the file (your last
+            edit is what counts for timeliness).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">

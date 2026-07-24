@@ -83,7 +83,10 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
         <CardDescription>
           Upload the brief and set the deadline — the AI drafts each
           student&apos;s starting taste file, and grading runs itself from
-          there. You get the final say before anything publishes.
+          there. You get the final say before anything publishes. One
+          assignment = one submitted PDF with one taste file — for
+          multi-part work, publish each part as its own assignment so every
+          part gets its own standard, rubric, and peer round.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
