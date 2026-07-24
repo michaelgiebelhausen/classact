@@ -27,18 +27,24 @@ function pdfPart(filename: string, base64: string) {
   };
 }
 
+/** BYOK: every call carries the paying professor's key + chosen model. */
+export interface AiCallCreds {
+  apiKey: string;
+  model: string;
+}
+
 async function callModel(
   messages: unknown[],
   timeoutMs: number,
-  label: string
+  label: string,
+  creds: AiCallCreds
 ): Promise<AiResult<string>> {
-  const apiKey = env.openrouterApiKey;
+  const apiKey = creds.apiKey;
   if (!apiKey) {
-    console.error(`[tastyai:${label}] OPENROUTER_API_KEY is not set.`);
+    console.error(`[tastyai:${label}] called without credentials.`);
     return {
       ok: false,
-      error:
-        "AI grading isn't configured yet — add OPENROUTER_API_KEY to .env.local and restart the app.",
+      error: "AI grading needs an OpenRouter key — connect yours in AI Settings.",
     };
   }
   let response: Response;
@@ -53,7 +59,7 @@ async function callModel(
         "X-Title": "ClassAct",
       },
       body: JSON.stringify({
-        model: env.openrouterModel,
+        model: creds.model,
         messages,
         temperature: 0.3,
       }),
@@ -110,10 +116,13 @@ function cleanCriteria(raw: unknown, max = 10): TasteCriterion[] {
 }
 
 /** AI-drafted starting taste file — the student's to sharpen, not to keep. */
-export async function generateDefaultTaste(input: {
-  assignmentTitle: string;
-  briefPdfBase64: string | null;
-}): Promise<AiResult<TasteDraft>> {
+export async function generateDefaultTaste(
+  input: {
+    assignmentTitle: string;
+    briefPdfBase64: string | null;
+  },
+  creds: AiCallCreds
+): Promise<AiResult<TasteDraft>> {
   const system = [
     "You draft a starting 'taste file' for a college assignment: the standards a student will hold their own work to.",
     "Write 5-7 criteria. Each: a short name and 1-2 sentences describing what EXCELLENT looks like for this specific assignment — concrete and checkable, not platitudes.",
@@ -131,7 +140,8 @@ export async function generateDefaultTaste(input: {
       { role: "user", content },
     ],
     90_000,
-    "tastegen"
+    "tastegen",
+    creds
   );
   if (!result.ok) return result;
   const parsed = parseJson<{ criteria?: unknown; barStatement?: unknown }>(
@@ -165,15 +175,18 @@ export interface EmergentTheme {
   items: Array<{ quote: string; enrollment_id: string | null }>;
 }
 
-export async function emergeRubric(input: {
-  assignmentTitle: string;
-  /** enrollmentId null = the professor's benchmark materials. */
-  tasteFiles: Array<{
-    enrollmentId: string | null;
-    criteria: TasteCriterion[];
-    barStatement: string;
-  }>;
-}): Promise<AiResult<EmergentTheme[]>> {
+export async function emergeRubric(
+  input: {
+    assignmentTitle: string;
+    /** enrollmentId null = the professor's benchmark materials. */
+    tasteFiles: Array<{
+      enrollmentId: string | null;
+      criteria: TasteCriterion[];
+      barStatement: string;
+    }>;
+  },
+  creds: AiCallCreds
+): Promise<AiResult<EmergentTheme[]>> {
   const corpus = input.tasteFiles
     .map((tf, i) => {
       const who = tf.enrollmentId === null ? "PROFESSOR" : `S${i}`;
@@ -205,7 +218,8 @@ export async function emergeRubric(input: {
       },
     ],
     150_000,
-    "rubricgen"
+    "rubricgen",
+    creds
   );
   if (!result.ok) return result;
   const parsed = parseJson<{ themes?: unknown }>(result.data, "rubricgen");
@@ -253,10 +267,13 @@ export async function emergeRubric(input: {
 // ---------------------------------------------------------------------------
 
 /** What a lazy prompt-paste would produce — the reference for "generic". */
-export async function generateBaselines(input: {
-  assignmentTitle: string;
-  briefPdfBase64: string | null;
-}): Promise<AiResult<string[]>> {
+export async function generateBaselines(
+  input: {
+    assignmentTitle: string;
+    briefPdfBase64: string | null;
+  },
+  creds: AiCallCreds
+): Promise<AiResult<string[]>> {
   const content: unknown[] = [
     {
       type: "text",
@@ -266,7 +283,7 @@ export async function generateBaselines(input: {
   if (input.briefPdfBase64) content.push(pdfPart("assignment.pdf", input.briefPdfBase64));
   const results = await Promise.all(
     [0, 1, 2].map(() =>
-      callModel([{ role: "user", content }], 120_000, "baseline")
+      callModel([{ role: "user", content }], 120_000, "baseline", creds)
     )
   );
   const texts = results
@@ -297,13 +314,16 @@ function clampScore(value: unknown): number {
   return Math.min(10, Math.max(0, Math.round(n * 10) / 10));
 }
 
-export async function scoreSubmission(input: {
-  assignmentTitle: string;
-  submissionPdfBase64: string;
-  themes: Array<{ id: string; name: string; description: string; itemQuotes: string[] }>;
-  ownTaste: { criteria: TasteCriterion[]; barStatement: string } | null;
-  baselines: string[];
-}): Promise<AiResult<SubmissionScore>> {
+export async function scoreSubmission(
+  input: {
+    assignmentTitle: string;
+    submissionPdfBase64: string;
+    themes: Array<{ id: string; name: string; description: string; itemQuotes: string[] }>;
+    ownTaste: { criteria: TasteCriterion[]; barStatement: string } | null;
+    baselines: string[];
+  },
+  creds: AiCallCreds
+): Promise<AiResult<SubmissionScore>> {
   const rubric = input.themes
     .map(
       (t, i) =>
@@ -344,7 +364,8 @@ export async function scoreSubmission(input: {
       },
     ],
     150_000,
-    "scoregen"
+    "scoregen",
+    creds
   );
   if (!result.ok) return result;
   const parsed = parseJson<Record<string, unknown>>(result.data, "scoregen");

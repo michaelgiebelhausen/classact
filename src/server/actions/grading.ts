@@ -23,6 +23,7 @@ import {
   generateBaselines,
   scoreSubmission,
 } from "@/server/tastyai";
+import { resolveCourseAi, type AiTask } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
 import type { AssignmentState, TasteCriterion } from "@/types/db";
 
@@ -171,7 +172,11 @@ export async function advanceAnalysis(assignmentId: string): Promise<
   if (new Date(assignment.deadline).getTime() > Date.now()) {
     return { ok: false, error: "The deadline hasn't passed yet." };
   }
-  if (assignment.state !== "open" && assignment.state !== "analyzing") {
+  if (
+    assignment.state !== "open" &&
+    assignment.state !== "analyzing" &&
+    assignment.state !== "awaiting_key"
+  ) {
     return {
       ok: true,
       data: { phase: "done", state: assignment.state, scored: 0, total: 0 },
@@ -221,6 +226,28 @@ export async function advanceAnalysis(assignmentId: string): Promise<
     .eq("assignment_id", assignmentId);
   const total = submissions?.length ?? 0;
 
+  // BYOK preflight: the AI phases run on the course owner's key. No working
+  // key → pause in awaiting_key (resumes automatically once connected; the
+  // saveAnalysis above already flipped us back to 'analyzing' to try).
+  const taskForPhase: AiTask | null =
+    phase === "rubric"
+      ? "rubric"
+      : phase === "baselines"
+        ? "baseline"
+        : phase === "scoring"
+          ? "scoring"
+          : null;
+  const creds = taskForPhase
+    ? await resolveCourseAi(assignment.course_id, taskForPhase)
+    : null;
+  if (taskForPhase && !creds) {
+    await done({}, "awaiting_key");
+    return {
+      ok: true,
+      data: { phase, state: "awaiting_key", scored: 0, total },
+    };
+  }
+
   try {
     if (phase === "rubric") {
       const { data: tasteRows } = await admin
@@ -236,10 +263,10 @@ export async function advanceAnalysis(assignmentId: string): Promise<
         await done({ error: "No submissions to analyze." }, "peer_review");
         return { ok: true, data: { phase: "done", state: "peer_review", scored: 0, total } };
       }
-      const rubric = await emergeRubric({
-        assignmentTitle: assignment.title,
-        tasteFiles: corpus,
-      });
+      const rubric = await emergeRubric(
+        { assignmentTitle: assignment.title, tasteFiles: corpus },
+        creds!
+      );
       if (!rubric.ok) {
         await done({});
         return { ok: false, error: rubric.error };
@@ -266,10 +293,10 @@ export async function advanceAnalysis(assignmentId: string): Promise<
       const briefBase64 = assignment.storage_path
         ? await downloadBase64(admin, assignment.storage_path)
         : null;
-      const baselines = await generateBaselines({
-        assignmentTitle: assignment.title,
-        briefPdfBase64: briefBase64,
-      });
+      const baselines = await generateBaselines(
+        { assignmentTitle: assignment.title, briefPdfBase64: briefBase64 },
+        creds!
+      );
       await done({
         phase: "scoring",
         baselines: baselines.ok ? baselines.data : [],
@@ -324,13 +351,16 @@ export async function advanceAnalysis(assignmentId: string): Promise<
       for (const sub of pending.slice(0, SCORE_BATCH)) {
         const pdf = await downloadBase64(admin, sub.storage_path);
         if (!pdf) continue;
-        const score = await scoreSubmission({
-          assignmentTitle: assignment.title,
-          submissionPdfBase64: pdf,
-          themes: themeInputs,
-          ownTaste: tasteByEnrollment.get(sub.enrollment_id) ?? null,
-          baselines: analysis.baselines ?? [],
-        });
+        const score = await scoreSubmission(
+          {
+            assignmentTitle: assignment.title,
+            submissionPdfBase64: pdf,
+            themes: themeInputs,
+            ownTaste: tasteByEnrollment.get(sub.enrollment_id) ?? null,
+            baselines: analysis.baselines ?? [],
+          },
+          creds!
+        );
         if (!score.ok) continue; // retried on the next crank
         await admin.from("ai_scores").insert({
           assignment_id: assignmentId,

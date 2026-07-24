@@ -31,7 +31,23 @@ export type ProfileRow = {
   name_phonetic: string | null
   onboarding_complete: boolean
   university_id: string | null
+  /** Founder accounts run course AI on the system env key. */
+  founder: boolean
+  /** Comped accounts bypass the billing gate. */
+  comp: boolean
+  stripe_customer_id: string | null
+  subscription_status: string | null
   created_at: string
+}
+
+/** BYOK vault row — service-role access only (RLS has no policies). */
+export type ProfessorAiRow = {
+  id: string
+  profile_id: string
+  key_ciphertext: string
+  key_last4: string
+  models: Record<string, unknown>
+  updated_at: string
 }
 
 export type CourseRow = {
@@ -94,6 +110,7 @@ export type StudentFlagRow = {
 export type AssignmentState =
   | "open"
   | "analyzing"
+  | "awaiting_key"
   | "peer_review"
   | "finalizing"
   | "published"
@@ -576,6 +593,7 @@ export type Database = {
       shout_outs: TableShape<ShoutOutRow>
       participation_comparisons: TableShape<ParticipationComparisonRow>
       student_flags: TableShape<StudentFlagRow>
+      professor_ai: TableShape<ProfessorAiRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

@@ -20,7 +20,14 @@ const PHASE_LABELS: Record<string, string> = {
   done: "Done",
 };
 
-export function AnalysisRunner({ assignmentId }: { assignmentId: string }) {
+export function AnalysisRunner({
+  assignmentId,
+  currentState = "analyzing",
+}: {
+  assignmentId: string;
+  /** The state the page rendered under — refresh only on transitions. */
+  currentState?: string;
+}) {
   const router = useRouter();
   const [phase, setPhase] = useState("rubric");
   const [progress, setProgress] = useState<{ scored: number; total: number }>({
@@ -48,11 +55,15 @@ export function AnalysisRunner({ assignmentId }: { assignmentId: string }) {
         const data = result.data!;
         setPhase(data.phase);
         if (data.total >= 0) setProgress({ scored: data.scored, total: data.total });
-        if (data.state !== "analyzing") {
+        if (data.state !== "analyzing" && data.state !== currentState) {
+          // Transitioned (e.g. → peer_review, or → awaiting_key): re-render.
           router.refresh();
           break;
         }
-        await new Promise((r) => setTimeout(r, 1500));
+        // Paused on a missing key: retry slowly; otherwise keep cranking.
+        await new Promise((r) =>
+          setTimeout(r, data.state === "awaiting_key" ? 30_000 : 1500)
+        );
       }
       running.current = false;
     }
@@ -60,7 +71,7 @@ export function AnalysisRunner({ assignmentId }: { assignmentId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [assignmentId, router]);
+  }, [assignmentId, currentState, router]);
 
   return (
     <Card>

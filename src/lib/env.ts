@@ -28,6 +28,13 @@ export const env = {
   posthogHost:
     orUndef(process.env.NEXT_PUBLIC_POSTHOG_HOST) ?? "https://us.i.posthog.com",
   sentryDsn: orUndef(process.env.NEXT_PUBLIC_SENTRY_DSN),
+  // BYOK vault: 64 hex chars (32 bytes) for AES-256-GCM at-rest encryption.
+  appEncryptionKey: orUndef(process.env.APP_ENCRYPTION_KEY),
+  // Billing (Stripe). BILLING_ENABLED="true" turns the course-creation gate on.
+  stripeSecretKey: orUndef(process.env.STRIPE_SECRET_KEY),
+  stripeWebhookSecret: orUndef(process.env.STRIPE_WEBHOOK_SECRET),
+  stripePriceId: orUndef(process.env.STRIPE_PRICE_ID),
+  billingEnabled: process.env.BILLING_ENABLED === "true",
 } as const
 
 export const isConfigured = {
@@ -38,12 +45,16 @@ export const isConfigured = {
   ai: Boolean(env.openrouterApiKey),
   analytics: Boolean(env.posthogKey),
   sentry: Boolean(env.sentryDsn),
+  keyVault: Boolean(env.appEncryptionKey),
+  billing: Boolean(
+    env.stripeSecretKey && env.stripeWebhookSecret && env.stripePriceId
+  ),
 } as const
 
 /** Throw only when a piece of server code genuinely cannot proceed without a key. */
 export function requireEnv<K extends keyof typeof env>(key: K): string {
   const value = env[key]
-  if (!value) {
+  if (typeof value !== "string" || !value) {
     throw new Error(
       `Missing required environment variable for "${String(key)}". ` +
         `Add it to .env.local (see .env.example) or your Vercel project settings.`

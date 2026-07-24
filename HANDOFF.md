@@ -44,12 +44,29 @@ You already created the "Class Act" project at supabase.com. Now:
    `0006_participate.sql`, `0007_name_phonetics.sql`,
    `0008_roster_phonetics.sql`, `0009_projects.sql`,
    `0010_exercises.sql`, `0011_rooms.sql`, `0012_schedule.sql`,
-   `0013_assignments.sql`, then `0014_shoutouts_participation.sql` (order
-   matters). Each should say "Success". *(0011 adds seat geometry + the
-   shared room database; 0012 adds the class schedule that auto-opens
-   check-in; 0013 adds Tasty Grading; 0014 adds shout-outs + the
-   professor's participation cockpit — the app queries these columns, so
-   it breaks without them.)*
+   `0013_assignments.sql`, `0014_shoutouts_participation.sql`, then
+   `0015_byok_billing.sql` (order matters). Each should say "Success".
+   *(0011 adds seat geometry + the shared room database; 0012 adds the
+   class schedule that auto-opens check-in; 0013 adds Tasty Grading; 0014
+   adds shout-outs + the professor's participation cockpit; 0015 adds the
+   BYOK key vault + billing flags — the app queries these columns, so it
+   breaks without them.)* After 0015, mark your own account founder so
+   your courses keep using the env OpenRouter key:
+   `update profiles set founder = true where id = '<your-user-uuid>';`
+
+2b. **BYOK + billing setup (docs/byok-billing-plan.md):**
+   - Generate `APP_ENCRYPTION_KEY` (64 hex chars) for `.env.local` / Vercel:
+     `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+     Professors' OpenRouter keys are AES-encrypted with it — losing/rotating
+     it means everyone re-enters their key.
+   - Stripe (only when you flip `BILLING_ENABLED=true`): create a $5/mo
+     recurring Price in the Stripe dashboard → set `STRIPE_PRICE_ID` and
+     `STRIPE_SECRET_KEY`. Add a webhook endpoint for
+     `<site>/api/stripe/webhook` sending `checkout.session.completed`,
+     `customer.subscription.updated`, `customer.subscription.deleted` →
+     set `STRIPE_WEBHOOK_SECRET`. Local dev:
+     `stripe listen --forward-to localhost:3000/api/stripe/webhook`.
+   - Comp a friendly professor: `update profiles set comp = true where id = '<uuid>';`
 3. **Check Realtime is on:** dashboard → Database → Replication → make sure
    the `supabase_realtime` publication includes `check_ins`, `lectures`,
    `focus_events`, `poll_rounds`, `poll_answers`, and `poll_pairs`

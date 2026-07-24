@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { resolveSettings } from "@/lib/tastegrading";
 import { generateDefaultTaste, type TasteDraft } from "@/server/tastyai";
+import { resolveCourseAi } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
 import type { TasteCriterion } from "@/types/db";
 
@@ -99,11 +100,17 @@ export async function createAssignment(input: {
       briefBase64 = Buffer.from(await blob.arrayBuffer()).toString("base64");
     }
   }
-  const draft = await generateDefaultTaste({
-    assignmentTitle: title,
-    briefPdfBase64: briefBase64,
-  });
-  if (draft.ok) defaultTaste = draft.data;
+  // BYOK: the draft runs on the course owner's key (founder falls back to
+  // the system key). No key → no draft; students start from a blank taste
+  // file and the professor sees a connect-your-key banner.
+  const creds = await resolveCourseAi(input.courseId, "taste");
+  if (creds) {
+    const draft = await generateDefaultTaste(
+      { assignmentTitle: title, briefPdfBase64: briefBase64 },
+      creds
+    );
+    if (draft.ok) defaultTaste = draft.data;
+  }
 
   const { data: created, error } = await supabase
     .from("assignments")

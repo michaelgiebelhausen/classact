@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { resolveCourseAi, scoringPricing } from "@/server/aicreds";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
@@ -87,6 +89,44 @@ export default async function AssignmentPage({
     );
   }
 
+  // ---------- Paused: no working AI key (BYOK) ----------
+  if (assignment.state === "awaiting_key") {
+    return (
+      <div className="grid gap-6">
+        {header}
+        {isProfessor ? (
+          <>
+            <Card className="border-primary/50">
+              <CardContent className="grid gap-2 py-8 text-center">
+                <p className="font-medium">
+                  Grading is paused — it needs your OpenRouter key.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Analysis runs on your own AI credits. Connect a key (or fix
+                  the current one) and this resumes exactly where it stopped —
+                  nothing is lost.
+                </p>
+                <p>
+                  <Link href="/settings/ai" className="font-medium text-primary underline">
+                    Open AI Settings
+                  </Link>
+                </p>
+              </CardContent>
+            </Card>
+            <AnalysisRunner assignmentId={assignmentId} currentState="awaiting_key" />
+          </>
+        ) : (
+          <Card>
+            <CardContent className="py-12 text-center text-muted-foreground">
+              The AI analysis starts once your professor completes setup —
+              check back soon.
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
   // ---------- Professor ----------
   if (isProfessor) {
     if (assignment.state === "open") {
@@ -101,9 +141,39 @@ export default async function AssignmentPage({
           .eq("assignment_id", assignmentId)
           .not("enrollment_id", "is", null),
       ]);
+      // BYOK preflight surface: key status + a rough scoring-cost preview.
+      const creds = await resolveCourseAi(courseId, "scoring");
+      const pricing = await scoringPricing(courseId);
+      // ~25k prompt + ~1.5k completion tokens per scored PDF (rule of thumb).
+      const estimate =
+        pricing && (submitted ?? 0) > 0
+          ? (submitted ?? 0) *
+            ((25_000 * pricing.prompt + 1_500 * pricing.completion) / 1_000_000)
+          : null;
       return (
         <div className="grid gap-6">
           {header}
+          {!creds && (
+            <Card className="border-primary/50">
+              <CardContent className="grid gap-1 py-6 text-center">
+                <p className="font-medium">
+                  Connect your OpenRouter key before the deadline.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  AI grading runs on your own credits — without a key, the
+                  analysis pauses at the deadline until you connect one.
+                </p>
+                <p>
+                  <Link
+                    href="/settings/ai"
+                    className="font-medium text-primary underline"
+                  >
+                    Open AI Settings
+                  </Link>
+                </p>
+              </CardContent>
+            </Card>
+          )}
           <Card>
             <CardContent className="grid gap-1 py-10 text-center">
               <p className="font-medium">
@@ -114,6 +184,12 @@ export default async function AssignmentPage({
                 builds the rubric, drafts the ranking, and opens peer
                 grading — nothing for you to do until then.
               </p>
+              {estimate !== null && pricing && (
+                <p className="text-sm text-muted-foreground">
+                  Estimated scoring cost so far: ≈ ${estimate.toFixed(2)} on{" "}
+                  <span className="font-mono">{pricing.model}</span>
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>

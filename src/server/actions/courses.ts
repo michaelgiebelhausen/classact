@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { env } from "@/lib/env";
 import { generateJoinCode } from "@/lib/joincode";
 import {
   createCourseSchema,
@@ -29,6 +30,23 @@ export async function createCourse(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in to create a course." };
+
+  // Billing gate ($5/mo, BILLING_ENABLED): founders and comped accounts
+  // pass free; students are never gated (they don't create courses).
+  if (env.billingEnabled) {
+    const { data: gateProfile } = await supabase
+      .from("profiles")
+      .select("founder, comp, subscription_status")
+      .eq("id", user.id)
+      .single();
+    const allowed =
+      gateProfile?.founder ||
+      gateProfile?.comp ||
+      gateProfile?.subscription_status === "active";
+    if (!allowed) {
+      return { ok: false, error: "billing_required" };
+    }
+  }
 
   // Promote to professor (idempotent).
   await supabase

@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { createCourse } from "@/server/actions/courses";
+import { startCheckout } from "@/server/actions/billing";
 
 export default function NewCoursePage() {
   const router = useRouter();
@@ -28,6 +29,16 @@ export default function NewCoursePage() {
     if (result.ok && result.data) {
       toast.success(`Course created — join code ${result.data.joinCode}`);
       router.push(`/course/${result.data.id}/setup`);
+    } else if (!result.ok && result.error === "billing_required") {
+      // $5/mo keeps the lights on — AI runs on your own OpenRouter credits.
+      toast.message("Running a course is $5/month — taking you to checkout.");
+      const checkout = await startCheckout();
+      if (checkout.ok && checkout.data) {
+        window.location.href = checkout.data.url;
+      } else {
+        setSaving(false);
+        toast.error(checkout.ok ? "Checkout unavailable." : checkout.error);
+      }
     } else {
       setSaving(false);
       toast.error(result.ok ? "Something went wrong." : result.error);

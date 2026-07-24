@@ -120,17 +120,18 @@ function validateQuestions(
 }
 
 export async function generateTpsQuestions(
-  input: QuestionGenInput
+  input: QuestionGenInput,
+  /** BYOK: the course owner's key + chosen model (falls back to env). */
+  creds?: { apiKey: string; model: string }
 ): Promise<GenResult> {
-  const apiKey = env.openrouterApiKey;
+  const apiKey = creds?.apiKey ?? env.openrouterApiKey;
+  const model = creds?.model ?? env.openrouterModel;
   if (!apiKey) {
-    console.error(
-      "[questiongen] OPENROUTER_API_KEY is not set in this server process — restart the dev server after editing .env.local."
-    );
+    console.error("[questiongen] no OpenRouter credentials for this call.");
     return {
       ok: false,
       error:
-        "AI generation isn't configured yet — add OPENROUTER_API_KEY to .env.local and restart the app.",
+        "AI generation needs an OpenRouter key — connect yours in AI Settings.",
     };
   }
 
@@ -159,7 +160,7 @@ export async function generateTpsQuestions(
         "X-Title": "ClassAct",
       },
       body: JSON.stringify({
-        model: env.openrouterModel,
+        model,
         messages: [
           { role: "system", content: buildSystemPrompt(input.pageCount) },
           { role: "user", content: userContent },

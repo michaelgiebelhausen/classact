@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { DECK_BUCKET } from "@/lib/storage";
 import { assignPairs, pairKey, tallyVotes } from "@/lib/participate";
 import { generateTpsQuestions } from "@/server/questiongen";
+import { resolveCourseAi } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
 import type { PollStage } from "@/types/db";
 
@@ -230,13 +231,25 @@ export async function generateDeckQuestions(
     }
   }
 
-  const result = await generateTpsQuestions({
-    deckTitle: deck.title,
-    pageCount: deck.page_count,
-    deckPdfBase64: deckPdf,
-    readingPdfBase64: readingPdf,
-    readingTitle: deck.reading_title,
-  });
+  // BYOK: question generation runs on the course owner's key.
+  const creds = await resolveCourseAi(courseId, "questions");
+  if (!creds) {
+    return {
+      ok: false,
+      error:
+        "AI generation needs an OpenRouter key — connect yours in AI Settings first.",
+    };
+  }
+  const result = await generateTpsQuestions(
+    {
+      deckTitle: deck.title,
+      pageCount: deck.page_count,
+      deckPdfBase64: deckPdf,
+      readingPdfBase64: readingPdf,
+      readingTitle: deck.reading_title,
+    },
+    creds
+  );
   if (!result.ok) return { ok: false, error: result.error };
 
   const rows = result.questions.map((q) => ({
