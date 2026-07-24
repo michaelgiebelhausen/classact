@@ -346,6 +346,9 @@ export type LectureDeckRow = {
   created_at: string
 }
 
+/** One professor-declared pause window; an open pause has end null. */
+export type LecturePause = { start: string; end: string | null }
+
 export type LectureRow = {
   id: string
   course_id: string
@@ -353,6 +356,7 @@ export type LectureRow = {
   current_page: number
   started_at: string
   ended_at: string | null
+  pauses: LecturePause[]
 }
 
 export type LectureNoteRow = {

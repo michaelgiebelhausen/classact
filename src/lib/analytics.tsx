@@ -16,6 +16,8 @@ export type AnalyticsEvent =
   | "game_played"
   | "deck_uploaded"
   | "lecture_started"
+  | "lecture_paused"
+  | "lecture_resumed"
   | "lecture_ended"
   | "lecture_focus_lost"
   | "reading_attached"

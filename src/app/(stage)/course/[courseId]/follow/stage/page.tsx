@@ -28,7 +28,7 @@ export default async function StagePage({
 
   const { data: lecture } = await supabase
     .from("lectures")
-    .select("id, deck_id, current_page")
+    .select("id, deck_id, current_page, pauses")
     .eq("course_id", courseId)
     .is("ended_at", null)
     .maybeSingle();
@@ -76,6 +76,7 @@ export default async function StagePage({
       deckKind={deck.kind}
       fileUrl={fileUrl}
       embedUrl={deck.embed_url}
+      initialPaused={(lecture.pauses ?? []).some((p) => p.end === null)}
       initialPoll={
         openRound
           ? {

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { DECK_BUCKET } from "@/lib/storage";
 import type { ActionResult } from "@/server/actions/auth";
+import type { LecturePause } from "@/types/db";
 
 const MAX_NOTE_CHARS = 100_000;
 
@@ -200,16 +201,91 @@ export async function setLecturePage(
   return { ok: true };
 }
 
-/** Professor: end the live lecture. */
+/**
+ * Professor: pause the live lecture — an official "go look it up" window.
+ * Student tab-aways that overlap a pause are excluded from focus scoring.
+ */
+export async function pauseLecture(
+  courseId: string,
+  lectureId: string
+): Promise<ActionResult<{ pauses: LecturePause[] }>> {
+  return setPauseState(courseId, lectureId, "pause");
+}
+
+/** Professor: resume from a pause — tab-aways count again. */
+export async function resumeLecture(
+  courseId: string,
+  lectureId: string
+): Promise<ActionResult<{ pauses: LecturePause[] }>> {
+  return setPauseState(courseId, lectureId, "resume");
+}
+
+async function setPauseState(
+  courseId: string,
+  lectureId: string,
+  action: "pause" | "resume"
+): Promise<ActionResult<{ pauses: LecturePause[] }>> {
+  const { supabase, error } = await requireProfessor(courseId);
+  if (error) return { ok: false, error };
+
+  const { data: lecture } = await supabase
+    .from("lectures")
+    .select("id, pauses")
+    .eq("id", lectureId)
+    .eq("course_id", courseId)
+    .is("ended_at", null)
+    .maybeSingle();
+  if (!lecture) return { ok: false, error: "No live lecture to pause." };
+
+  const pauses: LecturePause[] = lecture.pauses ?? [];
+  const open = pauses.length > 0 && pauses[pauses.length - 1].end === null;
+  // Idempotent: pausing while paused (or resuming while live) is a no-op.
+  if ((action === "pause") === open) return { ok: true, data: { pauses } };
+
+  const next: LecturePause[] =
+    action === "pause"
+      ? [...pauses, { start: new Date().toISOString(), end: null }]
+      : [
+          ...pauses.slice(0, -1),
+          { ...pauses[pauses.length - 1], end: new Date().toISOString() },
+        ];
+  const { error: updateError } = await supabase
+    .from("lectures")
+    .update({ pauses: next })
+    .eq("id", lectureId)
+    .eq("course_id", courseId)
+    .is("ended_at", null);
+  if (updateError) {
+    return {
+      ok: false,
+      error: action === "pause" ? "Couldn't pause." : "Couldn't resume.",
+    };
+  }
+  return { ok: true, data: { pauses: next } };
+}
+
+/** Professor: end the live lecture (closing any open pause with it). */
 export async function endLecture(
   courseId: string,
   lectureId: string
 ): Promise<ActionResult> {
   const { supabase, error } = await requireProfessor(courseId);
   if (error) return { ok: false, error };
+  const now = new Date().toISOString();
+  const { data: lecture } = await supabase
+    .from("lectures")
+    .select("id, pauses")
+    .eq("id", lectureId)
+    .eq("course_id", courseId)
+    .maybeSingle();
+  const pauses: LecturePause[] = lecture?.pauses ?? [];
+  const closed =
+    pauses.length > 0 && pauses[pauses.length - 1].end === null
+      ? [...pauses.slice(0, -1), { ...pauses[pauses.length - 1], end: now }]
+      : pauses;
   const { error: updateError } = await supabase
     .from("lectures")
-    .update({ ended_at: new Date().toISOString() })
+    .update({ ended_at: now, pauses: closed })
     .eq("id", lectureId)
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't end the lecture." };

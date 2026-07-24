@@ -19,6 +19,7 @@ export interface PollBroadcast {
 export type LectureSyncMessage =
   | { type: "page"; page: number }
   | { type: "poll"; poll: PollBroadcast | null }
+  | { type: "pause"; paused: boolean }
   | { type: "ended" };
 
 export function lectureChannelName(lectureId: string): string {

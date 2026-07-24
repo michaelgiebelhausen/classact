@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  effectiveAwayMs,
   formatAwayDuration,
+  isLecturePaused,
   summarizeFocus,
   summarizeFocusByEnrollment,
 } from "@/lib/focus";
@@ -83,6 +85,55 @@ describe("summarizeFocusByEnrollment", () => {
       awayMs: 60_000,
       isAway: true,
     });
+  });
+});
+
+describe("pause exclusion", () => {
+  it("a spell fully inside a pause costs nothing", () => {
+    const summary = summarizeFocus(
+      [ev("e1", "away", T1), ev("e1", "back", T2)],
+      new Date(T3),
+      [{ start: T0, end: T3 }]
+    );
+    expect(summary).toEqual({ awayCount: 0, awayMs: 0, isAway: false });
+  });
+
+  it("subtracts only the overlapping part of a pause", () => {
+    // Away T0→T2 (5m); paused T1→T2 — only the first 30s count.
+    const summary = summarizeFocus(
+      [ev("e1", "away", T0), ev("e1", "back", T2)],
+      new Date(T3),
+      [{ start: T1, end: T2 }]
+    );
+    expect(summary.awayCount).toBe(1);
+    expect(summary.awayMs).toBe(30_000);
+  });
+
+  it("treats an open pause as running to now", () => {
+    // Away T1→now(T3) entirely inside a pause opened at T0, never resumed.
+    const summary = summarizeFocus([ev("e1", "away", T1)], new Date(T3), [
+      { start: T0, end: null },
+    ]);
+    expect(summary.awayCount).toBe(0);
+    expect(summary.awayMs).toBe(0);
+    expect(summary.isAway).toBe(true);
+  });
+
+  it("without pauses behaves exactly as before", () => {
+    const events = [ev("e1", "away", T0), ev("e1", "back", T1)];
+    expect(summarizeFocus(events, new Date(T3), [])).toEqual(
+      summarizeFocus(events, new Date(T3))
+    );
+  });
+
+  it("effectiveAwayMs and isLecturePaused agree on an open pause", () => {
+    const pauses = [{ start: T1, end: null }];
+    expect(isLecturePaused(pauses)).toBe(true);
+    expect(isLecturePaused([{ start: T0, end: T1 }])).toBe(false);
+    // Away T0→T2 with pause open since T1 (now = T2): only T0→T1 counts.
+    expect(
+      effectiveAwayMs(Date.parse(T0), Date.parse(T2), pauses, Date.parse(T2))
+    ).toBe(30_000);
   });
 });
 

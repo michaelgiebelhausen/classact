@@ -48,7 +48,7 @@ export default async function FollowAlongPage({
   // The live lecture (if any) and its deck.
   const { data: lecture } = await supabase
     .from("lectures")
-    .select("id, deck_id, current_page, started_at")
+    .select("id, deck_id, current_page, started_at, pauses")
     .eq("course_id", courseId)
     .is("ended_at", null)
     .maybeSingle();
@@ -142,7 +142,7 @@ export default async function FollowAlongPage({
       .select("enrollment_id, event_type, occurred_at")
       .eq("lecture_id", lecture.id);
     const initialFocus: FocusStateInput[] = Array.from(
-      summarizeFocusByEnrollment(focusEvents ?? [])
+      summarizeFocusByEnrollment(focusEvents ?? [], new Date(), lecture.pauses ?? [])
     ).map(([enrollmentId, s]) => ({
       enrollmentId,
       awayCount: s.awayCount,
@@ -210,6 +210,7 @@ export default async function FollowAlongPage({
           pageCount={deck.page_count}
           roster={roster}
           initialFocus={initialFocus}
+          initialPauses={lecture.pauses ?? []}
           questions={questions}
           ranQuestionIds={(roundRows ?? [])
             .map((r) => r.question_id)
@@ -275,7 +276,7 @@ export default async function FollowAlongPage({
     .select("enrollment_id, event_type, occurred_at")
     .eq("lecture_id", lecture.id)
     .eq("enrollment_id", myEnrollment.id);
-  const myFocus = summarizeFocus(myFocusEvents ?? []);
+  const myFocus = summarizeFocus(myFocusEvents ?? [], new Date(), lecture.pauses ?? []);
 
   // Open think-pair-share round (correct_indices is null until reveal).
   const { data: openRound } = await supabase
@@ -352,6 +353,7 @@ export default async function FollowAlongPage({
         initialNotes={note?.content ?? ""}
         initialAwayCount={myFocus.awayCount}
         initialAwayMs={myFocus.awayMs}
+        initialPauses={lecture.pauses ?? []}
         roster={studentRoster}
         initialRound={initialRound}
         initialMyAnswers={initialMyAnswers}

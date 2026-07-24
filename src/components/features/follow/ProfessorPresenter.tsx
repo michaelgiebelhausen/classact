@@ -8,6 +8,7 @@ import {
   ChevronRight,
   EyeOff,
   MonitorUp,
+  Pause,
   Play,
   Sparkles,
   Square,
@@ -29,7 +30,12 @@ import {
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { QuickPollDialog } from "@/components/features/follow/QuickPollDialog";
-import { endLecture, setLecturePage } from "@/server/actions/lectures";
+import {
+  endLecture,
+  pauseLecture,
+  resumeLecture,
+  setLecturePage,
+} from "@/server/actions/lectures";
 import {
   closePollRound,
   launchPollRound,
@@ -37,7 +43,12 @@ import {
   revealPollResults,
   setPollStage,
 } from "@/server/actions/polls";
-import { formatAwayDuration } from "@/lib/focus";
+import {
+  effectiveAwayMs,
+  formatAwayDuration,
+  isLecturePaused,
+  type PauseInterval,
+} from "@/lib/focus";
 import { firstVoteGuidance, tallyVotes } from "@/lib/participate";
 import {
   lectureChannelName,
@@ -104,6 +115,8 @@ interface Props {
   pageCount: number | null;
   roster: Record<string, RosterEntry>;
   initialFocus: FocusStateInput[];
+  /** Pause windows so far; open pause = lecture paused right now. */
+  initialPauses: PauseInterval[];
   /** Approved think-pair-share questions for this deck. */
   questions: PresenterQuestion[];
   /** Question ids already run (any round) in this lecture. */
@@ -142,6 +155,7 @@ export function ProfessorPresenter({
   pageCount,
   roster,
   initialFocus,
+  initialPauses,
   questions,
   ranQuestionIds,
   initialRound,
@@ -151,6 +165,10 @@ export function ProfessorPresenter({
   const [page, setPage] = useState(initialPage);
   const [totalPages, setTotalPages] = useState<number | null>(pageCount);
   const [ending, setEnding] = useState(false);
+  const [pauses, setPauses] = useState<PauseInterval[]>(initialPauses);
+  const pausesRef = useRef<PauseInterval[]>(initialPauses);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const paused = isLecturePaused(pauses);
   const [focus, setFocus] = useState<Map<string, FocusState>>(
     () =>
       new Map(
@@ -385,13 +403,23 @@ export function ProfessorPresenter({
             if (rec.event_type === "away" && state.awaySince === null) {
               next.set(rec.enrollment_id, {
                 ...state,
-                awayCount: state.awayCount + 1,
+                // Stepping out during a pause is sanctioned — don't tally it.
+                awayCount: isLecturePaused(pausesRef.current)
+                  ? state.awayCount
+                  : state.awayCount + 1,
                 awaySince: Date.now(),
               });
             } else if (rec.event_type === "back" && state.awaySince !== null) {
               next.set(rec.enrollment_id, {
                 awayCount: state.awayCount,
-                awayMs: state.awayMs + (Date.now() - state.awaySince),
+                awayMs:
+                  state.awayMs +
+                  effectiveAwayMs(
+                    state.awaySince,
+                    Date.now(),
+                    pausesRef.current,
+                    Date.now()
+                  ),
                 awaySince: null,
               });
             }
@@ -557,6 +585,31 @@ export function ProfessorPresenter({
     if (advance && advanceOnResumeRef.current) goTo(pageRef.current + 1);
   }
 
+  async function togglePause() {
+    setPauseBusy(true);
+    const result = paused
+      ? await resumeLecture(courseId, lectureId)
+      : await pauseLecture(courseId, lectureId);
+    setPauseBusy(false);
+    if (!result.ok || !result.data) {
+      toast.error(result.ok ? "Couldn't update the pause." : result.error);
+      return;
+    }
+    pausesRef.current = result.data.pauses;
+    setPauses(result.data.pauses);
+    const nowPaused = isLecturePaused(result.data.pauses);
+    channelRef.current?.postMessage({
+      type: "pause",
+      paused: nowPaused,
+    } satisfies LectureSyncMessage);
+    capture(nowPaused ? "lecture_paused" : "lecture_resumed", {});
+    toast.success(
+      nowPaused
+        ? "Paused — student tab-aways aren't counted until you resume."
+        : "Resumed — focus tracking is back on."
+    );
+  }
+
   async function handleEnd() {
     if (roundRef.current) {
       await closePollRound(courseId, roundRef.current.id);
@@ -583,7 +636,9 @@ export function ProfessorPresenter({
       const state = focus.get(enrollmentId);
       const awayMs =
         (state?.awayMs ?? 0) +
-        (state?.awaySince && now ? Math.max(0, now - state.awaySince) : 0);
+        (state?.awaySince && now
+          ? effectiveAwayMs(state.awaySince, now, pauses, now)
+          : 0);
       return {
         enrollmentId,
         name: entry.name,
@@ -600,7 +655,7 @@ export function ProfessorPresenter({
         a.name.localeCompare(b.name)
     );
     return rows;
-  }, [roster, focus, now]);
+  }, [roster, focus, now, pauses]);
   const awayNow = attention.filter((a) => a.isAway).length;
   const rosterCount = Object.keys(roster).length;
 
@@ -727,6 +782,27 @@ export function ProfessorPresenter({
               dashboard.
             </p>
             <Button
+              variant={paused ? "default" : "outline"}
+              className="w-full"
+              onClick={() => void togglePause()}
+              disabled={pauseBusy}
+            >
+              {paused ? (
+                <>
+                  <Play className="mr-2 size-4" /> Resume lecture
+                </>
+              ) : (
+                <>
+                  <Pause className="mr-2 size-4" /> Pause lecture
+                </>
+              )}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              {paused
+                ? "Paused — students can browse freely; tab-aways aren't counted until you resume."
+                : "Sending the class to look something up? Pause first so nobody's focus score takes the hit."}
+            </p>
+            <Button
               variant="destructive"
               className="w-full"
               onClick={() => void handleEnd()}
@@ -743,9 +819,11 @@ export function ProfessorPresenter({
               <EyeOff className="size-4" /> Attention
             </CardTitle>
             <CardDescription>
-              {awayNow === 0
-                ? "Everyone's tab is on the lecture."
-                : `${awayNow} ${awayNow === 1 ? "student is" : "students are"} away right now.`}
+              {paused
+                ? "Paused — students are free to browse; new tab-aways aren't counted."
+                : awayNow === 0
+                  ? "Everyone's tab is on the lecture."
+                  : `${awayNow} ${awayNow === 1 ? "student is" : "students are"} away right now.`}
             </CardDescription>
           </CardHeader>
           <CardContent>

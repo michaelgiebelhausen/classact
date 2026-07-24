@@ -26,6 +26,8 @@ interface Props {
   embedUrl: string | null;
   /** Open round when the window is opened mid-poll. */
   initialPoll: PollBroadcast | null;
+  /** Whether the lecture is paused when the window opens. */
+  initialPaused: boolean;
 }
 
 /**
@@ -44,9 +46,11 @@ export function StageView({
   fileUrl,
   embedUrl,
   initialPoll,
+  initialPaused,
 }: Props) {
   const [page, setPage] = useState(initialPage);
   const [ended, setEnded] = useState(false);
+  const [paused, setPaused] = useState(initialPaused);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [poll, setPoll] = useState<PollBroadcast | null>(initialPoll);
   const channelRef = useRef<BroadcastChannel | null>(null);
@@ -68,6 +72,8 @@ export function StageView({
         setPage(e.data.page);
       } else if (e.data?.type === "poll") {
         applyPoll(e.data.poll);
+      } else if (e.data?.type === "pause") {
+        setPaused(e.data.paused);
       } else if (e.data?.type === "ended") {
         setEnded(true);
       }
@@ -175,6 +181,7 @@ export function StageView({
           const rec = payload.new as {
             current_page: number;
             ended_at: string | null;
+            pauses?: Array<{ start: string; end: string | null }> | null;
           };
           if (rec.ended_at) {
             setEnded(true);
@@ -182,6 +189,10 @@ export function StageView({
           }
           pageRef.current = rec.current_page;
           setPage(rec.current_page);
+          if (rec.pauses) {
+            const last = rec.pauses[rec.pauses.length - 1];
+            setPaused(Boolean(last && last.end === null));
+          }
         }
       )
       .subscribe();
@@ -326,6 +337,13 @@ export function StageView({
               </p>
             )}
           </div>
+        </div>
+      )}
+
+      {paused && !poll && (
+        <div className="absolute left-1/2 top-6 z-10 -translate-x-1/2 rounded-full bg-white/10 px-6 py-2.5 text-center text-[clamp(0.875rem,2vmin,1.25rem)] font-medium text-white/90 backdrop-blur">
+          Lecture paused — browse away, it doesn&apos;t count. Come back when
+          your professor resumes.
         </div>
       )}
 

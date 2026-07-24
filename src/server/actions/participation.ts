@@ -134,7 +134,7 @@ async function buildCourseSignals(
       .eq("course_id", courseId),
     admin
       .from("lectures")
-      .select("id, started_at, ended_at")
+      .select("id, started_at, ended_at, pauses")
       .eq("course_id", courseId)
       .not("ended_at", "is", null),
     admin
@@ -309,7 +309,7 @@ async function buildCourseSignals(
       const end = new Date(lecture.ended_at);
       const duration = end.getTime() - new Date(lecture.started_at).getTime();
       if (duration <= 0) continue;
-      const summary = summarizeFocus(events, end);
+      const summary = summarizeFocus(events, end, lecture.pauses ?? []);
       lectureMs += duration;
       awayMs += Math.min(summary.awayMs, duration);
       driftCount += summary.awayCount;

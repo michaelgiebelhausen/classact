@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Eye, NotebookPen, Radio, Sparkles } from "lucide-react";
+import { AlertTriangle, Eye, NotebookPen, Pause, Radio, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +19,12 @@ import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { recordFocusEvent, saveLectureNotes } from "@/server/actions/lectures";
 import { submitPollAnswer } from "@/server/actions/polls";
-import { formatAwayDuration } from "@/lib/focus";
+import {
+  effectiveAwayMs,
+  formatAwayDuration,
+  isLecturePaused,
+  type PauseInterval,
+} from "@/lib/focus";
 import { capture } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import type { PollPhase, PollResults, PollStage } from "@/types/db";
@@ -49,6 +54,8 @@ interface Props {
   /** Prior focus tally for this lecture (survives refreshes). */
   initialAwayCount: number;
   initialAwayMs: number;
+  /** Professor pause windows so far; open pause = lecture paused right now. */
+  initialPauses: PauseInterval[];
   /** Class roster (names/photos) so partners can be shown by face. */
   roster: Record<string, { name: string; photoUrl: string | null }>;
   initialRound: StudentRound | null;
@@ -80,6 +87,7 @@ export function StudentFollow({
   initialNotes,
   initialAwayCount,
   initialAwayMs,
+  initialPauses,
   roster,
   initialRound,
   initialMyAnswers,
@@ -93,6 +101,13 @@ export function StudentFollow({
   const [awayCount, setAwayCount] = useState(initialAwayCount);
   const [awayMs, setAwayMs] = useState(initialAwayMs);
   const [warning, setWarning] = useState<{ durationMs: number } | null>(null);
+  const [pauses, setPauses] = useState<PauseInterval[]>(initialPauses);
+  const pausesRef = useRef<PauseInterval[]>(initialPauses);
+  const applyPauses = useCallback((next: PauseInterval[]) => {
+    pausesRef.current = next;
+    setPauses(next);
+  }, []);
+  const paused = isLecturePaused(pauses);
 
   // ---- Think-pair-share round ----
   const [round, setRound] = useState<StudentRound | null>(initialRound);
@@ -119,7 +134,7 @@ export function StudentFollow({
     async function poll() {
       const { data } = await supabase
         .from("lectures")
-        .select("current_page, ended_at")
+        .select("current_page, ended_at, pauses")
         .eq("id", lectureId)
         .maybeSingle();
       if (!data) return;
@@ -128,6 +143,7 @@ export function StudentFollow({
         return;
       }
       setPage(data.current_page);
+      applyPauses(data.pauses ?? []);
     }
 
     const channel = supabase
@@ -144,12 +160,14 @@ export function StudentFollow({
           const rec = payload.new as {
             current_page: number;
             ended_at: string | null;
+            pauses?: PauseInterval[] | null;
           };
           if (rec.ended_at) {
             router.refresh();
             return;
           }
           setPage(rec.current_page);
+          applyPauses(rec.pauses ?? []);
         }
       )
       .subscribe((status) => {
@@ -166,7 +184,7 @@ export function StudentFollow({
       if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
-  }, [lectureId, router]);
+  }, [lectureId, router, applyPauses]);
 
   // ---- Poll sync: rounds pop in / advance stages, pairs arrive ----
   // Realtime first, with a 5s polling fallback (same pattern as slide sync)
@@ -369,17 +387,30 @@ export function StudentFollow({
       if (away && !isAwayRef.current) {
         isAwayRef.current = true;
         awayStartRef.current = Date.now();
-        setAwayCount((c) => c + 1);
         capture("lecture_focus_lost", {});
+        // Events are always recorded — pause windows are subtracted at
+        // scoring time, so the stream stays truthful either way.
         void recordFocusEvent(courseId, lectureId, "away");
       } else if (!away && isAwayRef.current) {
         isAwayRef.current = false;
-        const durationMs = awayStartRef.current
-          ? Date.now() - awayStartRef.current
-          : 0;
+        const start = awayStartRef.current;
         awayStartRef.current = null;
-        setAwayMs((ms) => ms + durationMs);
-        setWarning({ durationMs });
+        const nowMs = Date.now();
+        const raw = start ? nowMs - start : 0;
+        const counted = start
+          ? effectiveAwayMs(start, nowMs, pausesRef.current, nowMs)
+          : 0;
+        // Fully inside a pause window = sanctioned browsing: no tally,
+        // no warning. Anything outside a pause counts as before.
+        if (counted > 0 || counted === raw) setAwayCount((c) => c + 1);
+        setAwayMs((ms) => ms + counted);
+        if (counted > 0) {
+          setWarning({ durationMs: counted });
+        } else if (raw > 0) {
+          toast.success(
+            "Welcome back — the lecture was paused, so that didn't count."
+          );
+        }
         void recordFocusEvent(courseId, lectureId, "back");
       }
     }
@@ -555,6 +586,16 @@ export function StudentFollow({
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
       <div className="grid content-start gap-4">
+        {paused && (
+          <div className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+            <Pause className="size-4 shrink-0" />
+            <span>
+              <span className="font-medium">Lecture paused.</span> Your
+              professor opened a browsing window — leaving this tab won&apos;t
+              count against you until they resume.
+            </span>
+          </div>
+        )}
         {deckKind === "pdf" && fileUrl ? (
           <SlideViewer fileUrl={fileUrl} page={page} className="w-full" />
         ) : embedUrl ? (
@@ -615,7 +656,13 @@ export function StudentFollow({
               ClassAct Metrics.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-2">
+            {paused && (
+              <Badge className="w-fit" variant="outline">
+                <Pause className="mr-1 size-3" /> Paused — aways don&apos;t
+                count right now
+              </Badge>
+            )}
             {awayCount === 0 ? (
               <Badge variant="secondary">Locked in — no tab-aways</Badge>
             ) : (
@@ -657,7 +704,13 @@ export function StudentFollow({
                 your focus score up.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="grid gap-3">
+              <p className="text-sm text-muted-foreground">
+                Looking something up because your professor asked? If this is
+                an official activity, remind them to hit{" "}
+                <span className="font-medium">Pause lecture</span> — paused
+                time never counts against anyone.
+              </p>
               <Button className="w-full" onClick={() => setWarning(null)}>
                 Back to the lecture
               </Button>
