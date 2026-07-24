@@ -60,6 +60,11 @@ export async function createAssignment(input: {
   deadline: string;
   /** ISO datetime; defaults to deadline + peerWindowDays. */
   peerCloseAt?: string | null;
+  /** "tasty" (default): taste files + peer round. "ai_only": AI grades
+   * against the instructor's criteria; no taste files, no peer review. */
+  gradingMode?: "tasty" | "ai_only";
+  /** ai_only: the instructor's grading criteria (their "taste file"). */
+  gradingInstructions?: string;
 }): Promise<ActionResult<{ id: string }>> {
   const { supabase, user } = await requireUser();
   if (!user) return { ok: false, error: "Sign in first." };
@@ -107,19 +112,23 @@ export async function createAssignment(input: {
   // BYOK: the draft runs on the course owner's key (founder falls back to
   // the system key). No key → no draft; students start from a blank taste
   // file and the professor sees a connect-your-key banner.
-  const creds = await resolveCourseAi(input.courseId, "taste");
-  if (creds) {
-    const draft = await generateDefaultTaste(
-      {
-        assignmentTitle: title,
-        brief:
-          briefBase64 && input.storagePath
-            ? { base64: briefBase64, kind: docKindFromPath(input.storagePath) }
-            : null,
-      },
-      creds
-    );
-    if (draft.ok) defaultTaste = draft.data;
+  const gradingMode = input.gradingMode === "ai_only" ? "ai_only" : "tasty";
+  // ai_only assignments have no student taste files — skip the draft.
+  if (gradingMode === "tasty") {
+    const creds = await resolveCourseAi(input.courseId, "taste");
+    if (creds) {
+      const draft = await generateDefaultTaste(
+        {
+          assignmentTitle: title,
+          brief:
+            briefBase64 && input.storagePath
+              ? { base64: briefBase64, kind: docKindFromPath(input.storagePath) }
+              : null,
+        },
+        creds
+      );
+      if (draft.ok) defaultTaste = draft.data;
+    }
   }
 
   const { data: created, error } = await supabase
@@ -130,7 +139,17 @@ export async function createAssignment(input: {
       storage_path: input.storagePath,
       deadline: deadline.toISOString(),
       peer_close_at: peerClose.toISOString(),
-      settings: defaultTaste ? { defaultTaste } : {},
+      settings: {
+        ...(defaultTaste ? { defaultTaste } : {}),
+        ...(gradingMode === "ai_only"
+          ? {
+              gradingMode,
+              gradingInstructions: (input.gradingInstructions ?? "")
+                .trim()
+                .slice(0, 4000),
+            }
+          : {}),
+      },
     })
     .select("id")
     .single();

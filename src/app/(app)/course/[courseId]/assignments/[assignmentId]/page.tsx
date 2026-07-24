@@ -350,6 +350,16 @@ export default async function AssignmentPage({
           tasteIsDefault={taste ? taste.is_default_untouched : true}
           submittedAt={submission?.submitted_at ?? null}
           submissionNote={submission?.note ?? ""}
+          mode={
+            (assignment.settings as { gradingMode?: string }).gradingMode ===
+            "ai_only"
+              ? "ai_only"
+              : "tasty"
+          }
+          instructorCriteria={
+            (assignment.settings as { gradingInstructions?: string })
+              .gradingInstructions ?? ""
+          }
         />
       </div>
     );
@@ -425,8 +435,10 @@ export default async function AssignmentPage({
         {header}
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            Peer grading has closed. Your professor is doing the final
-            review — your report appears the moment they publish.
+            {(assignment.settings as { gradingMode?: string }).gradingMode ===
+            "ai_only"
+              ? "The AI has graded the class. Your professor is doing the final review — your report appears the moment they publish."
+              : "Peer grading has closed. Your professor is doing the final review — your report appears the moment they publish."}
           </CardContent>
         </Card>
       </div>

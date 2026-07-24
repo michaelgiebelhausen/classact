@@ -36,6 +36,9 @@ interface Props {
   tasteIsDefault: boolean;
   submittedAt: string | null;
   submissionNote: string;
+  /** ai_only: no student taste file — the instructor's criteria rule. */
+  mode?: "tasty" | "ai_only";
+  instructorCriteria?: string;
 }
 
 export function SubmissionEditor({
@@ -48,6 +51,8 @@ export function SubmissionEditor({
   tasteIsDefault,
   submittedAt,
   submissionNote,
+  mode = "tasty",
+  instructorCriteria = "",
 }: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -84,14 +89,23 @@ export function SubmissionEditor({
     }
     setUploading(true);
     const supabase = createClient();
-    const isMd =
-      file.name.toLowerCase().endsWith(".md") || file.type === "text/markdown";
-    const storagePath = `${courseId}/sub/${enrollmentId}/${crypto.randomUUID()}.${isMd ? "md" : "pdf"}`;
+    const lower = file.name.toLowerCase();
+    const isMd = lower.endsWith(".md") || file.type === "text/markdown";
+    const isPng = lower.endsWith(".png") || file.type === "image/png";
+    const isJpeg =
+      lower.endsWith(".jpg") || lower.endsWith(".jpeg") || file.type === "image/jpeg";
+    const ext = isMd ? "md" : isPng ? "png" : isJpeg ? "jpg" : "pdf";
+    const contentType = isMd
+      ? "text/markdown"
+      : isPng
+        ? "image/png"
+        : isJpeg
+          ? "image/jpeg"
+          : "application/pdf";
+    const storagePath = `${courseId}/sub/${enrollmentId}/${crypto.randomUUID()}.${ext}`;
     const { error } = await supabase.storage
       .from(ASSIGNMENT_BUCKET)
-      .upload(storagePath, file, {
-        contentType: isMd ? "text/markdown" : "application/pdf",
-      });
+      .upload(storagePath, file, { contentType });
     if (error) {
       setUploading(false);
       toast.error("Upload failed — try again.");
@@ -111,6 +125,26 @@ export function SubmissionEditor({
 
   return (
     <div className="grid gap-4">
+      {mode === "ai_only" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>How this is graded</CardTitle>
+            <CardDescription>
+              This assignment is AI-graded against your instructor&apos;s
+              criteria — no peer review, no taste file. Your professor
+              reviews everything before grades publish.
+            </CardDescription>
+          </CardHeader>
+          {instructorCriteria && (
+            <CardContent>
+              <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">
+                {instructorCriteria}
+              </p>
+            </CardContent>
+          )}
+        </Card>
+      )}
+      {mode === "tasty" && (
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
@@ -184,6 +218,7 @@ export function SubmissionEditor({
           </div>
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -191,11 +226,12 @@ export function SubmissionEditor({
             {submittedAt ? "Your submission" : "Submit your work"}
           </CardTitle>
           <CardDescription>
-            One file — PDF or Markdown, up to 20 MB — your entire
-            submission for this assignment, so combine any parts into a
-            single file. Don&apos;t put your name in it — your work is
-            judged anonymously. Resubmitting before the deadline replaces
-            the file (your last edit is what counts for timeliness).
+            One file — PDF, Markdown, or image (PNG/JPG), up to 20 MB —
+            your entire submission for this assignment, so combine any
+            parts into a single file. Don&apos;t put your name in it —
+            your work is judged anonymously. Resubmitting before the
+            deadline replaces the file (your last edit is what counts for
+            timeliness).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -217,7 +253,7 @@ export function SubmissionEditor({
           <input
             ref={fileRef}
             type="file"
-            accept="application/pdf,.md,text/markdown"
+            accept="application/pdf,.md,text/markdown,image/png,image/jpeg,.png,.jpg,.jpeg"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];

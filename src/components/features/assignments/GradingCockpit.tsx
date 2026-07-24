@@ -29,7 +29,7 @@ import {
   setCutPoints,
   submitVerdict,
 } from "@/server/actions/grading";
-import { ComparePair } from "./ComparePair";
+import { ComparePair, type PairDocKind } from "./ComparePair";
 import type { CutPoint } from "@/lib/tastegrading";
 
 /**
@@ -93,8 +93,8 @@ export function GradingCockpit({
     comparisonId: string;
     left: string;
     right: string;
-    leftKind: "pdf" | "md";
-    rightKind: "pdf" | "md";
+    leftKind: PairDocKind;
+    rightKind: PairDocKind;
   } | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
   const [verdictBusy, setVerdictBusy] = useState(false);

@@ -15,7 +15,7 @@ import {
 import { rubricPing } from "@/server/actions/assignments";
 import { getPairPdfUrls, submitVerdict } from "@/server/actions/grading";
 import { shoutOutPairSide } from "@/server/actions/shoutouts";
-import { ComparePair, VERDICT_LABELS } from "./ComparePair";
+import { ComparePair, VERDICT_LABELS, type PairDocKind } from "./ComparePair";
 import type { PairType, RubricThemeRow } from "@/types/db";
 
 /**
@@ -59,7 +59,7 @@ export function PeerReview({
   const [urls, setUrls] = useState<
     Record<
       string,
-      { left: string; right: string; leftKind: "pdf" | "md"; rightKind: "pdf" | "md" }
+      { left: string; right: string; leftKind: PairDocKind; rightKind: PairDocKind }
     >
   >({});
   const [verdicts, setVerdicts] = useState<Record<string, number | null>>(() =>

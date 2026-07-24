@@ -23,6 +23,7 @@ import {
   emergeRubric,
   generateBaselines,
   scoreSubmission,
+  type DocKind,
 } from "@/server/tastyai";
 import { resolveCourseAi, type AiTask } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
@@ -221,6 +222,12 @@ export async function advanceAnalysis(assignmentId: string): Promise<
     saveAnalysis({ ...patch, busyUntil: undefined }, state);
 
   const phase = analysis.phase ?? "rubric";
+  // "tasty" = taste files + peer round; "ai_only" = AI grades against the
+  // instructor's criteria, skips baselines and peer review entirely.
+  const gradingMode =
+    (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
+      ? "ai_only"
+      : "tasty";
   const { data: submissions } = await admin
     .from("submissions")
     .select("id, enrollment_id, storage_path")
@@ -251,18 +258,39 @@ export async function advanceAnalysis(assignmentId: string): Promise<
 
   try {
     if (phase === "rubric") {
-      const { data: tasteRows } = await admin
-        .from("taste_files")
-        .select("enrollment_id, criteria, bar_statement")
-        .eq("assignment_id", assignmentId);
-      const corpus = (tasteRows ?? []).map((t) => ({
-        enrollmentId: t.enrollment_id,
-        criteria: (t.criteria ?? []) as TasteCriterion[],
-        barStatement: t.bar_statement ?? "",
-      }));
+      let corpus: Array<{
+        enrollmentId: string | null;
+        criteria: TasteCriterion[];
+        barStatement: string;
+      }>;
+      if (gradingMode === "ai_only") {
+        // The instructor's criteria are the whole corpus.
+        const instructions =
+          ((assignment.settings as { gradingInstructions?: string })
+            .gradingInstructions ?? "") ||
+          "Grade for correctness, completeness, and quality of the work relative to the assignment brief.";
+        corpus = [
+          {
+            enrollmentId: null,
+            criteria: [{ name: "Instructor's criteria", standard: instructions }],
+            barStatement: "",
+          },
+        ];
+      } else {
+        const { data: tasteRows } = await admin
+          .from("taste_files")
+          .select("enrollment_id, criteria, bar_statement")
+          .eq("assignment_id", assignmentId);
+        corpus = (tasteRows ?? []).map((t) => ({
+          enrollmentId: t.enrollment_id,
+          criteria: (t.criteria ?? []) as TasteCriterion[],
+          barStatement: t.bar_statement ?? "",
+        }));
+      }
       if (corpus.length === 0 || total === 0) {
-        await done({ error: "No submissions to analyze." }, "peer_review");
-        return { ok: true, data: { phase: "done", state: "peer_review", scored: 0, total } };
+        const idleState = gradingMode === "ai_only" ? "finalizing" : "peer_review";
+        await done({ error: "No submissions to analyze." }, idleState);
+        return { ok: true, data: { phase: "done", state: idleState, scored: 0, total } };
       }
       const rubric = await emergeRubric(
         { assignmentTitle: assignment.title, tasteFiles: corpus },
@@ -291,6 +319,14 @@ export async function advanceAnalysis(assignmentId: string): Promise<
     }
 
     if (phase === "baselines") {
+      if (gradingMode === "ai_only") {
+        // Objective grading: no generic-answer baselines, no distinctiveness.
+        await done({ phase: "scoring", baselines: [] });
+        return {
+          ok: true,
+          data: { phase: "scoring", state: "analyzing", scored: 0, total },
+        };
+      }
       const briefBase64 = assignment.storage_path
         ? await downloadBase64(admin, assignment.storage_path)
         : null;
@@ -404,6 +440,15 @@ export async function advanceAnalysis(assignmentId: string): Promise<
 
     // phase === "pairs": draft ranking + peer pair assignment, then open.
     await recomputeRanking(admin, assignmentId);
+    if (gradingMode === "ai_only") {
+      // No peer round: the ranking goes straight to the professor.
+      await done({ phase: "done" }, "finalizing");
+      revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
+      return {
+        ok: true,
+        data: { phase: "done", state: "finalizing", scored: total, total },
+      };
+    }
     const { data: ranked } = await admin
       .from("rankings")
       .select("submission_id, rank")
@@ -478,8 +523,8 @@ export async function getPairPdfUrls(comparisonId: string): Promise<
   ActionResult<{
     left: string;
     right: string;
-    leftKind: "pdf" | "md";
-    rightKind: "pdf" | "md";
+    leftKind: DocKind;
+    rightKind: DocKind;
   }>
 > {
   const supabase = await createClient();

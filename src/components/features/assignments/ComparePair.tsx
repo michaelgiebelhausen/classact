@@ -19,11 +19,14 @@ export const VERDICT_LABELS = [
   "Right is clearly better",
 ];
 
+/** Mirror of the server DocKind (kept local so the client bundle stays clean). */
+export type PairDocKind = "pdf" | "md" | "png" | "jpeg";
+
 interface Props {
   leftUrl: string | null;
   rightUrl: string | null;
-  leftKind?: "pdf" | "md";
-  rightKind?: "pdf" | "md";
+  leftKind?: PairDocKind;
+  rightKind?: PairDocKind;
   verdict: number | null;
   busy: boolean;
   onVerdict: (verdict: number) => void;
@@ -83,6 +86,15 @@ export function ComparePair({
               {side.url ? (
                 side.kind === "md" ? (
                   <MdPane url={side.url} label={side.label} />
+                ) : side.kind === "png" || side.kind === "jpeg" ? (
+                  <div className="grid h-[540px] place-items-center overflow-auto bg-muted/20 p-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL */}
+                    <img
+                      src={side.url}
+                      alt={`${side.label} submission (image)`}
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  </div>
                 ) : (
                   <iframe
                     src={side.url}

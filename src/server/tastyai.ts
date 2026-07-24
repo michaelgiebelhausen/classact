@@ -20,15 +20,19 @@ function extractJson(text: string): string {
   return text.trim();
 }
 
-/** A submission/brief document: PDF (model file attachment) or Markdown. */
-export type DocKind = "pdf" | "md";
+/** A submission/brief document: PDF, Markdown, or an image (screenshots). */
+export type DocKind = "pdf" | "md" | "png" | "jpeg";
 export interface DocInput {
   base64: string;
   kind: DocKind;
 }
 
 export function docKindFromPath(path: string): DocKind {
-  return path.toLowerCase().endsWith(".md") ? "md" : "pdf";
+  const p = path.toLowerCase();
+  if (p.endsWith(".md")) return "md";
+  if (p.endsWith(".png")) return "png";
+  if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "jpeg";
+  return "pdf";
 }
 
 function pdfPart(filename: string, base64: string) {
@@ -44,6 +48,12 @@ function pdfPart(filename: string, base64: string) {
  */
 function docPart(name: string, doc: DocInput): unknown {
   if (doc.kind === "pdf") return pdfPart(`${name}.pdf`, doc.base64);
+  if (doc.kind === "png" || doc.kind === "jpeg") {
+    return {
+      type: "image_url" as const,
+      image_url: { url: `data:image/${doc.kind};base64,${doc.base64}` },
+    };
+  }
   const text = Buffer.from(doc.base64, "base64")
     .toString("utf8")
     .slice(0, 120_000);

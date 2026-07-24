@@ -191,6 +191,18 @@ four-part assignment is published as four assignments (each with its own
 taste file, emergent rubric, and peer round) or combined by students into
 a single PDF when it's really one deliverable. No multi-file upload.
 
+## AI-only grading mode (decision, Mike 2026-07-24)
+
+For objective work (quiz-score screenshots, checklists), assignments can be
+created in **AI-only mode** (`settings.gradingMode = "ai_only"`): no student
+taste files, no peer round. The instructor's criteria
+(`settings.gradingInstructions`, the "instructor taste file") are the whole
+rubric corpus; the pipeline skips baselines/distinctiveness and peer-pair
+assignment, landing directly in `finalizing` for the professor's cockpit
+review + publish. Submissions additionally accept **PNG/JPEG images**
+(screenshots) in every mode — images ride to the model as image parts and
+render in an image pane in the comparison viewer.
+
 ## Known edges (accepted for v1)
 
 - PDF name anonymity is honest-effort (instruction, not stripping).
