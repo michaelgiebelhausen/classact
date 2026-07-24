@@ -30,8 +30,8 @@ export default function NewCoursePage() {
       toast.success(`Course created — join code ${result.data.joinCode}`);
       router.push(`/course/${result.data.id}/setup`);
     } else if (!result.ok && result.error === "billing_required") {
-      // $5/mo keeps the lights on — AI runs on your own OpenRouter credits.
-      toast.message("Running a course is $5/month — taking you to checkout.");
+      // $4.99/mo keeps the lights on — AI runs on your own OpenRouter credits.
+      toast.message("Running a course is $4.99/month — taking you to checkout.");
       const checkout = await startCheckout();
       if (checkout.ok && checkout.data) {
         window.location.href = checkout.data.url;
