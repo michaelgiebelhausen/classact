@@ -71,6 +71,15 @@ export async function createAssignment(input: {
 
   const title = input.title.trim().slice(0, 200);
   if (!title) return { ok: false, error: "Give the assignment a title." };
+  // AI-only grading has no emergent rubric — the instructor's taste
+  // criteria ARE the standard, so they're required (one sentence is fine).
+  if (input.gradingMode === "ai_only" && !(input.gradingInstructions ?? "").trim()) {
+    return {
+      ok: false,
+      error:
+        "AI-only grading needs your grading criteria — even one sentence (e.g. 'count the questions marked correct; score proportionally').",
+    };
+  }
   const deadline = new Date(input.deadline);
   if (Number.isNaN(deadline.getTime()) || deadline.getTime() < Date.now()) {
     return { ok: false, error: "Pick a deadline in the future." };

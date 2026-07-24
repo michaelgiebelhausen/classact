@@ -196,8 +196,9 @@ a single PDF when it's really one deliverable. No multi-file upload.
 For objective work (quiz-score screenshots, checklists), assignments can be
 created in **AI-only mode** (`settings.gradingMode = "ai_only"`): no student
 taste files, no peer round. The instructor's criteria
-(`settings.gradingInstructions`, the "instructor taste file") are the whole
-rubric corpus; the pipeline skips baselines/distinctiveness and peer-pair
+(`settings.gradingInstructions`, the "instructor taste file") are **required
+at creation** (even one sentence — "count the questions marked correct,
+score proportionally") and are the whole rubric corpus; the pipeline skips baselines/distinctiveness and peer-pair
 assignment, landing directly in `finalizing` for the professor's cockpit
 review + publish. Submissions additionally accept **PNG/JPEG images**
 (screenshots) in every mode — images ride to the model as image parts and

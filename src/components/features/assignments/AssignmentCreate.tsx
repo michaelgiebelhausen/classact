@@ -44,6 +44,12 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
       toast.error("Pick a deadline.");
       return;
     }
+    if (gradingMode === "ai_only" && !instructions.trim()) {
+      toast.error(
+        "AI-only grading needs your criteria — one sentence is enough."
+      );
+      return;
+    }
     setSaving(true);
     let storagePath: string | null = null;
     if (file) {
@@ -140,7 +146,10 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
 
         {gradingMode === "ai_only" && (
           <div className="grid gap-2">
-            <Label htmlFor="a-instructions">Your grading criteria</Label>
+            <Label htmlFor="a-instructions">
+              Your grading criteria (required — this is the standard the AI
+              grades against)
+            </Label>
             <textarea
               id="a-instructions"
               value={instructions}
