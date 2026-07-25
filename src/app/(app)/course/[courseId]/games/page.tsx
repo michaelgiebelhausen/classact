@@ -43,18 +43,20 @@ export default async function GamesPage({
     );
     const photoMap = await resolveEnrollmentPhotos(admin, candidates);
 
-    // Phonetic pronunciation guides, keyed by profile (activated students only).
+    // Pronunciation guides + LinkedIn, keyed by profile (activated students).
     const phoneticByProfile = new Map<string, string>();
+    const linkedinByProfile = new Map<string, string>();
     const activatedIds = candidates
       .map((e) => e.profile_id)
       .filter((id): id is string => Boolean(id));
     if (activatedIds.length > 0) {
       const { data: profs } = await admin
         .from("profiles")
-        .select("id, name_phonetic")
+        .select("id, name_phonetic, linkedin_url")
         .in("id", activatedIds);
       for (const p of profs ?? []) {
         if (p.name_phonetic) phoneticByProfile.set(p.id, p.name_phonetic);
+        if (p.linkedin_url) linkedinByProfile.set(p.id, p.linkedin_url);
       }
     }
 
@@ -107,7 +109,7 @@ export default async function GamesPage({
             .eq("profile_id", course.professor_id),
           admin
             .from("profiles")
-            .select("full_name, name_phonetic")
+            .select("full_name, name_phonetic, linkedin_url")
             .eq("id", course.professor_id)
             .maybeSingle(),
           admin
@@ -135,6 +137,7 @@ export default async function GamesPage({
           photoUrls: urls,
           phonetic: prof?.name_phonetic ?? null,
           hints: facts,
+          linkedinUrl: prof?.linkedin_url ?? null,
         });
       }
     }
@@ -151,6 +154,9 @@ export default async function GamesPage({
             e.roster_name_phonetic ??
             null,
           hints: hintsByEnrollment.get(e.id) ?? [],
+          linkedinUrl: e.profile_id
+            ? (linkedinByProfile.get(e.profile_id) ?? null)
+            : null,
         });
       }
     }

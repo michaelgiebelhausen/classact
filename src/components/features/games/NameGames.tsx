@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Shuffle } from "lucide-react";
+import { ExternalLink, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,6 +18,8 @@ export interface GamePlayer {
   phonetic?: string | null;
   /** Every icebreaker they answered, e.g. [{ label: "Hometown", value: "Greenville, SC" }]. */
   hints: Array<{ label: string; value: string }>;
+  /** Canonical LinkedIn profile, when they've added one. */
+  linkedinUrl?: string | null;
 }
 
 /**
@@ -288,6 +290,16 @@ function FlashCards({
                   <p className="text-sm italic text-muted-foreground">
                     {player.phonetic}
                   </p>
+                ) : null}
+                {player.linkedinUrl ? (
+                  <a
+                    href={player.linkedinUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 flex w-fit items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  >
+                    <ExternalLink className="size-4" /> Connect on LinkedIn
+                  </a>
                 ) : null}
               </div>
 

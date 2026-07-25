@@ -37,6 +37,8 @@ export type ProfileRow = {
   comp: boolean
   stripe_customer_id: string | null
   subscription_status: string | null
+  /** Self-entered LinkedIn profile, shown to coursemates. */
+  linkedin_url: string | null
   created_at: string
 }
 

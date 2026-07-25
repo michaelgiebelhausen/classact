@@ -12,6 +12,7 @@ import { getSignedPhotoUrls } from "@/lib/storage";
 import { PhotoUploader } from "@/components/features/profile/PhotoUploader";
 import { DeleteDataButton } from "@/components/features/profile/DeleteDataButton";
 import { AboutMeForm } from "@/components/features/profile/AboutMeForm";
+import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
 import { icebreakersByKey, DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
 import type { PhotoKind } from "@/types/db";
 
@@ -88,6 +89,20 @@ export default async function ProfilePage() {
             kind="adventure"
             initialUrl={photoUrls.adventure ?? null}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>LinkedIn</CardTitle>
+          <CardDescription>
+            The people in this room are your first professional network.
+            Add your profile and coursemates can connect with you — it shows
+            beside your name in the name games.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <LinkedInForm initial={profile.linkedin_url} />
         </CardContent>
       </Card>
 

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
+import { normalizeLinkedInUrl } from "@/lib/linkedin";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -52,4 +53,39 @@ export async function saveProfileAnswers(
 
   revalidatePath("/profile");
   return { ok: true };
+}
+
+/**
+ * Save (or clear) the LinkedIn profile link. Stored canonicalized so every
+ * paste style lands on the same URL; an empty value removes it.
+ */
+export async function saveLinkedInUrl(
+  raw: string
+): Promise<ActionResult<{ url: string | null }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const trimmed = raw.trim();
+  let url: string | null = null;
+  if (trimmed) {
+    url = normalizeLinkedInUrl(trimmed);
+    if (!url) {
+      return {
+        ok: false,
+        error: "That doesn't look like a LinkedIn profile — try your handle or the full linkedin.com/in/… link.",
+      };
+    }
+  }
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ linkedin_url: url })
+    .eq("id", user.id);
+  if (error) return { ok: false, error: "Couldn't save your LinkedIn link." };
+
+  revalidatePath("/profile");
+  return { ok: true, data: { url } };
 }
