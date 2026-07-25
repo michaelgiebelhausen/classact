@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 /**
@@ -32,6 +32,10 @@ export interface RoomMapSeatState {
   tappable?: boolean;
   /** Empty seats only: "you haven't sat here yet" cue (dot + tinted border). */
   highlight?: boolean;
+  /** Short text under the seat (first name) — needs the `captions` map mode. */
+  caption?: string;
+  /** Needs attention (red ring) — e.g. the student is currently tabbed away. */
+  alert?: boolean;
 }
 
 interface Props {
@@ -41,6 +45,8 @@ interface Props {
   onSeatTap?: (seat: RoomMapSeat) => void;
   frontLabel?: string;
   ariaLabel?: string;
+  /** Widen the seat pitch to make room for name captions under seats. */
+  captions?: boolean;
 }
 
 const UNIT = 44; // px per seat unit — tap-target sized
@@ -68,17 +74,21 @@ export function RoomMap({
   onSeatTap,
   frontLabel = "Front of room",
   ariaLabel = "Classroom seat map",
+  captions = false,
 }: Props) {
   const geo = useMemo(() => {
     if (seats.length === 0) return null;
+    // Caption mode widens the pitch so a first name fits under each seat.
+    const hu = captions ? 58 : UNIT;
+    const vu = captions ? 66 : UNIT;
     const minX = Math.min(...seats.map((s) => s.x));
     const maxX = Math.max(...seats.map((s) => s.x));
     const minY = Math.min(...seats.map((s) => s.y));
     const maxY = Math.max(...seats.map((s) => s.y));
-    const width = (maxX - minX + PAD_L + PAD_R) * UNIT;
-    const height = (maxY - minY + PAD_T + PAD_B) * UNIT;
-    const px = (x: number) => (x - minX + PAD_L) * UNIT;
-    const py = (y: number) => (y - minY + PAD_T) * UNIT;
+    const width = (maxX - minX + PAD_L + PAD_R) * hu;
+    const height = (maxY - minY + PAD_T + PAD_B) * vu;
+    const px = (x: number) => (x - minX + PAD_L) * hu;
+    const py = (y: number) => (y - minY + PAD_T) * vu;
 
     // Tables: a surface under each seat cluster.
     const tables: Array<{ cx: number; cy: number; rx: number; ry: number }> = [];
@@ -132,8 +142,8 @@ export function RoomMap({
       balconyY = (mainMaxY + balconyMinY) / 2;
     }
 
-    return { width, height, px, py, tables, rowMarks, balconyY };
-  }, [seats]);
+    return { width, height, px, py, tables, rowMarks, balconyY, hu };
+  }, [seats, captions]);
 
   if (!geo) return null;
   const resolveState = stateFor ?? (() => EMPTY_STATE);
@@ -238,6 +248,23 @@ export function RoomMap({
       {seats.map((seat) => {
         const state = resolveState(seat);
         const tappable = Boolean(state.tappable && onSeatTap);
+        const caption = state.caption ? (
+          <span
+            key={`${seat.id}-caption`}
+            aria-hidden="true"
+            className={[
+              "pointer-events-none absolute truncate text-center text-[9px] font-medium leading-tight",
+              state.alert ? "text-destructive" : "text-muted-foreground",
+            ].join(" ")}
+            style={{
+              left: geo.px(seat.x) - geo.hu / 2 + 2,
+              top: geo.py(seat.y) + SEAT / 2 + 2,
+              width: geo.hu - 4,
+            }}
+          >
+            {state.caption}
+          </span>
+        ) : null;
         const stateLabel =
           state.kind === "mine"
             ? "yours"
@@ -249,8 +276,8 @@ export function RoomMap({
                   ? "empty — you haven't sat here yet"
                   : "empty";
         return (
+          <Fragment key={seat.id}>
           <button
-            key={seat.id}
             type="button"
             aria-label={`Seat ${seat.label}, ${stateLabel}`}
             disabled={!tappable}
@@ -272,6 +299,9 @@ export function RoomMap({
                           : "bg-card hover:border-primary hover:text-primary"
                         : "bg-card text-muted-foreground/60",
               state.pending ? "animate-pulse" : "",
+              state.alert
+                ? "border-destructive ring-2 ring-destructive/70 ring-offset-1"
+                : "",
             ].join(" ")}
             style={{
               left: geo.px(seat.x) - SEAT / 2,
@@ -298,6 +328,8 @@ export function RoomMap({
               />
             )}
           </button>
+          {caption}
+          </Fragment>
         );
       })}
     </div>

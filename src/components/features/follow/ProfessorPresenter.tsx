@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import {
   ChevronLeft,
   ChevronRight,
-  EyeOff,
+  HelpCircle,
   MonitorUp,
   Pause,
   Play,
@@ -18,8 +18,6 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Card,
   CardContent,
@@ -27,7 +25,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
+import { ClassroomAttention } from "@/components/features/follow/ClassroomAttention";
+import type { RoomMapSeat } from "@/components/features/rooms/RoomMap";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { QuickPollDialog } from "@/components/features/follow/QuickPollDialog";
 import {
@@ -117,6 +123,10 @@ interface Props {
   initialFocus: FocusStateInput[];
   /** Pause windows so far; open pause = lecture paused right now. */
   initialPauses: PauseInterval[];
+  /** Room geometry for the classroom view (empty = no seat map yet). */
+  seats: RoomMapSeat[];
+  /** seatId → enrollmentId from today's check-ins. */
+  occupants: Record<string, string>;
   /** Approved think-pair-share questions for this deck. */
   questions: PresenterQuestion[];
   /** Question ids already run (any round) in this lecture. */
@@ -133,15 +143,6 @@ interface FocusState {
   awaySince: number | null;
 }
 
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-}
 
 export function ProfessorPresenter({
   courseId,
@@ -156,6 +157,8 @@ export function ProfessorPresenter({
   roster,
   initialFocus,
   initialPauses,
+  seats,
+  occupants,
   questions,
   ranQuestionIds,
   initialRound,
@@ -656,7 +659,6 @@ export function ProfessorPresenter({
     );
     return rows;
   }, [roster, focus, now, pauses]);
-  const awayNow = attention.filter((a) => a.isAway).length;
   const rosterCount = Object.keys(roster).length;
 
   const queued = useMemo(
@@ -715,8 +717,87 @@ export function ProfessorPresenter({
     (round?.correctIndices?.length ?? 0) === 0 &&
     (pollStats?.suggestedKey.length ?? 0) === 0;
 
+  const helpText = (
+    <span className="grid gap-2">
+      <span className="block">
+        <span className="font-medium">Project slides</span> opens a clean
+        slides-only window — drag it to the projector screen and click
+        Fullscreen. This window stays your private dashboard.
+      </span>
+      <span className="block">
+        <span className="font-medium">Pause lecture</span> when you send the
+        class to look something up: paused time never counts against
+        anyone&apos;s focus score.
+      </span>
+    </span>
+  );
+
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+    <div className="grid gap-4">
+      {/* Controls run across the top so the room below gets the space. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2.5">
+        <div className="mr-auto min-w-0 pl-1">
+          <p className="truncate text-sm font-semibold">{deckTitle}</p>
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Timer className="size-3" />
+            Live for {formatAwayDuration(elapsedMs)}
+            {deckKind === "google_slides" && " · slides unsynced (embed)"}
+          </p>
+        </div>
+        <Button size="sm" onClick={openStage}>
+          <MonitorUp className="mr-2 size-4" /> Project slides
+        </Button>
+        <Button
+          size="sm"
+          variant={paused ? "default" : "outline"}
+          onClick={() => void togglePause()}
+          disabled={pauseBusy}
+        >
+          {paused ? (
+            <>
+              <Play className="mr-2 size-4" /> Resume
+            </>
+          ) : (
+            <>
+              <Pause className="mr-2 size-4" /> Pause lecture
+            </>
+          )}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-destructive hover:text-destructive"
+          onClick={() => void handleEnd()}
+          disabled={ending}
+        >
+          <Square className="mr-2 size-4" /> End
+        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="How the presenter controls work"
+              >
+                <HelpCircle className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-sm">
+              {helpText}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+
+      {paused && (
+        <p className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+          <span className="font-medium">Paused.</span> Students can browse
+          freely — tab-aways aren&apos;t counted until you resume.
+        </p>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="grid content-start gap-4">
         {deckKind === "pdf" && fileUrl ? (
           <SlideViewer
@@ -760,105 +841,6 @@ export function ProfessorPresenter({
             </Button>
           </div>
         )}
-      </div>
-
-      <div className="grid content-start gap-4">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">{deckTitle}</CardTitle>
-            <CardDescription className="flex items-center gap-1.5">
-              <Timer className="size-3.5" />
-              Live for {formatAwayDuration(elapsedMs)}
-              {deckKind === "google_slides" && " · slides unsynced (embed)"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-2">
-            <Button className="w-full" onClick={openStage}>
-              <MonitorUp className="mr-2 size-4" /> Project slides
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              Opens a clean slides-only window — drag it to the projector
-              screen and click Fullscreen. This window stays your private
-              dashboard.
-            </p>
-            <Button
-              variant={paused ? "default" : "outline"}
-              className="w-full"
-              onClick={() => void togglePause()}
-              disabled={pauseBusy}
-            >
-              {paused ? (
-                <>
-                  <Play className="mr-2 size-4" /> Resume lecture
-                </>
-              ) : (
-                <>
-                  <Pause className="mr-2 size-4" /> Pause lecture
-                </>
-              )}
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              {paused
-                ? "Paused — students can browse freely; tab-aways aren't counted until you resume."
-                : "Sending the class to look something up? Pause first so nobody's focus score takes the hit."}
-            </p>
-            <Button
-              variant="destructive"
-              className="w-full"
-              onClick={() => void handleEnd()}
-              disabled={ending}
-            >
-              <Square className="mr-2 size-4" /> End lecture
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <EyeOff className="size-4" /> Attention
-            </CardTitle>
-            <CardDescription>
-              {paused
-                ? "Paused — students are free to browse; new tab-aways aren't counted."
-                : awayNow === 0
-                  ? "Everyone's tab is on the lecture."
-                  : `${awayNow} ${awayNow === 1 ? "student is" : "students are"} away right now.`}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {attention.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Students appear here as they join.
-              </p>
-            ) : (
-              <ul className="grid max-h-80 gap-2 overflow-y-auto">
-                {attention.map((a) => (
-                  <li key={a.enrollmentId} className="flex items-center gap-2.5">
-                    <Avatar className="size-7">
-                      {a.photoUrl && (
-                        <AvatarImage src={a.photoUrl} alt={a.name} />
-                      )}
-                      <AvatarFallback className="text-[10px]">
-                        {initials(a.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="flex-1 truncate text-sm">{a.name}</span>
-                    {a.isAway ? (
-                      <Badge variant="destructive">away</Badge>
-                    ) : a.awayCount > 0 ? (
-                      <span className="text-xs text-muted-foreground">
-                        {a.awayCount}× · {formatAwayDuration(a.awayMs)}
-                      </span>
-                    ) : (
-                      <Badge variant="secondary">focused</Badge>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
 
         <Card
           className={
@@ -1019,6 +1001,17 @@ export function ProfessorPresenter({
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* The room: who's here, where they're sitting, who's drifted. */}
+      <div className="grid content-start gap-4">
+        <ClassroomAttention
+          seats={seats}
+          occupants={occupants}
+          attention={attention}
+          paused={paused}
+        />
+      </div>
       </div>
     </div>
   );

@@ -26,6 +26,10 @@ import {
 import { updateIcebreakerFields, updateSchedule } from "@/server/actions/courses";
 import type { CanvasConnectionView } from "@/server/actions/canvassettings";
 import { CanvasSync } from "@/components/features/setup/CanvasSync";
+import {
+  DeckManager,
+  type DeckListItem,
+} from "@/components/features/follow/DeckManager";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { RoomDesigner } from "@/components/features/setup/RoomDesigner";
 import type { RoomLayout } from "@/lib/roomlayout";
@@ -63,6 +67,8 @@ interface Props {
   enrollments: EnrollmentItem[];
   siteUrl: string;
   canvasConnection: CanvasConnectionView;
+  /** Slide decks for this course — same manager the Follow Along page uses. */
+  decks: DeckListItem[];
 }
 
 export function CourseSetupTabs({
@@ -72,6 +78,7 @@ export function CourseSetupTabs({
   enrollments,
   siteUrl,
   canvasConnection,
+  decks,
 }: Props) {
   return (
     <Tabs defaultValue="seatmap" className="w-full">
@@ -79,6 +86,7 @@ export function CourseSetupTabs({
         <TabsTrigger value="seatmap">Room</TabsTrigger>
         <TabsTrigger value="schedule">Schedule</TabsTrigger>
         <TabsTrigger value="roster">Roster</TabsTrigger>
+        <TabsTrigger value="slides">Slides</TabsTrigger>
         <TabsTrigger value="icebreakers">Icebreakers</TabsTrigger>
         <TabsTrigger value="invite">Invite</TabsTrigger>
       </TabsList>
@@ -100,6 +108,9 @@ export function CourseSetupTabs({
           initial={enrollments}
           canvasConnection={canvasConnection}
         />
+      </TabsContent>
+      <TabsContent value="slides">
+        <DeckManager courseId={course.id} decks={decks} />
       </TabsContent>
       <TabsContent value="icebreakers">
         <IcebreakerTab courseId={course.id} initialKeys={course.icebreaker_fields} />

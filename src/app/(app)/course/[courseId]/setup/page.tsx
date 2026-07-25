@@ -4,6 +4,8 @@ import { getProfile } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
 import { getCanvasConnection } from "@/server/actions/canvassettings";
+import type { DeckListItem } from "@/components/features/follow/DeckManager";
+import type { QuestionItem } from "@/components/features/follow/DeckQuestions";
 import type { RoomLayout } from "@/lib/roomlayout";
 import type { RoomLocation } from "@/server/actions/rooms";
 
@@ -96,12 +98,53 @@ export default async function CourseSetupPage({
     }
   }
 
+  // Slide decks (+ their questions) for the Slides tab — the same manager
+  // Follow Along uses, surfaced where professors look for it.
+  const [{ data: deckRows }, { data: questionRows }] = await Promise.all([
+    supabase
+      .from("lecture_decks")
+      .select("id, title, kind, page_count, created_at, reading_title")
+      .eq("course_id", courseId)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("deck_questions")
+      .select(
+        "id, deck_id, prompt, options, correct_indices, rationale, position_after_page, approved, source"
+      )
+      .eq("course_id", courseId)
+      .order("position_after_page", { ascending: true }),
+  ]);
+  const questionsByDeck = new Map<string, QuestionItem[]>();
+  for (const q of questionRows ?? []) {
+    const list = questionsByDeck.get(q.deck_id) ?? [];
+    list.push({
+      id: q.id,
+      prompt: q.prompt,
+      options: q.options,
+      correctIndices: q.correct_indices,
+      rationale: q.rationale,
+      positionAfterPage: q.position_after_page,
+      approved: q.approved,
+      source: q.source,
+    });
+    questionsByDeck.set(q.deck_id, list);
+  }
+  const decks: DeckListItem[] = (deckRows ?? []).map((d) => ({
+    id: d.id,
+    title: d.title,
+    kind: d.kind,
+    pageCount: d.page_count,
+    createdAt: d.created_at,
+    readingTitle: d.reading_title,
+    questions: questionsByDeck.get(d.id) ?? [],
+  }));
+
   return (
     <div className="grid gap-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{course.name}</h1>
         <p className="text-sm text-muted-foreground">
-          Course setup — room, roster, icebreakers, invites.
+          Course setup — room, roster, slides, icebreakers, invites.
         </p>
       </div>
       <CourseSetupTabs
@@ -127,6 +170,7 @@ export default async function CourseSetupPage({
         enrollments={enrollments ?? []}
         siteUrl={env.siteUrl}
         canvasConnection={canvasConnection}
+        decks={decks}
       />
     </div>
   );

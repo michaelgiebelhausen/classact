@@ -46,12 +46,35 @@ export default async function FollowAlongPage({
   const isProfessor = course.professor_id === profile.id;
 
   // The live lecture (if any) and its deck.
-  const { data: lecture } = await supabase
+  const { data: liveLecture } = await supabase
     .from("lectures")
     .select("id, deck_id, current_page, started_at, pauses")
     .eq("course_id", courseId)
     .is("ended_at", null)
     .maybeSingle();
+
+  // Stale-lecture guard: nobody reliably clicks "End lecture", and a live
+  // lecture hides the deck library entirely. Anything running longer than a
+  // normal class day is auto-closed (with any open pause) on page load.
+  const STALE_MS = 12 * 60 * 60 * 1000;
+  let lecture = liveLecture;
+  if (lecture) {
+    const startedMs = Date.parse(lecture.started_at);
+    const nowMs = new Date().getTime();
+    if (Number.isFinite(startedMs) && nowMs - startedMs > STALE_MS) {
+      const endedAt = new Date(nowMs).toISOString();
+      const pauses = lecture.pauses ?? [];
+      const closedPauses =
+        pauses.length > 0 && pauses[pauses.length - 1].end === null
+          ? [...pauses.slice(0, -1), { ...pauses[pauses.length - 1], end: endedAt }]
+          : pauses;
+      await supabase
+        .from("lectures")
+        .update({ ended_at: endedAt, pauses: closedPauses })
+        .eq("id", lecture.id);
+      lecture = null;
+    }
+  }
 
   const { data: deck } = lecture
     ? await supabase
@@ -137,6 +160,39 @@ export default async function FollowAlongPage({
       }
     }
 
+    // Room geometry + today's check-ins so the presenter can show the class
+    // as a seat map. Missing either just falls back to the roster list.
+    const [{ data: seatRows }, { data: liveSession }] = await Promise.all([
+      supabase
+        .from("seats")
+        .select("id, label, row_index, col_index, x, y, section, table_id")
+        .eq("course_id", courseId),
+      supabase
+        .from("class_sessions")
+        .select("id")
+        .eq("course_id", courseId)
+        .is("closed_at", null)
+        .order("session_date", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const seats = (seatRows ?? []).map((s) => ({
+      id: s.id,
+      label: s.label,
+      x: s.x ?? s.col_index ?? 0,
+      y: s.y ?? (s.row_index ?? 0) * 1.25,
+      section: s.section ?? "main",
+      tableId: s.table_id ?? null,
+    }));
+    const occupants: Record<string, string> = {};
+    if (liveSession) {
+      const { data: checkIns } = await supabase
+        .from("check_ins")
+        .select("seat_id, enrollment_id")
+        .eq("session_id", liveSession.id);
+      for (const c of checkIns ?? []) occupants[c.seat_id] = c.enrollment_id;
+    }
+
     const { data: focusEvents } = await supabase
       .from("focus_events")
       .select("enrollment_id, event_type, occurred_at")
@@ -211,6 +267,8 @@ export default async function FollowAlongPage({
           roster={roster}
           initialFocus={initialFocus}
           initialPauses={lecture.pauses ?? []}
+          seats={seats}
+          occupants={occupants}
           questions={questions}
           ranQuestionIds={(roundRows ?? [])
             .map((r) => r.question_id)
