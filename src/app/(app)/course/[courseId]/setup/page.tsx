@@ -105,6 +105,7 @@ export default async function CourseSetupPage({
       .from("lecture_decks")
       .select("id, title, kind, page_count, created_at, reading_title")
       .eq("course_id", courseId)
+      .order("position", { ascending: true })
       .order("created_at", { ascending: false }),
     supabase
       .from("deck_questions")

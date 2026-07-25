@@ -103,6 +103,7 @@ export default async function FollowAlongPage({
         .from("lecture_decks")
         .select("id, title, kind, page_count, created_at, reading_title")
         .eq("course_id", courseId)
+        .order("position", { ascending: true })
         .order("created_at", { ascending: false });
       const { data: questionRows } = await supabase
         .from("deck_questions")

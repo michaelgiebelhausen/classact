@@ -115,6 +115,36 @@ export async function createDeck(input: {
   return { ok: true, data: { deckId: created.id } };
 }
 
+/**
+ * Professor: set the deck order for a course. Takes the full ordered list
+ * of deck ids and writes their index as the position.
+ */
+export async function reorderDecks(
+  courseId: string,
+  deckIds: string[]
+): Promise<ActionResult> {
+  const { supabase, error } = await requireProfessor(courseId);
+  if (error) return { ok: false, error };
+  if (deckIds.length === 0) return { ok: true };
+  if (deckIds.length > 500) return { ok: false, error: "Too many decks." };
+
+  const results = await Promise.all(
+    deckIds.map((id, index) =>
+      supabase
+        .from("lecture_decks")
+        .update({ position: index })
+        .eq("id", id)
+        .eq("course_id", courseId)
+    )
+  );
+  if (results.some((r) => r.error)) {
+    return { ok: false, error: "Couldn't save the new order." };
+  }
+  revalidatePath(`/course/${courseId}/follow`);
+  revalidatePath(`/course/${courseId}/setup`);
+  return { ok: true };
+}
+
 /** Professor: delete a deck (and its stored PDF). */
 export async function deleteDeck(
   courseId: string,

@@ -375,6 +375,8 @@ export type LectureDeckRow = {
   page_count: number | null
   reading_path: string | null
   reading_title: string | null
+  /** Manual order within the course (0 = first); professors drag to set it. */
+  position: number
   created_at: string
 }
 

@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { FileText, Play, Presentation, Trash2 } from "lucide-react";
+import { FileText, GripVertical, Play, Presentation, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { DECK_BUCKET } from "@/lib/storage";
-import { createDeck, deleteDeck, startLecture } from "@/server/actions/lectures";
+import {
+  createDeck,
+  deleteDeck,
+  reorderDecks,
+  startLecture,
+} from "@/server/actions/lectures";
 import {
   DeckQuestions,
   type QuestionItem,
@@ -64,6 +69,36 @@ export function DeckManager({ courseId, decks }: Props) {
   const [uploading, setUploading] = useState(false);
   const [slidesUrl, setSlidesUrl] = useState("");
   const [busyDeck, setBusyDeck] = useState<string | null>(null);
+
+  // Local order so a drag lands instantly, reconciled during render
+  // whenever the server sends a new list (upload, delete, saved reorder).
+  const [order, setOrder] = useState<DeckListItem[]>(decks);
+  const [serverDecks, setServerDecks] = useState(decks);
+  if (serverDecks !== decks) {
+    setServerDecks(decks);
+    setOrder(decks);
+  }
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragArmed, setDragArmed] = useState(false);
+
+  function moveDeck(from: number, to: number) {
+    if (from === to || to < 0 || to >= order.length) return;
+    const next = [...order];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setOrder(next);
+    void reorderDecks(
+      courseId,
+      next.map((d) => d.id)
+    ).then((result) => {
+      if (!result.ok) {
+        toast.error(result.error);
+        setOrder(decks); // put it back where the server still has it
+      } else {
+        router.refresh();
+      }
+    });
+  }
 
   async function handleFile(file: File) {
     if (file.type !== "application/pdf") {
@@ -208,7 +243,8 @@ export function DeckManager({ courseId, decks }: Props) {
           <CardTitle>Your decks</CardTitle>
           <CardDescription>
             Hit Present to go live — students on the Follow Along page will
-            sync to your current slide.
+            sync to your current slide. Drag the handle to put them in the
+            order you teach them.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -218,13 +254,52 @@ export function DeckManager({ courseId, decks }: Props) {
             </p>
           ) : (
             <ul className="grid gap-2">
-              {decks.map((deck) => (
+              {order.map((deck, index) => (
                 <li
                   key={deck.id}
-                  className="rounded-lg border px-4 py-3"
+                  draggable={dragArmed}
+                  onDragStart={() => setDragIndex(index)}
+                  onDragOver={(e) => {
+                    if (dragIndex !== null && dragIndex !== index) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragIndex !== null) moveDeck(dragIndex, index);
+                    setDragIndex(null);
+                    setDragArmed(false);
+                  }}
+                  onDragEnd={() => {
+                    setDragIndex(null);
+                    setDragArmed(false);
+                  }}
+                  className={[
+                    "rounded-lg border px-4 py-3 transition-colors",
+                    dragIndex === index ? "opacity-50" : "",
+                    dragIndex !== null && dragIndex !== index
+                      ? "border-dashed hover:border-primary"
+                      : "",
+                  ].join(" ")}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        aria-label={`Reorder ${deck.title}. Use arrow keys to move it.`}
+                        onMouseDown={() => setDragArmed(true)}
+                        onMouseUp={() => setDragArmed(false)}
+                        onKeyDown={(e) => {
+                          if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            moveDeck(index, index - 1);
+                          } else if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            moveDeck(index, index + 1);
+                          }
+                        }}
+                        className="cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                      >
+                        <GripVertical className="size-4" />
+                      </button>
                       <Presentation className="size-5 text-muted-foreground" />
                       <div>
                         <p className="text-sm font-medium">{deck.title}</p>
