@@ -10,6 +10,21 @@ export const loginSchema = z.object({
   email: emailSchema,
 });
 
+export const passwordSchema = z
+  .string()
+  .min(8, "Use at least 8 characters.")
+  .max(200, "That password is too long.");
+
+export const passwordLoginSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, "Enter your password."),
+});
+
+export const signUpSchema = z.object({
+  email: emailSchema,
+  password: passwordSchema,
+});
+
 export const joinSchema = z.object({
   code: z
     .string()
@@ -17,6 +32,16 @@ export const joinSchema = z.object({
     .min(4, "Enter your join code.")
     .transform((value) => value.toUpperCase()),
   email: emailSchema,
+});
+
+export const joinPasswordSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(4, "Enter your join code.")
+    .transform((value) => value.toUpperCase()),
+  email: emailSchema,
+  password: passwordSchema,
 });
 
 export const createCourseSchema = z.object({
