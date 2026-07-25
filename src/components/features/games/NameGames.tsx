@@ -56,7 +56,7 @@ function MemoryTiles({
   // so RSC refetches (which hand us a new players array identity) can't
   // reshuffle the board mid-game.
   const [boardPlayers] = useState(() =>
-    shuffle(players).slice(0, Math.min(8, players.length))
+    shuffle(players).slice(0, Math.min(12, players.length))
   );
   const byId = useMemo(
     () => new Map(boardPlayers.map((p) => [p.enrollmentId, p])),
@@ -136,7 +136,8 @@ function MemoryTiles({
       <p className="text-sm text-muted-foreground">
         Match each face to the right name. {moves} flips so far.
       </p>
-      <div className="grid max-w-lg grid-cols-4 gap-2">
+      {/* Six across on a laptop so the board fills the width — 12 pairs. */}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
         {tiles.map((tile) => {
           const isUp = flipped.includes(tile.key) || matched.has(tile.playerId);
           const isGone = matched.has(tile.playerId);
