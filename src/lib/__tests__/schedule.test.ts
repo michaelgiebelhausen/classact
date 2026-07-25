@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSchedule,
+  formatTerm,
   isMeetingWindow,
   isScheduleComplete,
+  isWithinTerm,
   parseTimeToMinutes,
   sessionDateFor,
   zonedParts,
@@ -18,6 +20,37 @@ const MWF: CourseSchedule = {
 };
 
 const utc = (iso: string) => new Date(iso);
+
+describe("term bounds", () => {
+  // Monday 2026-07-20, 9:35 AM Eastern — inside the meeting window.
+  const during = utc("2026-07-20T13:35:00Z");
+
+  it("is unbounded when no dates are set", () => {
+    expect(isWithinTerm(MWF, "2019-01-01")).toBe(true);
+    expect(isMeetingWindow(MWF, during)).toBe(true);
+  });
+
+  it("includes the first and last day of term", () => {
+    const term = { ...MWF, termStart: "2026-07-20", termEnd: "2026-07-20" };
+    expect(isWithinTerm(term, "2026-07-20")).toBe(true);
+    expect(isMeetingWindow(term, during)).toBe(true);
+  });
+
+  it("stays shut before term starts and after it ends", () => {
+    expect(isMeetingWindow({ ...MWF, termStart: "2026-08-24" }, during)).toBe(false);
+    expect(isMeetingWindow({ ...MWF, termEnd: "2026-07-19" }, during)).toBe(false);
+    expect(isWithinTerm({ ...MWF, termEnd: "2026-07-19" }, "2026-07-20")).toBe(false);
+  });
+
+  it("formats the range without timezone drift", () => {
+    expect(formatTerm({ ...MWF, termStart: "2026-08-21", termEnd: "2026-12-05" })).toBe(
+      "Aug 21 – Dec 5"
+    );
+    expect(formatTerm({ ...MWF, termStart: "2026-01-01" })).toBe("from Jan 1");
+    expect(formatTerm({ ...MWF, termEnd: "2026-12-31" })).toBe("through Dec 31");
+    expect(formatTerm(MWF)).toBe("");
+  });
+});
 
 describe("parseTimeToMinutes", () => {
   it("parses HH:MM and Postgres HH:MM:SS", () => {

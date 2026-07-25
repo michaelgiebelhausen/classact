@@ -41,6 +41,9 @@ export interface ScheduleValue {
   end: string | null;
   timezone: string | null;
   autoOpen: boolean;
+  /** Term bounds, "YYYY-MM-DD"; null = unbounded. */
+  termStart: string | null;
+  termEnd: string | null;
 }
 
 interface EnrollmentItem {
@@ -139,6 +142,8 @@ function ScheduleTab({
   const [start, setStart] = useState(initial.start?.slice(0, 5) ?? "");
   const [end, setEnd] = useState(initial.end?.slice(0, 5) ?? "");
   const [autoOpen, setAutoOpen] = useState(initial.autoOpen);
+  const [termStart, setTermStart] = useState(initial.termStart ?? "");
+  const [termEnd, setTermEnd] = useState(initial.termEnd ?? "");
   const [saving, setSaving] = useState(false);
 
   const browserTz =
@@ -164,6 +169,8 @@ function ScheduleTab({
       end: end || null,
       timezone,
       autoOpen,
+      termStart: termStart || null,
+      termEnd: termEnd || null,
     });
     setSaving(false);
     if (result.ok) {
@@ -189,6 +196,33 @@ function ScheduleTab({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="term-start">First day of class</Label>
+            <Input
+              id="term-start"
+              type="date"
+              value={termStart}
+              onChange={(e) => setTermStart(e.target.value)}
+              className="w-44"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="term-end">Last day of class</Label>
+            <Input
+              id="term-end"
+              type="date"
+              value={termEnd}
+              onChange={(e) => setTermEnd(e.target.value)}
+              className="w-44"
+            />
+          </div>
+          <p className="pb-2 text-xs text-muted-foreground">
+            Check-in stops opening itself outside these dates. Leave blank
+            for a course that runs indefinitely.
+          </p>
+        </div>
+
         <div className="grid gap-2">
           <Label>Meeting days</Label>
           <div className="flex gap-1">

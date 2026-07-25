@@ -22,7 +22,7 @@ export default async function CourseSetupPage({
   const { data: course } = await supabase
     .from("courses")
     .select(
-      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open"
+      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
     )
     .eq("id", courseId)
     .single();
@@ -167,6 +167,8 @@ export default async function CourseSetupPage({
           end: course.meeting_end,
           timezone: course.timezone,
           autoOpen: course.auto_open ?? true,
+          termStart: course.term_start,
+          termEnd: course.term_end,
         }}
         enrollments={enrollments ?? []}
         siteUrl={env.siteUrl}

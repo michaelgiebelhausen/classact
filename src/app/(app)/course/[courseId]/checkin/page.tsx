@@ -33,7 +33,7 @@ export default async function CheckInPage({
   const { data: course } = await supabase
     .from("courses")
     .select(
-      "id, name, professor_id, meeting_days, meeting_start, meeting_end, timezone, auto_open"
+      "id, name, professor_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
     )
     .eq("id", courseId)
     .single();
@@ -52,6 +52,8 @@ export default async function CheckInPage({
         start: course.meeting_start as string,
         end: course.meeting_end as string,
         timezone: course.timezone as string,
+        termStart: course.term_start,
+        termEnd: course.term_end,
       }
     : null;
 

@@ -117,9 +117,20 @@ export async function updateSchedule(
     end: string | null;
     timezone: string | null;
     autoOpen: boolean;
+    termStart?: string | null;
+    termEnd?: string | null;
   }
 ): Promise<ActionResult> {
   const clearing = input.days.length === 0;
+  const termStart = input.termStart?.trim() || null;
+  const termEnd = input.termEnd?.trim() || null;
+  const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if ((termStart && !isDate(termStart)) || (termEnd && !isDate(termEnd))) {
+    return { ok: false, error: "Term dates need to be real calendar dates." };
+  }
+  if (termStart && termEnd && termEnd < termStart) {
+    return { ok: false, error: "The term can't end before it starts." };
+  }
   if (!clearing && !isScheduleComplete(input)) {
     return {
       ok: false,
@@ -141,13 +152,23 @@ export async function updateSchedule(
     .from("courses")
     .update(
       clearing
-        ? { meeting_days: [], meeting_start: null, meeting_end: null, auto_open: input.autoOpen }
+        ? {
+            meeting_days: [],
+            meeting_start: null,
+            meeting_end: null,
+            auto_open: input.autoOpen,
+            // Term dates outlive the weekly pattern — keep them.
+            term_start: termStart,
+            term_end: termEnd,
+          }
         : {
             meeting_days: [...new Set(input.days)].sort((a, b) => a - b),
             meeting_start: input.start,
             meeting_end: input.end,
             timezone: input.timezone,
             auto_open: input.autoOpen,
+            term_start: termStart,
+            term_end: termEnd,
           }
     )
     .eq("id", courseId);

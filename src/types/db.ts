@@ -96,6 +96,9 @@ export type CourseRow = {
   meeting_end: string | null
   timezone: string | null
   auto_open: boolean
+  /** Inclusive term bounds, "YYYY-MM-DD"; null = runs indefinitely. */
+  term_start: string | null
+  term_end: string | null
   /** Course-level Tasty Grading defaults (cut points, weights, windows). */
   grading_defaults: Record<string, unknown>
   /** Professor's participation-score weights (competency key → 0..1). */

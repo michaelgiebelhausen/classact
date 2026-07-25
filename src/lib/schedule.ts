@@ -17,6 +17,10 @@ export interface CourseSchedule {
   end: string;
   /** IANA timezone, e.g. "America/New_York". */
   timezone: string;
+  /** First day of term, "YYYY-MM-DD" inclusive; null/absent = no bound. */
+  termStart?: string | null;
+  /** Last day of term, "YYYY-MM-DD" inclusive; null/absent = no bound. */
+  termEnd?: string | null;
 }
 
 /** Check-in opens this many minutes before the scheduled start. */
@@ -84,6 +88,14 @@ export function zonedParts(
   };
 }
 
+/** Is this calendar date inside the course's term? (Unbounded when unset.) */
+export function isWithinTerm(schedule: CourseSchedule, date: string): boolean {
+  // ISO dates compare correctly as strings.
+  if (schedule.termStart && date < schedule.termStart) return false;
+  if (schedule.termEnd && date > schedule.termEnd) return false;
+  return true;
+}
+
 /** Is `now` inside the auto-open window (start − 15 min → end) on a meeting day? */
 export function isMeetingWindow(schedule: CourseSchedule, now: Date): boolean {
   const start = parseTimeToMinutes(schedule.start);
@@ -92,6 +104,8 @@ export function isMeetingWindow(schedule: CourseSchedule, now: Date): boolean {
   if (schedule.days.length === 0) return false;
   const local = zonedParts(now, schedule.timezone);
   if (!schedule.days.includes(local.day)) return false;
+  // The weekly pattern repeats forever; the term is what ends it.
+  if (!isWithinTerm(schedule, local.date)) return false;
   return local.minutes >= start - OPEN_EARLY_MINUTES && local.minutes < end;
 }
 
@@ -121,6 +135,27 @@ export function formatSchedule(schedule: CourseSchedule): string {
     .join(", ");
   if (!days) return "";
   return `${days} · ${formatTime(schedule.start)}–${formatTime(schedule.end)}`;
+}
+
+const MONTH_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** "2026-08-21" → "Aug 21", parsed by hand so no timezone can shift it. */
+function formatDay(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return `${MONTH_SHORT[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}`;
+}
+
+/** "Aug 21 – Dec 5" for the schedule summary; "" when unbounded. */
+export function formatTerm(schedule: CourseSchedule): string {
+  const { termStart, termEnd } = schedule;
+  if (termStart && termEnd) return `${formatDay(termStart)} – ${formatDay(termEnd)}`;
+  if (termStart) return `from ${formatDay(termStart)}`;
+  if (termEnd) return `through ${formatDay(termEnd)}`;
+  return "";
 }
 
 /** Valid, complete, and auto-openable? (Shared by UI + server action.) */
