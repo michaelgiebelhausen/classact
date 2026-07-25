@@ -81,3 +81,17 @@ assignments.state: + 'awaiting_key'
 - If a professor's subscription lapses mid-semester, courses stay readable;
   the gate blocks only *new* course creation (students are never hostages).
 - Mike's account: set `founder = true` in SQL right after 0015 runs.
+
+## Platform-subsidized AI (decision, Mike 2026-07-24, go-live)
+
+Non-grading course AI is **platform-paid on the system env key** whenever a
+professor hasn't connected their own OpenRouter key: think-pair-share
+question generation (`questions` task in `resolveCourseAi`), plus the
+already-env-keyed room-photo vision, project drafting, and phonetics.
+Rationale: OpenRouter setup is intimidating; peer instruction and the
+performance metrics generate the data/superstar-identification that is the
+platform's return on the spend. **Grading tasks (taste / rubric / baseline /
+scoring) are never platform-paid for non-founders** — professors connect
+their own key before an assignment's analysis runs (awaiting_key pause,
+unchanged). A professor with a connected key pays for everything on their
+own models, including questions.

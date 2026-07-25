@@ -79,10 +79,12 @@ export function AiSettingsForm({ settings }: { settings: AiSettingsView }) {
               )}
           </CardTitle>
           <CardDescription>
-            Course AI (grading, rubrics, question generation) runs on your
-            own OpenRouter credits — you control the spend and the models.
-            Create a key at openrouter.ai → Keys, then paste it here. We
-            encrypt it and never show it again.
+            Peer-instruction questions, room-photo import, and project
+            drafting are on the house. Grading AI (taste files, rubrics,
+            submission scoring) runs on your own OpenRouter credits — you
+            control the spend and the models. Create a key at openrouter.ai
+            → Keys, then paste it here. We encrypt it and never show it
+            again.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">

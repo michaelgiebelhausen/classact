@@ -4,19 +4,26 @@ import { decryptSecret } from "@/lib/aicrypto";
 import { env, isConfigured } from "@/lib/env";
 
 /**
- * BYOK credential resolution (docs/byok-billing-plan.md): every course-scoped
- * AI call runs on the course owner's own OpenRouter key + model choices.
- * Founder accounts fall back to the system env key so Mike's courses keep
- * working unchanged. Returns null when no working credentials exist — the
- * caller pauses (awaiting_key), never bills the platform.
+ * BYOK credential resolution (docs/byok-billing-plan.md): course-scoped AI
+ * runs on the course owner's own OpenRouter key + model choices, with two
+ * fallbacks to the system env key: founder accounts (all tasks), and
+ * platform-subsidized tasks (peer instruction) for everyone — the data those
+ * features generate is the platform's return on that spend. Grading tasks
+ * are never platform-paid for non-founders (Mike: "I really don't want to
+ * pay for AI credits to help other people grade their papers"). Returns
+ * null when no working credentials exist — the caller pauses
+ * (awaiting_key), never bills the platform.
  */
 
 export type AiTask = "taste" | "rubric" | "baseline" | "scoring" | "questions";
 
+/** Tasks the platform covers on the system key when the professor has no key. */
+const PLATFORM_SUBSIDIZED: readonly AiTask[] = ["questions"];
+
 export interface CourseAiCreds {
   apiKey: string;
   model: string;
-  source: "professor" | "founder";
+  source: "professor" | "founder" | "platform";
 }
 
 interface StoredModels {
@@ -74,12 +81,21 @@ export async function resolveCourseAi(
       // fall through — treat as missing
     }
   }
-  if (profile?.founder && env.openrouterApiKey) {
-    return {
-      apiKey: env.openrouterApiKey,
-      model: env.openrouterModel,
-      source: "founder",
-    };
+  if (env.openrouterApiKey) {
+    if (profile?.founder) {
+      return {
+        apiKey: env.openrouterApiKey,
+        model: env.openrouterModel,
+        source: "founder",
+      };
+    }
+    if (PLATFORM_SUBSIDIZED.includes(task)) {
+      return {
+        apiKey: env.openrouterApiKey,
+        model: env.openrouterModel,
+        source: "platform",
+      };
+    }
   }
   return null;
 }
