@@ -4,13 +4,18 @@ import { createClient } from "@/lib/supabase/server";
 import { gameScoreSchema } from "@/lib/validators";
 import type { ActionResult } from "@/server/actions/auth";
 
-/** Record a finished round (FR-013/FR-014). */
+/**
+ * Record a finished round (FR-013/FR-014). Scores hang off an enrollment,
+ * so professors (and anyone else without one) have nowhere to store a
+ * result — that's `recorded: false`, not an error worth interrupting a
+ * game for.
+ */
 export async function recordGameScore(input: {
   courseId: string;
   gameType: "memory_tiles" | "flash_cards" | "matching";
   score: number;
   durationMs?: number;
-}): Promise<ActionResult> {
+}): Promise<ActionResult<{ recorded: boolean }>> {
   const parsed = gameScoreSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Invalid score payload." };
 
@@ -28,7 +33,8 @@ export async function recordGameScore(input: {
     .eq("status", "active")
     .maybeSingle();
   if (!enrollment) {
-    return { ok: false, error: "You're not in this course." };
+    // Professor or observer: let them play, just don't score it.
+    return { ok: true, data: { recorded: false } };
   }
 
   const { error } = await supabase.from("name_game_scores").insert({
@@ -38,5 +44,5 @@ export async function recordGameScore(input: {
     duration_ms: parsed.data.durationMs ?? null,
   });
   if (error) return { ok: false, error: "Couldn't save your score." };
-  return { ok: true };
+  return { ok: true, data: { recorded: true } };
 }
