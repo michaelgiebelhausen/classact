@@ -24,6 +24,11 @@ export interface GamePlayer {
   hint?: { label: string; value: string } | null;
 }
 
+/** "Emma Mabel Roethke" → "Emma" — the name-tag label on a matched face. */
+function firstNameOf(name: string): string {
+  return name.split(/\s+/)[0] ?? name;
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -303,12 +308,20 @@ function Matching({
   );
   const [nameColumn] = useState(() => shuffle(boardPlayers));
 
-  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  // Name-tag flow: pick a name, then drop it on the right face (tap or drag).
+  const [heldName, setHeldName] = useState<string | null>(null);
   const [matched, setMatched] = useState<Set<string>>(new Set());
-  const [wrongName, setWrongName] = useState<string | null>(null);
+  const [wrongPhoto, setWrongPhoto] = useState<string | null>(null);
   const [misses, setMisses] = useState(0);
   const [startedAt] = useState(() => Date.now());
   const [done, setDone] = useState(false);
+
+  // Clear the "wrong face" flash on its own.
+  useEffect(() => {
+    if (!wrongPhoto) return;
+    const timer = setTimeout(() => setWrongPhoto(null), 700);
+    return () => clearTimeout(timer);
+  }, [wrongPhoto]);
 
   // Record the finished round in an effect (keeps Date.now() out of render,
   // same as Memory tiles). Fires once when the board is cleared.
@@ -327,19 +340,20 @@ function Matching({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done]);
 
-  function pickName(id: string) {
-    if (done || matched.has(id) || !selectedPhoto) return;
-    if (selectedPhoto === id) {
+  /** Drop the held name tag on a face. */
+  function placeOn(photoId: string) {
+    if (done || matched.has(photoId) || !heldName) return;
+    if (heldName === photoId) {
       const next = new Set(matched);
-      next.add(id);
+      next.add(photoId);
       setMatched(next);
-      setSelectedPhoto(null);
-      setWrongName(null);
+      setHeldName(null);
+      setWrongPhoto(null);
       if (next.size === boardPlayers.length) setDone(true);
     } else {
       setMisses((m) => m + 1);
-      setWrongName(id);
-      setSelectedPhoto(null);
+      setWrongPhoto(photoId);
+      setHeldName(null);
     }
   }
 
@@ -357,31 +371,60 @@ function Matching({
     );
   }
 
+  // Fill the width with as square a grid as the board allows; the grid
+  // stretches to the name column's height so faces get the whole space.
+  const cols = boardPlayers.length <= 4 ? 2 : 3;
+  const rows = Math.ceil(boardPlayers.length / cols);
+
   return (
     <div className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        Tap a face, then tap the name that goes with it.{" "}
+        {heldName
+          ? "Now tap the person it belongs to."
+          : "Tap a name, then tap whose it is — or drag it onto their photo."}{" "}
         {misses > 0 ? `${misses} miss${misses === 1 ? "" : "es"}.` : null}
       </p>
-      <div className="flex flex-wrap items-start gap-6">
-        {/* Photo grid — thumbnails sized so all faces + names fit one screen. */}
-        <div className="grid grid-cols-3 content-start gap-2">
+      <div className="flex flex-wrap items-stretch gap-4">
+        {/* Faces — the drop targets for name tags. */}
+        <div
+          className="grid min-h-80 min-w-64 flex-1 gap-2"
+          style={{
+            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+          }}
+        >
           {boardPlayers.map((p) => {
             const isMatched = matched.has(p.enrollmentId);
-            const isSelected = selectedPhoto === p.enrollmentId;
+            const isWrong = wrongPhoto === p.enrollmentId;
             return (
               <button
                 key={p.enrollmentId}
                 type="button"
-                onClick={() => {
-                  if (!isMatched) setSelectedPhoto(p.enrollmentId);
+                onClick={() => placeOn(p.enrollmentId)}
+                onDragOver={(e) => {
+                  if (heldName && !isMatched) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  placeOn(p.enrollmentId);
                 }}
                 disabled={isMatched}
-                aria-label={isMatched ? `Matched: ${p.name}` : "Pick this face"}
+                aria-label={
+                  isMatched
+                    ? `Matched: ${p.name}`
+                    : heldName
+                      ? "Put the name here"
+                      : "Pick a name first"
+                }
                 className={[
-                  "h-24 w-24 overflow-hidden rounded-lg border-2 transition-all sm:h-28 sm:w-28",
-                  isMatched ? "opacity-30" : "",
-                  isSelected ? "border-primary ring-2 ring-primary" : "border-transparent",
+                  "relative min-h-0 overflow-hidden rounded-lg border-2 transition-all",
+                  isMatched ? "border-primary" : "",
+                  isWrong ? "border-destructive ring-2 ring-destructive" : "",
+                  !isMatched && !isWrong
+                    ? heldName
+                      ? "cursor-copy border-dashed border-primary/40 hover:border-primary"
+                      : "border-transparent"
+                    : "",
                 ].join(" ")}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -390,31 +433,48 @@ function Matching({
                   alt="Classmate"
                   className="h-full w-full object-cover"
                 />
+                {isMatched && (
+                  <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6 text-center text-sm font-semibold text-white">
+                    {firstNameOf(p.name)}
+                  </span>
+                )}
               </button>
             );
           })}
         </div>
-        {/* Name column */}
-        <div className="grid min-w-52 flex-1 content-start gap-2 sm:max-w-xs">
+        {/* Name tags */}
+        <div className="grid w-full shrink-0 content-start gap-2 sm:w-64">
           {nameColumn.map((p) => {
             const isMatched = matched.has(p.enrollmentId);
-            const isWrong = wrongName === p.enrollmentId;
+            const isHeld = heldName === p.enrollmentId;
             return (
               <button
                 key={p.enrollmentId}
                 type="button"
-                onClick={() => pickName(p.enrollmentId)}
+                draggable={!isMatched}
+                onDragStart={() => setHeldName(p.enrollmentId)}
+                onClick={() => {
+                  if (!isMatched) setHeldName(isHeld ? null : p.enrollmentId);
+                }}
                 disabled={isMatched}
+                aria-pressed={isHeld}
                 className={[
                   "rounded-lg border px-3 py-2 text-left text-sm font-medium transition-all",
-                  isMatched ? "border-primary bg-primary/10 text-primary opacity-60" : "",
-                  isWrong ? "border-destructive bg-destructive/10 text-destructive" : "",
-                  !isMatched && !isWrong ? "hover:border-primary" : "",
+                  isMatched
+                    ? "border-dashed border-primary/30 bg-transparent text-muted-foreground/40"
+                    : isHeld
+                      ? "border-primary bg-primary text-primary-foreground shadow-md"
+                      : "cursor-grab hover:border-primary",
                 ].join(" ")}
               >
                 {p.name}
                 {p.phonetic ? (
-                  <span className="block text-xs font-normal italic text-muted-foreground">
+                  <span
+                    className={[
+                      "block text-xs font-normal italic",
+                      isHeld ? "text-primary-foreground/80" : "text-muted-foreground",
+                    ].join(" ")}
+                  >
                     {p.phonetic}
                   </span>
                 ) : null}
