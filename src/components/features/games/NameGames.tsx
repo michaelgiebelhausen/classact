@@ -16,8 +16,17 @@ export interface GamePlayer {
   photoUrls: string[]; // 1–3 signed URLs
   /** Pronunciation guide ("shiv-AWN"), if the classmate added one. */
   phonetic?: string | null;
-  /** One icebreaker fact for the flash-card back, e.g. { label: "Hometown", value: "Greenville, SC" }. */
-  hint?: { label: string; value: string } | null;
+  /** Every icebreaker they answered, e.g. [{ label: "Hometown", value: "Greenville, SC" }]. */
+  hints: Array<{ label: string; value: string }>;
+}
+
+/**
+ * A different photo each time someone comes up: with three uploads, each
+ * shows about a third of the time. Called from deal-time state initializers
+ * so a re-render never swaps the face mid-round.
+ */
+function pickPhoto(p: GamePlayer): string {
+  return p.photoUrls[Math.floor(Math.random() * p.photoUrls.length)];
 }
 
 /** "Emma Mabel Roethke" → "Emma" — the name-tag label on a matched face. */
@@ -69,7 +78,7 @@ function MemoryTiles({
           key: `${p.enrollmentId}-photo`,
           playerId: p.enrollmentId,
           kind: "photo" as const,
-          content: p.photoUrls[Math.floor(Math.random() * p.photoUrls.length)],
+          content: pickPhoto(p),
         },
         {
           key: `${p.enrollmentId}-name`,
@@ -195,8 +204,16 @@ function FlashCards({
   onNextRound: () => void;
 }) {
   // Deal once per game (see MemoryTiles) — a reshuffle mid-run swapped the
-  // face under the card whenever the server payload refreshed.
-  const [deck] = useState(() => shuffle(players));
+  // face under the card whenever the server payload refreshed. Each card
+  // also fixes its photo and which slice of the person's bio it shows, so
+  // running the deck again surfaces different shots and different facts.
+  const [deck] = useState(() =>
+    shuffle(players).map((p) => ({
+      ...p,
+      photo: pickPhoto(p),
+      shownHints: shuffle(p.hints).slice(0, 2),
+    }))
+  );
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [right, setRight] = useState(0);
@@ -204,10 +221,6 @@ function FlashCards({
   const [done, setDone] = useState(false);
 
   const player = deck[index];
-  // Deterministic per card (cycles the 1–3 photo kinds across the deck).
-  const photo = player
-    ? player.photoUrls[index % player.photoUrls.length]
-    : null;
 
   function next(gotIt: boolean) {
     const newRight = gotIt ? right + 1 : right;
@@ -238,51 +251,101 @@ function FlashCards({
       />
     );
   }
-  if (!player || !photo) return null;
+  if (!player) return null;
+  // Their other uploads — a second look at the same person on the reveal.
+  const otherPhotos = player.photoUrls
+    .filter((url) => url !== player.photo)
+    .slice(0, 2);
 
   return (
-    <div className="grid justify-items-center gap-4">
+    <div className="grid gap-4">
       <p className="text-sm text-muted-foreground">
         Card {index + 1} of {deck.length} — know their name before you flip.
       </p>
-      <button
-        type="button"
-        onClick={() => setRevealed((r) => !r)}
-        className="w-64 overflow-hidden rounded-xl border shadow-sm"
-        aria-label={revealed ? player.name : "Flip to reveal name"}
-      >
-        {revealed ? (
-          <div className="flex h-72 flex-col items-center justify-center gap-2 bg-background p-4 text-center">
-            <span className="text-xl font-semibold">{player.name}</span>
-            {player.phonetic ? (
-              <span className="text-sm italic text-muted-foreground">
-                {player.phonetic}
-              </span>
-            ) : null}
-            {player.hint ? (
-              <span className="mt-1 text-sm text-muted-foreground">
-                <span className="font-medium">{player.hint.label}:</span>{" "}
-                {player.hint.value}
-              </span>
-            ) : null}
-          </div>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={photo} alt="Classmate" className="h-72 w-64 object-cover" />
-        )}
-      </button>
-      {revealed ? (
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => next(false)}>
-            Didn&apos;t know it
-          </Button>
-          <Button onClick={() => next(true)}>Got it</Button>
+      <div className="grid gap-6 sm:grid-cols-[minmax(0,18rem)_1fr]">
+        <button
+          type="button"
+          onClick={() => setRevealed((r) => !r)}
+          className="overflow-hidden rounded-xl border shadow-sm"
+          aria-label={revealed ? player.name : "Flip to reveal name"}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={player.photo}
+            alt="Classmate"
+            className="aspect-[4/5] w-full object-cover"
+          />
+        </button>
+
+        <div className="grid content-start gap-3">
+          {revealed ? (
+            <>
+              <div>
+                <p className="text-2xl font-semibold leading-tight">
+                  {player.name}
+                </p>
+                {player.phonetic ? (
+                  <p className="text-sm italic text-muted-foreground">
+                    {player.phonetic}
+                  </p>
+                ) : null}
+              </div>
+
+              {otherPhotos.length > 0 && (
+                <div className="flex gap-2">
+                  {otherPhotos.map((url) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={url}
+                      src={url}
+                      alt=""
+                      className="size-20 rounded-lg border object-cover"
+                    />
+                  ))}
+                </div>
+              )}
+
+              {player.shownHints.length > 0 ? (
+                <dl className="grid gap-2">
+                  {player.shownHints.map((h) => (
+                    <div key={h.label} className="rounded-lg border p-3">
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {h.label}
+                      </dt>
+                      <dd className="mt-0.5 text-sm">{h.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  They haven&apos;t answered the icebreakers yet.
+                </p>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <Button variant="outline" onClick={() => next(false)}>
+                  Didn&apos;t know it
+                </Button>
+                <Button onClick={() => next(true)}>Got it</Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">
+                Say their name out loud, then flip to see if you had it — and
+                pick up something about them while you&apos;re here.
+              </p>
+              <Button
+                variant="outline"
+                className="w-fit"
+                onClick={() => setRevealed(true)}
+              >
+                Flip
+              </Button>
+            </>
+          )}
         </div>
-      ) : (
-        <Button variant="outline" onClick={() => setRevealed(true)}>
-          Flip
-        </Button>
-      )}
+      </div>
     </div>
   );
 }
@@ -307,6 +370,11 @@ function Matching({
     shuffle(players).slice(0, Math.min(6, players.length))
   );
   const [nameColumn] = useState(() => shuffle(boardPlayers));
+  // One photo per face per deal, so repeat rounds don't always show the
+  // same shot of the same person.
+  const [photoById] = useState(
+    () => new Map(boardPlayers.map((p) => [p.enrollmentId, pickPhoto(p)]))
+  );
 
   // Name-tag flow: pick a name, then drop it on the right face (tap or drag).
   const [heldName, setHeldName] = useState<string | null>(null);
@@ -430,7 +498,7 @@ function Matching({
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={p.photoUrls[0]}
+                  src={photoById.get(p.enrollmentId)}
                   alt="Classmate"
                   className="h-full w-full object-cover"
                 />

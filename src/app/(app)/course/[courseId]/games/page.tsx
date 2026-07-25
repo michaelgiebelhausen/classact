@@ -58,9 +58,13 @@ export default async function GamesPage({
       }
     }
 
-    // One icebreaker fact per classmate for the flash-card back — the first
-    // flashcard-eligible field (in catalog priority order) they actually answered.
-    const hintByEnrollment = new Map<string, { label: string; value: string }>();
+    // Every flashcard-eligible icebreaker each classmate answered, in catalog
+    // order. Flash cards show a rotating couple of them, so the same person
+    // reveals different facts on different passes.
+    const hintsByEnrollment = new Map<
+      string,
+      Array<{ label: string; value: string }>
+    >();
     const hintFields = flashcardHintFields(course.icebreaker_fields ?? []);
     if (hintFields.length > 0 && candidates.length > 0) {
       const { data: answers } = await admin
@@ -82,13 +86,12 @@ export default async function GamesPage({
         m.set(a.field_key, value);
       }
       for (const [enrollmentId, m] of answersByEnrollment) {
+        const facts: Array<{ label: string; value: string }> = [];
         for (const f of hintFields) {
           const value = m.get(f.key);
-          if (value) {
-            hintByEnrollment.set(enrollmentId, { label: f.label, value });
-            break;
-          }
+          if (value) facts.push({ label: f.label, value });
         }
+        if (facts.length > 0) hintsByEnrollment.set(enrollmentId, facts);
       }
     }
 
@@ -103,7 +106,7 @@ export default async function GamesPage({
             (e.profile_id ? phoneticByProfile.get(e.profile_id) : null) ??
             e.roster_name_phonetic ??
             null,
-          hint: hintByEnrollment.get(e.id) ?? null,
+          hints: hintsByEnrollment.get(e.id) ?? [],
         });
       }
     }
