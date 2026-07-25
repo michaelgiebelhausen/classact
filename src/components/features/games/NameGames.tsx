@@ -51,9 +51,11 @@ function MemoryTiles({
   courseId: string;
   onExit: () => void;
 }) {
-  const boardPlayers = useMemo(
-    () => shuffle(players).slice(0, Math.min(8, players.length)),
-    [players]
+  // Deal once per game: useState initializers run exactly once per mount,
+  // so RSC refetches (which hand us a new players array identity) can't
+  // reshuffle the board mid-game.
+  const [boardPlayers] = useState(() =>
+    shuffle(players).slice(0, Math.min(8, players.length))
   );
   const byId = useMemo(
     () => new Map(boardPlayers.map((p) => [p.enrollmentId, p])),
@@ -133,7 +135,7 @@ function MemoryTiles({
       <p className="text-sm text-muted-foreground">
         Match each face to the right name. {moves} flips so far.
       </p>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid max-w-lg grid-cols-4 gap-2">
         {tiles.map((tile) => {
           const isUp = flipped.includes(tile.key) || matched.has(tile.playerId);
           const isGone = matched.has(tile.playerId);
@@ -190,7 +192,9 @@ function FlashCards({
   courseId: string;
   onExit: () => void;
 }) {
-  const deck = useMemo(() => shuffle(players), [players]);
+  // Deal once per game (see MemoryTiles) — a reshuffle mid-run swapped the
+  // face under the card whenever the server payload refreshed.
+  const [deck] = useState(() => shuffle(players));
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [right, setRight] = useState(0);
@@ -292,12 +296,12 @@ function Matching({
   courseId: string;
   onExit: () => void;
 }) {
-  // A board of up to 6. Photos hold their order; the name column is shuffled.
-  const boardPlayers = useMemo(
-    () => shuffle(players).slice(0, Math.min(6, players.length)),
-    [players]
+  // A board of up to 6, dealt once per game (see MemoryTiles). Photos hold
+  // their order; the name column is shuffled.
+  const [boardPlayers] = useState(() =>
+    shuffle(players).slice(0, Math.min(6, players.length))
   );
-  const nameColumn = useMemo(() => shuffle(boardPlayers), [boardPlayers]);
+  const [nameColumn] = useState(() => shuffle(boardPlayers));
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [matched, setMatched] = useState<Set<string>>(new Set());
@@ -359,9 +363,9 @@ function Matching({
         Tap a face, then tap the name that goes with it.{" "}
         {misses > 0 ? `${misses} miss${misses === 1 ? "" : "es"}.` : null}
       </p>
-      <div className="grid grid-cols-2 gap-4">
-        {/* Photo column */}
-        <div className="grid gap-2">
+      <div className="flex flex-wrap items-start gap-6">
+        {/* Photo grid — thumbnails sized so all faces + names fit one screen. */}
+        <div className="grid grid-cols-3 content-start gap-2">
           {boardPlayers.map((p) => {
             const isMatched = matched.has(p.enrollmentId);
             const isSelected = selectedPhoto === p.enrollmentId;
@@ -375,7 +379,7 @@ function Matching({
                 disabled={isMatched}
                 aria-label={isMatched ? `Matched: ${p.name}` : "Pick this face"}
                 className={[
-                  "overflow-hidden rounded-lg border-2 transition-all",
+                  "h-24 w-24 overflow-hidden rounded-lg border-2 transition-all sm:h-28 sm:w-28",
                   isMatched ? "opacity-30" : "",
                   isSelected ? "border-primary ring-2 ring-primary" : "border-transparent",
                 ].join(" ")}
@@ -384,14 +388,14 @@ function Matching({
                 <img
                   src={p.photoUrls[0]}
                   alt="Classmate"
-                  className="aspect-square w-full object-cover"
+                  className="h-full w-full object-cover"
                 />
               </button>
             );
           })}
         </div>
         {/* Name column */}
-        <div className="grid content-start gap-2">
+        <div className="grid min-w-52 flex-1 content-start gap-2 sm:max-w-xs">
           {nameColumn.map((p) => {
             const isMatched = matched.has(p.enrollmentId);
             const isWrong = wrongName === p.enrollmentId;
