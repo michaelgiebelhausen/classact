@@ -9,6 +9,7 @@ import {
   ClipboardCheck,
   LayoutDashboard,
   Megaphone,
+  MessageSquarePlus,
   MonitorPlay,
   Settings,
   Sparkles,
@@ -135,6 +136,12 @@ export function Sidebar({ role }: { role: Role }) {
 
       <div className="flex-1" />
       <div className="my-1.5 h-px w-8 bg-white/10" />
+      <RailLink
+        label="Feedback"
+        icon={MessageSquarePlus}
+        href="/feedback"
+        active={pathname.startsWith("/feedback")}
+      />
       <RailLink
         label={role === "professor" ? "Setup" : "Profile"}
         icon={Settings}

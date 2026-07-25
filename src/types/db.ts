@@ -50,6 +50,19 @@ export type ProfessorAiRow = {
   updated_at: string
 }
 
+export type FeedbackKind = "bug" | "improvement" | "feature"
+export type FeedbackStatus = "new" | "planned" | "done" | "closed"
+
+export type FeedbackRow = {
+  id: string
+  profile_id: string
+  kind: FeedbackKind
+  body: string
+  page_path: string | null
+  status: FeedbackStatus
+  created_at: string
+}
+
 export type ProfessorCanvasRow = {
   profile_id: string
   base_url: string
@@ -608,6 +621,7 @@ export type Database = {
       student_flags: TableShape<StudentFlagRow>
       professor_ai: TableShape<ProfessorAiRow>
       professor_canvas: TableShape<ProfessorCanvasRow>
+      feedback: TableShape<FeedbackRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

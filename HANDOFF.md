@@ -45,8 +45,9 @@ You already created the "Class Act" project at supabase.com. Now:
    `0008_roster_phonetics.sql`, `0009_projects.sql`,
    `0010_exercises.sql`, `0011_rooms.sql`, `0012_schedule.sql`,
    `0013_assignments.sql`, `0014_shoutouts_participation.sql`,
-   `0015_byok_billing.sql`, `0016_lecture_pause.sql`, then
-   `0017_canvas_connections.sql` (order matters). Each should say "Success".
+   `0015_byok_billing.sql`, `0016_lecture_pause.sql`,
+   `0017_canvas_connections.sql`, then `0018_feedback.sql` (order matters).
+   Each should say "Success".
    *(0011 adds seat geometry + the shared room database; 0012 adds the
    class schedule that auto-opens check-in; 0013 adds Tasty Grading; 0014
    adds shout-outs + the professor's participation cockpit; 0015 adds the

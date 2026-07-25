@@ -41,3 +41,33 @@ export async function sendInviteEmail(input: {
   if (error) return { sent: false, error: error.message };
   return { sent: true };
 }
+
+/**
+ * Notify founders that new feedback landed. Best-effort — never throws;
+ * the feedback row is already stored before this is called.
+ */
+export async function sendFeedbackNotification(input: {
+  to: string[];
+  kind: string;
+  body: string;
+  submitterName: string;
+}): Promise<void> {
+  if (!isConfigured.email || input.to.length === 0) return;
+  try {
+    const resend = new Resend(env.resendApiKey);
+    await resend.emails.send({
+      from: env.emailFrom,
+      to: input.to,
+      subject: `ClassAct feedback — ${input.kind} from ${input.submitterName}`,
+      text: [
+        `${input.submitterName} filed a ${input.kind}:`,
+        ``,
+        input.body,
+        ``,
+        `Triage it: ${env.siteUrl}/feedback`,
+      ].join("\n"),
+    });
+  } catch {
+    // Courtesy email only — the feedback itself is safe in the database.
+  }
+}
