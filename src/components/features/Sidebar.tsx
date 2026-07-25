@@ -17,7 +17,6 @@ import {
   Vote,
   type LucideIcon,
 } from "lucide-react";
-import type { Role } from "@/types/db";
 
 interface NavItem {
   label: string;
@@ -89,7 +88,7 @@ function RailLink({
   );
 }
 
-export function Sidebar({ role }: { role: Role }) {
+export function Sidebar() {
   const pathname = usePathname() ?? "";
   const match = pathname.match(/\/course\/([^/]+)/);
   const courseId = match?.[1];
@@ -143,9 +142,10 @@ export function Sidebar({ role }: { role: Role }) {
         active={pathname.startsWith("/feedback")}
       />
       <RailLink
-        label={role === "professor" ? "Setup" : "Profile"}
+        label="Profile"
         icon={Settings}
-        href={role === "professor" ? "/dashboard" : "/profile"}
+        href="/profile"
+        active={pathname.startsWith("/profile")}
       />
     </nav>
   );

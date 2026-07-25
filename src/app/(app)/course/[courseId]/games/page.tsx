@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { resolveEnrollmentPhotos } from "@/lib/storage";
+import { getSignedPhotoUrls, resolveEnrollmentPhotos } from "@/lib/storage";
 import { flashcardHintFields } from "@/lib/icebreakers";
 import { NameGames, type GamePlayer } from "@/components/features/games/NameGames";
 
@@ -22,7 +22,7 @@ export default async function GamesPage({
   // RLS membership gate.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, icebreaker_fields")
+    .select("id, name, icebreaker_fields, professor_id")
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -92,6 +92,50 @@ export default async function GamesPage({
           if (value) facts.push({ label: f.label, value });
         }
         if (facts.length > 0) hintsByEnrollment.set(enrollmentId, facts);
+      }
+    }
+
+    // The professor is in the room too: students should learn their name and
+    // face like anyone else's. Their photos and icebreaker answers hang off
+    // the profile (no enrollment of their own), so they're fetched directly.
+    if (course.professor_id !== profile.id) {
+      const [{ data: profPhotos }, { data: prof }, { data: profAnswers }] =
+        await Promise.all([
+          admin
+            .from("profile_photos")
+            .select("storage_path")
+            .eq("profile_id", course.professor_id),
+          admin
+            .from("profiles")
+            .select("full_name, name_phonetic")
+            .eq("id", course.professor_id)
+            .maybeSingle(),
+          admin
+            .from("profile_answers")
+            .select("field_key, value")
+            .eq("profile_id", course.professor_id),
+        ]);
+      const paths = (profPhotos ?? []).map((p) => p.storage_path);
+      const urlMap = await getSignedPhotoUrls(admin, paths);
+      const urls = paths
+        .map((p) => urlMap[p])
+        .filter((u): u is string => Boolean(u));
+      if (urls.length > 0) {
+        const answerByKey = new Map(
+          (profAnswers ?? []).map((a) => [a.field_key, a.value])
+        );
+        const facts: Array<{ label: string; value: string }> = [];
+        for (const f of hintFields) {
+          const value = answerByKey.get(f.key);
+          if (value) facts.push({ label: f.label, value });
+        }
+        players.push({
+          enrollmentId: `professor:${course.professor_id}`,
+          name: prof?.full_name ?? "Your professor",
+          photoUrls: urls,
+          phonetic: prof?.name_phonetic ?? null,
+          hints: facts,
+        });
       }
     }
 

@@ -50,6 +50,14 @@ export type ProfessorAiRow = {
   updated_at: string
 }
 
+/** Profile-level icebreaker answer (professors; students answer per course). */
+export type ProfileAnswerRow = {
+  profile_id: string
+  field_key: string
+  value: string
+  updated_at: string
+}
+
 export type FeedbackKind = "bug" | "improvement" | "feature"
 export type FeedbackStatus = "new" | "planned" | "done" | "closed"
 
@@ -622,6 +630,7 @@ export type Database = {
       professor_ai: TableShape<ProfessorAiRow>
       professor_canvas: TableShape<ProfessorCanvasRow>
       feedback: TableShape<FeedbackRow>
+      profile_answers: TableShape<ProfileAnswerRow>
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }
