@@ -2,14 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { recordGameScore } from "@/server/actions/games";
 import { capture } from "@/lib/analytics";
 import type { GameType } from "@/types/db";
@@ -50,11 +46,11 @@ interface Tile {
 function MemoryTiles({
   players,
   courseId,
-  onExit,
+  onNextRound,
 }: {
   players: GamePlayer[];
   courseId: string;
-  onExit: () => void;
+  onNextRound: () => void;
 }) {
   // Deal once per game: useState initializers run exactly once per mount,
   // so RSC refetches (which hand us a new players array identity) can't
@@ -130,7 +126,7 @@ function MemoryTiles({
       <GameResult
         title="Board cleared."
         detail={`${moves} flips for ${boardPlayers.length} classmates.`}
-        onExit={onExit}
+        onPlayAgain={onNextRound}
       />
     );
   }
@@ -191,11 +187,11 @@ function MemoryTiles({
 function FlashCards({
   players,
   courseId,
-  onExit,
+  onNextRound,
 }: {
   players: GamePlayer[];
   courseId: string;
-  onExit: () => void;
+  onNextRound: () => void;
 }) {
   // Deal once per game (see MemoryTiles) — a reshuffle mid-run swapped the
   // face under the card whenever the server payload refreshed.
@@ -237,7 +233,7 @@ function FlashCards({
       <GameResult
         title={`${right}/${deck.length} names right.`}
         detail={right === deck.length ? "You know the whole room." : "Run it again — it sticks fast."}
-        onExit={onExit}
+        onPlayAgain={onNextRound}
       />
     );
   }
@@ -295,11 +291,14 @@ function FlashCards({
 function Matching({
   players,
   courseId,
-  onExit,
+  setNumber,
+  onNextRound,
 }: {
   players: GamePlayer[];
   courseId: string;
-  onExit: () => void;
+  /** 1-based count of sets played this visit — the scoreboard label. */
+  setNumber: number;
+  onNextRound: () => void;
 }) {
   // A board of up to 6, dealt once per game (see MemoryTiles). Photos hold
   // their order; the name column is shuffled.
@@ -340,6 +339,15 @@ function Matching({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done]);
 
+  // Linger on the fully-tagged board for a beat, then deal the next set —
+  // the point is repetition, not a results screen.
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(onNextRound, 1800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
+
   /** Drop the held name tag on a face. */
   function placeOn(photoId: string) {
     if (done || matched.has(photoId) || !heldName) return;
@@ -357,20 +365,6 @@ function Matching({
     }
   }
 
-  if (done) {
-    return (
-      <GameResult
-        title="All matched."
-        detail={
-          misses === 0
-            ? "Perfect — no misses."
-            : `${misses} miss${misses === 1 ? "" : "es"} along the way.`
-        }
-        onExit={onExit}
-      />
-    );
-  }
-
   // Fill the width with as square a grid as the board allows; the grid
   // stretches to the name column's height so faces get the whole space.
   const cols = boardPlayers.length <= 4 ? 2 : 3;
@@ -378,12 +372,18 @@ function Matching({
 
   return (
     <div className="grid gap-3">
-      <p className="text-sm text-muted-foreground">
-        {heldName
-          ? "Now tap the person it belongs to."
-          : "Tap a name, then tap whose it is — or drag it onto their photo."}{" "}
-        {misses > 0 ? `${misses} miss${misses === 1 ? "" : "es"}.` : null}
-      </p>
+      {done ? (
+        <p className="text-sm font-medium">
+          All matched{misses === 0 ? " — perfect!" : "."} Dealing the next
+          set…
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {heldName
+            ? "Now tap the person it belongs to."
+            : "Tap a name, then tap whose it is — or drag it onto their photo."}
+        </p>
+      )}
       <div className="flex flex-wrap items-stretch gap-4">
         {/* Faces — the drop targets for name tags. */}
         <div
@@ -444,6 +444,17 @@ function Matching({
         </div>
         {/* Name tags */}
         <div className="grid w-full shrink-0 content-start gap-2 sm:w-64">
+          <div className="flex items-baseline justify-between rounded-lg bg-muted px-3 py-2">
+            <span className="text-xs text-muted-foreground">Set {setNumber}</span>
+            <span
+              className={[
+                "text-sm font-semibold tabular-nums",
+                misses > 0 ? "text-destructive" : "text-muted-foreground",
+              ].join(" ")}
+            >
+              {misses} {misses === 1 ? "miss" : "misses"}
+            </span>
+          </div>
           {nameColumn.map((p) => {
             const isMatched = matched.has(p.enrollmentId);
             const isHeld = heldName === p.enrollmentId;
@@ -481,6 +492,15 @@ function Matching({
               </button>
             );
           })}
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-1"
+            onClick={onNextRound}
+            disabled={done}
+          >
+            <Shuffle className="mr-2 size-4" /> Reshuffle
+          </Button>
         </div>
       </div>
     </div>
@@ -492,17 +512,17 @@ function Matching({
 function GameResult({
   title,
   detail,
-  onExit,
+  onPlayAgain,
 }: {
   title: string;
   detail: string;
-  onExit: () => void;
+  onPlayAgain: () => void;
 }) {
   return (
     <div className="grid justify-items-center gap-3 py-8 text-center">
       <p className="text-xl font-semibold">{title}</p>
       <p className="text-sm text-muted-foreground">{detail}</p>
-      <Button onClick={onExit}>Play again</Button>
+      <Button onClick={onPlayAgain}>Play again</Button>
     </div>
   );
 }
@@ -516,7 +536,16 @@ export function NameGames({
   courseId: string;
   minPlayers: number;
 }) {
-  const [game, setGame] = useState<GameType | null>(null);
+  const [game, setGame] = useState<GameType>("matching");
+  // Per-game round counters: bumping one remounts that game via its key,
+  // which deals a fresh board (boards are dealt once per mount).
+  const [rounds, setRounds] = useState<Record<GameType, number>>({
+    memory_tiles: 0,
+    matching: 0,
+    flash_cards: 0,
+  });
+  const nextRound = (g: GameType) =>
+    setRounds((r) => ({ ...r, [g]: r[g] + 1 }));
 
   if (players.length < minPlayers) {
     return (
@@ -529,69 +558,50 @@ export function NameGames({
     );
   }
 
-  if (!game) {
-    return (
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card className="cursor-pointer" onClick={() => setGame("memory_tiles")}>
-          <CardHeader>
-            <CardTitle>Memory tiles</CardTitle>
-            <CardDescription>
-              Flip tiles to match faces with names. Clear the board.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button>Play</Button>
-          </CardContent>
-        </Card>
-        <Card className="cursor-pointer" onClick={() => setGame("matching")}>
-          <CardHeader>
-            <CardTitle>Matching</CardTitle>
-            <CardDescription>
-              Tap a face, then tap the name that goes with it.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button>Play</Button>
-          </CardContent>
-        </Card>
-        <Card className="cursor-pointer" onClick={() => setGame("flash_cards")}>
-          <CardHeader>
-            <CardTitle>Flash cards</CardTitle>
-            <CardDescription>
-              See the face, guess the name, flip to check yourself.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button>Play</Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
-    <Card>
-      <CardContent className="pt-6">
-        {game === "memory_tiles" ? (
-          <MemoryTiles
-            players={players}
-            courseId={courseId}
-            onExit={() => setGame(null)}
-          />
-        ) : game === "matching" ? (
-          <Matching
-            players={players}
-            courseId={courseId}
-            onExit={() => setGame(null)}
-          />
-        ) : (
-          <FlashCards
-            players={players}
-            courseId={courseId}
-            onExit={() => setGame(null)}
-          />
-        )}
-      </CardContent>
-    </Card>
+    <Tabs value={game} onValueChange={(v) => setGame(v as GameType)}>
+      <TabsList>
+        <TabsTrigger value="matching">Matching</TabsTrigger>
+        <TabsTrigger value="memory_tiles">Memory tiles</TabsTrigger>
+        <TabsTrigger value="flash_cards">Flash cards</TabsTrigger>
+      </TabsList>
+      <TabsContent value="matching">
+        <Card>
+          <CardContent className="pt-6">
+            <Matching
+              key={rounds.matching}
+              players={players}
+              courseId={courseId}
+              setNumber={rounds.matching + 1}
+              onNextRound={() => nextRound("matching")}
+            />
+          </CardContent>
+        </Card>
+      </TabsContent>
+      <TabsContent value="memory_tiles">
+        <Card>
+          <CardContent className="pt-6">
+            <MemoryTiles
+              key={rounds.memory_tiles}
+              players={players}
+              courseId={courseId}
+              onNextRound={() => nextRound("memory_tiles")}
+            />
+          </CardContent>
+        </Card>
+      </TabsContent>
+      <TabsContent value="flash_cards">
+        <Card>
+          <CardContent className="pt-6">
+            <FlashCards
+              key={rounds.flash_cards}
+              players={players}
+              courseId={courseId}
+              onNextRound={() => nextRound("flash_cards")}
+            />
+          </CardContent>
+        </Card>
+      </TabsContent>
+    </Tabs>
   );
 }
