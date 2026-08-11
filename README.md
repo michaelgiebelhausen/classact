@@ -1,13 +1,17 @@
 # ClassAct
 
-Attendance that can't be faked. A class that's not full of strangers.
+Eliminate professor pain. Create student opportunity.
 
-ClassAct is a lightweight in-person LMS for higher ed: students check in by
-tapping their seat on a live map and confirming the people around them —
-verifying attendance and forcing a real introduction at the same time. Name
-games built from classmates' photos make the room non-anonymous by week three.
+ClassAct is an in-person LMS for higher ed that turns the classroom chores
+everyone dreads — attendance, laptops, participation, group projects,
+grading — into a single process that leaves students more connected, more
+engaged, and more employable. Students check in by tapping their seat on a
+live map and confirming the people around them; name games make the room
+non-anonymous by week three; peer instruction, project monitoring, and
+AI/peer/instructor grading carry it the rest of the term.
 
-**Status:** MVP built; awaiting live keys to go live — see [HANDOFF.md](./HANDOFF.md).
+**Status:** Live at [classact.college](https://classact.college) — see
+[HANDOFF.md](./HANDOFF.md) for the deployment runbook.
 
 ## Stack
 

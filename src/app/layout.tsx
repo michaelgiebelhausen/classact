@@ -21,9 +21,9 @@ const fontHeading = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "ClassAct — attendance that can't be faked",
+  title: "ClassAct — Eliminate professor pain. Create student opportunity.",
   description:
-    "ClassAct turns a face-to-face lecture hall into a connected classroom: fraud-proof seat check-in and name games that get students to actually know each other.",
+    "ClassAct turns the classroom chores everyone dreads — attendance, laptops, participation, group projects, grading — into a single process that leaves students more connected, more engaged, and more employable.",
 };
 
 export default function RootLayout({
