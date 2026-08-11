@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { BecomeProfessorButton } from "@/components/features/profile/BecomeProfessorButton";
 
 export default async function DashboardPage() {
   const profile = await getProfile();
@@ -74,11 +75,14 @@ export default async function DashboardPage() {
 
   return (
     <div className="grid gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold tracking-tight">My classes</h1>
-        <Button asChild variant="outline">
-          <Link href="/join">Join a class</Link>
-        </Button>
+        <div className="flex gap-2">
+          <BecomeProfessorButton />
+          <Button asChild variant="outline">
+            <Link href="/join">Join a class</Link>
+          </Button>
+        </div>
       </div>
       {!enrollments || enrollments.length === 0 ? (
         <Card>

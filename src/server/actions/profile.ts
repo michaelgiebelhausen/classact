@@ -59,6 +59,32 @@ export async function saveProfileAnswers(
  * Save (or clear) the LinkedIn profile link. Stored canonicalized so every
  * paste style lands on the same URL; an empty value removes it.
  */
+/**
+ * Switch your own account to a professor account. Self-serve on purpose:
+ * the professor role only lets you own courses you create — every policy is
+ * scoped to `professor_id = auth.uid()`, so this grants no access to anyone
+ * else's data. It's the recovery path for accounts created before sign-up
+ * asked, and for anyone who picked the wrong option.
+ */
+export async function becomeProfessor(): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ role: "professor", onboarding_complete: true })
+    .eq("id", user.id);
+  if (error) {
+    return { ok: false, error: "Couldn't switch your account over." };
+  }
+  revalidatePath("/dashboard");
+  revalidatePath("/profile");
+  return { ok: true };
+}
+
 export async function saveLinkedInUrl(
   raw: string
 ): Promise<ActionResult<{ url: string | null }>> {

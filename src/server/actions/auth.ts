@@ -119,6 +119,8 @@ export async function signInWithPassword(input: {
 export async function signUpWithPassword(input: {
   email: string;
   password: string;
+  /** "professor" creates a course-owning account; anything else = student. */
+  role?: string;
 }): Promise<ActionResult<{ confirmationNeeded: boolean }>> {
   const parsed = signUpSchema.safeParse(input);
   if (!parsed.success) {
@@ -126,12 +128,17 @@ export async function signUpWithPassword(input: {
   }
   if (!isConfigured.supabase) return { ok: false, error: NOT_CONFIGURED };
 
+  const role = input.role === "professor" ? "professor" : "student";
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
     options: {
-      emailRedirectTo: `${env.siteUrl}/auth/callback?next=/dashboard`,
+      // Read by the handle_new_user() trigger (migration 0023).
+      data: { role },
+      emailRedirectTo: `${env.siteUrl}/auth/callback?next=${
+        role === "professor" ? "/course/new" : "/dashboard"
+      }`,
     },
   });
   if (error) {

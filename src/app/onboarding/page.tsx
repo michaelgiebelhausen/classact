@@ -4,6 +4,7 @@ import { getProfile } from "@/lib/auth";
 import { getSignedPhotoUrls } from "@/lib/storage";
 import { DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
 import { OnboardingFlow } from "@/components/features/profile/OnboardingFlow";
+import { BecomeProfessorButton } from "@/components/features/profile/BecomeProfessorButton";
 import type { PhotoKind } from "@/types/db";
 
 export default async function OnboardingPage() {
@@ -71,6 +72,14 @@ export default async function OnboardingPage() {
         icebreakerKeys={icebreakerKeys}
         initialAnswers={initialAnswers}
       />
+      {/* Escape hatch: professors who signed up before the role question
+          existed land here by default. */}
+      <div className="mt-8 grid justify-items-center gap-2 text-center">
+        <p className="text-sm text-muted-foreground">
+          Here to teach, not to take the class?
+        </p>
+        <BecomeProfessorButton label="Set up my own course instead" />
+      </div>
     </div>
   );
 }

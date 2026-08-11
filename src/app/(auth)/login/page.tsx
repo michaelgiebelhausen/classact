@@ -49,6 +49,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const urlError = searchParams.get("error");
   const [mode, setMode] = useState<Mode>("password");
+  const [role, setRole] = useState<"professor" | "student">("professor");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,7 +76,7 @@ function LoginForm() {
       return;
     }
     if (mode === "signup") {
-      const result = await signUpWithPassword({ email, password });
+      const result = await signUpWithPassword({ email, password, role });
       setBusy(false);
       if (!result.ok) {
         toast.error(result.error);
@@ -86,7 +87,7 @@ function LoginForm() {
           "Almost there — click the confirmation link we just emailed you, and you'll land signed in."
         );
       } else {
-        router.push("/dashboard");
+        router.push(role === "professor" ? "/course/new" : "/dashboard");
         router.refresh();
       }
       return;
@@ -132,6 +133,34 @@ function LoginForm() {
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="grid gap-4">
+            {mode === "signup" && (
+              <div className="grid gap-2">
+                <Label>I&apos;m signing up as…</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={role === "professor" ? "default" : "outline"}
+                    onClick={() => setRole("professor")}
+                  >
+                    A professor
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={role === "student" ? "default" : "outline"}
+                    onClick={() => setRole("student")}
+                  >
+                    A student
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {role === "professor"
+                    ? "You'll create your class right after confirming your email."
+                    : "Students usually join with a code from their professor."}
+                </p>
+              </div>
+            )}
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
