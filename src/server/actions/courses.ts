@@ -55,26 +55,38 @@ export async function createCourse(input: {
     .eq("id", user.id);
 
   // Insert with join-code retry on the (rare) unique collision.
+  //
+  // The id is generated here rather than read back with .select(): a RETURNING
+  // clause makes Postgres apply the SELECT policy to the new row, and
+  // courses_select routes through is_course_member() — a STABLE function that
+  // subqueries `courses` and so cannot see the row its own statement is
+  // inserting. The insert lands, RETURNING comes back empty, and the caller
+  // reports failure for a course that actually exists. Skipping RETURNING
+  // sidesteps that entirely.
   for (let attempt = 0; attempt < 5; attempt++) {
+    const id = crypto.randomUUID();
     const joinCode = generateJoinCode(parsed.data.name);
-    const { data, error } = await supabase
-      .from("courses")
-      .insert({
-        professor_id: user.id,
-        name: parsed.data.name,
-        term: parsed.data.term || null,
-        join_code: joinCode,
-        icebreaker_fields: DEFAULT_ICEBREAKER_KEYS,
-      })
-      .select("id, join_code")
-      .single();
+    const { error } = await supabase.from("courses").insert({
+      id,
+      professor_id: user.id,
+      name: parsed.data.name,
+      term: parsed.data.term || null,
+      join_code: joinCode,
+      icebreaker_fields: DEFAULT_ICEBREAKER_KEYS,
+    });
 
-    if (data) {
+    if (!error) {
       revalidatePath("/dashboard");
-      return { ok: true, data: { id: data.id, joinCode: data.join_code } };
+      return { ok: true, data: { id, joinCode } };
     }
     // 23505 = unique_violation on join_code -> retry; anything else -> fail
-    if (error && error.code !== "23505") {
+    if (error.code !== "23505") {
+      console.error("[createCourse] insert failed:", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
       return { ok: false, error: "Couldn't create the course. Try again." };
     }
   }
