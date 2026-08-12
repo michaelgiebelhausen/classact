@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CheckCircle2, Link2, Loader2, RefreshCw } from "lucide-react";
+import {
+  CheckCircle2,
+  ExternalLink,
+  Link2,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
+import { normalizeCanvasBaseUrl } from "@/lib/canvasurl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,6 +50,24 @@ export function CanvasSync({ courseId, connection }: Props) {
   // fallback token configured — that token only ever sees its owner's
   // courses, so "connected" isn't the same as "connected as you".
   const [showConnect, setShowConnect] = useState(false);
+  // Walkthrough position. `confirmedHost` is the normalized https origin from
+  // step 1 — it powers the deep link straight to the professor's own Canvas
+  // token page, so steps 2–3 never ask them to hunt through menus.
+  const [connectStep, setConnectStep] = useState(1);
+  const [confirmedHost, setConfirmedHost] = useState<string | null>(null);
+
+  function confirmHost() {
+    const normalized = normalizeCanvasBaseUrl(baseUrl);
+    if (!normalized) {
+      toast.error(
+        "That doesn't look like a Canvas address — try something like yourschool.instructure.com."
+      );
+      return;
+    }
+    setConfirmedHost(normalized);
+    setBaseUrl(normalized.replace("https://", ""));
+    setConnectStep(2);
+  }
   // Cross-listed Canvas shell: pick which sections belong in THIS course.
   const [picker, setPicker] = useState<{
     canvasCourseId: string;
@@ -53,19 +78,26 @@ export function CanvasSync({ courseId, connection }: Props) {
   const [checkingId, setCheckingId] = useState<string | null>(null);
 
   async function connect() {
-    if (!baseUrl.trim() || !token.trim()) {
-      toast.error("Fill in your school's Canvas address and the access token.");
+    if (!token.trim()) {
+      toast.error("Paste the access token from Canvas first.");
       return;
     }
     setSaving(true);
-    const result = await saveCanvasConnection({ baseUrl, token });
+    const result = await saveCanvasConnection({
+      baseUrl: confirmedHost ?? baseUrl,
+      token,
+    });
     setSaving(false);
     if (result.ok && result.data) {
       setToken("");
       setShowConnect(false);
+      setConnectStep(1);
       setCourses(null);
       toast.success(`Connected to Canvas as ${result.data.name}.`);
       router.refresh();
+      // Keep the walkthrough moving: show their courses right away instead
+      // of leaving them at a "connected" card wondering what's next.
+      void loadCourses();
     } else {
       toast.error(result.ok ? "Couldn't connect." : result.error);
     }
@@ -162,6 +194,7 @@ export function CanvasSync({ courseId, connection }: Props) {
   }
 
   if (!connection.connected || showConnect) {
+    const hostLabel = confirmedHost?.replace("https://", "");
     return (
       <div className="grid gap-4 rounded-lg border border-dashed p-4">
         <div>
@@ -175,65 +208,143 @@ export function CanvasSync({ courseId, connection }: Props) {
           </p>
         </div>
 
-        <div className="grid gap-1.5">
-          <Label htmlFor="canvas-url">1. Your school&apos;s Canvas web address</Label>
-          <Input
-            id="canvas-url"
-            placeholder="yourschool.instructure.com"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            className="max-w-sm"
-            autoComplete="off"
-          />
-          <p className="text-xs text-muted-foreground">
-            The address you see when you&apos;re in Canvas — just the first
-            part, no /courses/… needed.
-          </p>
-        </div>
-
-        <div className="grid gap-1.5">
-          <Label>2. Create an access token in Canvas</Label>
-          <p className="text-sm text-muted-foreground">
-            In Canvas, click <span className="font-medium">Account</span> (top
-            of the left sidebar) → <span className="font-medium">Settings</span>,
-            scroll to <span className="font-medium">Approved Integrations</span>,
-            and click <span className="font-medium">+ New Access Token</span>.
-            Purpose: &ldquo;ClassAct&rdquo;; leave the expiry blank (or pick the
-            end of term). Click{" "}
-            <span className="font-medium">Generate Token</span> and copy it —
-            Canvas only shows it once.
-          </p>
-        </div>
-
-        <div className="grid gap-1.5">
-          <Label htmlFor="canvas-token">3. Paste the token here</Label>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              id="canvas-token"
-              type="password"
-              placeholder="paste your access token"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              className="max-w-sm font-mono"
-              autoComplete="off"
-            />
-            <Button onClick={connect} disabled={saving}>
-              {saving ? (
-                <>
-                  <Loader2 className="mr-2 size-4 animate-spin" /> Checking with
-                  Canvas…
-                </>
-              ) : (
-                "Connect Canvas"
-              )}
-            </Button>
+        {/* Step 1 — where is your Canvas? Done: a one-line receipt. */}
+        {connectStep > 1 && confirmedHost ? (
+          <button
+            type="button"
+            className="flex items-center gap-2 text-left text-sm"
+            onClick={() => setConnectStep(1)}
+            disabled={saving}
+          >
+            <CheckCircle2 className="size-4 shrink-0 text-green-600" />
+            <span className="text-muted-foreground">
+              Your Canvas: <span className="font-medium text-foreground">{hostLabel}</span>
+            </span>
+            <span className="text-xs text-muted-foreground underline">change</span>
+          </button>
+        ) : (
+          <div className="grid gap-1.5">
+            <Label htmlFor="canvas-url">
+              Step 1 of 3 — Your school&apos;s Canvas web address
+            </Label>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id="canvas-url"
+                placeholder="yourschool.instructure.com"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirmHost()}
+                className="max-w-sm"
+                autoComplete="off"
+              />
+              <Button onClick={confirmHost}>Continue</Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              What&apos;s in your browser&apos;s address bar when you&apos;re in
+              Canvas. Pasting a full course link is fine — we&apos;ll trim it.
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Your token is encrypted before it&apos;s stored and never shown
-            again — only its last 4 characters. ClassAct uses it to read your
-            course rosters, nothing else. Disconnect anytime.
-          </p>
-        </div>
+        )}
+
+        {/* Step 2 — the deep link does the wayfinding, not the professor. */}
+        {connectStep === 2 && confirmedHost && (
+          <div className="grid gap-2">
+            <Label>Step 2 of 3 — Create your access token</Label>
+            <div>
+              <Button asChild variant="secondary">
+                <a
+                  href={`${confirmedHost}/profile/settings`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink className="mr-2 size-4" /> Open your Canvas
+                  settings
+                </a>
+              </Button>
+            </div>
+            <ol className="grid list-decimal gap-1 pl-5 text-sm text-muted-foreground">
+              <li>
+                That page opens in a new tab (sign in to Canvas if it asks).
+              </li>
+              <li>
+                Scroll to <span className="font-medium">Approved Integrations</span>{" "}
+                and click <span className="font-medium">+ New Access Token</span>.
+              </li>
+              <li>
+                Purpose: <span className="font-medium">ClassAct</span>. Leave the
+                expiry blank, or pick the end of term.
+              </li>
+              <li>
+                Click <span className="font-medium">Generate Token</span> and{" "}
+                <span className="font-medium">copy it</span> — Canvas shows it
+                only once.
+              </li>
+            </ol>
+            <div>
+              <Button onClick={() => setConnectStep(3)}>
+                I copied my token
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3 — paste, and we verify with Canvas before storing. */}
+        {connectStep === 3 && (
+          <div className="grid gap-1.5">
+            <Label htmlFor="canvas-token">Step 3 of 3 — Paste the token here</Label>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id="canvas-token"
+                type="password"
+                placeholder="paste your access token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !saving && connect()}
+                className="max-w-sm font-mono"
+                autoComplete="off"
+                autoFocus
+              />
+              <Button onClick={connect} disabled={saving}>
+                {saving ? (
+                  <>
+                    <Loader2 className="mr-2 size-4 animate-spin" /> Checking
+                    with Canvas…
+                  </>
+                ) : (
+                  "Connect Canvas"
+                )}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Your token is encrypted before it&apos;s stored and never shown
+              again — only its last 4 characters. ClassAct uses it to read your
+              course rosters, nothing else. Disconnect anytime.
+            </p>
+            <button
+              type="button"
+              className="justify-self-start text-xs text-muted-foreground underline"
+              onClick={() => setConnectStep(2)}
+              disabled={saving}
+            >
+              Back — I still need to create the token
+            </button>
+          </div>
+        )}
+
+        {/* Escape hatch when this panel was opened over a working fallback. */}
+        {connection.connected && showConnect && (
+          <button
+            type="button"
+            className="justify-self-start text-xs text-muted-foreground underline"
+            onClick={() => {
+              setShowConnect(false);
+              setConnectStep(1);
+            }}
+            disabled={saving}
+          >
+            Never mind — keep using the current connection
+          </button>
+        )}
       </div>
     );
   }
