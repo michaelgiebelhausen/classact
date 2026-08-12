@@ -89,6 +89,11 @@ export async function resolveEnrollmentPhotos(
           .from("profile_photos")
           .select("profile_id, storage_path")
           .in("profile_id", profileIds)
+          // Ordered so callers that take the first photo (the roster
+          // portrait) get the same one every render. Unordered, the row
+          // order is whatever Postgres returns, and re-uploading one photo
+          // silently changes which face everyone else sees.
+          .order("kind")
       : { data: [] as { profile_id: string; storage_path: string }[] }
 
   const allPaths = [

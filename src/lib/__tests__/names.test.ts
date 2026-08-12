@@ -28,6 +28,27 @@ describe("lastNameOf", () => {
     expect(lastNameOf("  Ada   Lovelace  ")).toBe("Lovelace");
     expect(lastNameOf("")).toBe("");
   });
+
+  it("keeps a single-letter surname instead of reading it as a suffix", () => {
+    // "V" used to be in the suffix list, which filed Anand under A.
+    expect(lastNameOf("Anand V")).toBe("V");
+    expect(lastNameOf("Priya V")).toBe("V");
+  });
+
+  it("keeps particles with the surname, either spelling", () => {
+    expect(lastNameOf("Aad van der Berg")).toBe("van der Berg");
+    expect(lastNameOf("Eddie Van Halen")).toBe("Van Halen");
+    expect(lastNameOf("Ana de la Cruz")).toBe("de la Cruz");
+  });
+
+  it("strips suffixes in surname-first form too", () => {
+    expect(lastNameOf("King Jr., Martin Luther")).toBe("King");
+    expect(lastNameOf("Howell III, Thurston")).toBe("Howell");
+  });
+
+  it("survives a CSV row with an empty surname field", () => {
+    expect(lastNameOf(", John")).toBe("John");
+  });
 });
 
 describe("compareByLastName", () => {
@@ -40,8 +61,30 @@ describe("compareByLastName", () => {
   });
 
   it("ignores case and accents so variants file together", () => {
+    // Differs ONLY by case and accent: this is 0 only because the comparison
+    // is base-sensitivity. Drop that option and this test fails.
+    expect(compareByLastName("Renee Muller", "Renée Müller")).toBe(0);
     expect(compareByLastName("aad de souza", "Bea De Souza")).toBeLessThan(0);
-    expect(lastNameOf("Renée Müller")).toBe("Müller");
+  });
+
+  it("files the same surname together across export formats", () => {
+    // Same surname, different exports: they land next to each other rather
+    // than in the B and V sections.
+    const sorted = sortByLastName(
+      [
+        { name: "Cara Chen" },
+        { name: "Aad van der Berg" },
+        { name: "Zeb Zylker" },
+        { name: "Van Der Berg, Bea" },
+      ],
+      (p) => p.name
+    ).map((p) => p.name);
+    expect(sorted).toEqual([
+      "Cara Chen",
+      "Aad van der Berg",
+      "Van Der Berg, Bea",
+      "Zeb Zylker",
+    ]);
   });
 });
 
@@ -61,6 +104,27 @@ describe("initialsOf", () => {
   it("keeps accented letters intact and falls back when empty", () => {
     expect(initialsOf("Renée Müller")).toBe("RM");
     expect(initialsOf("   ")).toBe("?");
+  });
+
+  it("never renders punctuation as an initial", () => {
+    expect(initialsOf("...")).toBe("?");
+    expect(initialsOf("-")).toBe("?");
+    expect(initialsOf(", John")).toBe("J");
+    expect(initialsOf("Ana O'Brien-Smith")).toBe("AO");
+  });
+
+  it("takes the student's initials, not a suffix's", () => {
+    expect(initialsOf("Roethke, Jr., Emma")).toBe("ER");
+    expect(initialsOf("Martin Luther King Jr.")).toBe("MK");
+  });
+
+  it("gives one letter for a single-letter surname, not a collapsed one", () => {
+    expect(initialsOf("Anand V")).toBe("AV");
+  });
+
+  it("agrees across export formats for particle surnames", () => {
+    expect(initialsOf("Aad van der Berg")).toBe("AV");
+    expect(initialsOf("Van Der Berg, Aad")).toBe("AV");
   });
 });
 

@@ -113,7 +113,8 @@ export default async function GamesPage({
           admin
             .from("profile_photos")
             .select("storage_path")
-            .eq("profile_id", course.professor_id),
+            .eq("profile_id", course.professor_id)
+            .order("kind"),
           admin
             .from("profiles")
             .select("full_name, name_phonetic, linkedin_url")
@@ -129,12 +130,17 @@ export default async function GamesPage({
       const urls = paths
         .map((p) => urlMap[p])
         .filter((u): u is string => Boolean(u));
-      roster.push({
-        enrollmentId: `professor:${course.professor_id}`,
-        name: prof?.full_name ?? "Your professor",
-        photoUrl: urls[0] ?? null,
-        phonetic: prof?.name_phonetic ?? null,
-      });
+      // Only with a real name: professors who signed up with a password
+      // never set full_name, and a card reading "Your professor" would file
+      // under a fabricated surname with fabricated initials.
+      if (prof?.full_name?.trim()) {
+        roster.push({
+          enrollmentId: `professor:${course.professor_id}`,
+          name: prof.full_name,
+          photoUrl: urls[0] ?? null,
+          phonetic: prof.name_phonetic ?? null,
+        });
+      }
       if (urls.length > 0) {
         const answerByKey = new Map(
           (profAnswers ?? []).map((a) => [a.field_key, a.value])
@@ -193,6 +199,7 @@ export default async function GamesPage({
       <NameGames
         players={players}
         roster={roster}
+        rosterAvailable={isConfigured.supabaseAdmin}
         courseId={courseId}
         minPlayers={MIN_PLAYERS}
       />

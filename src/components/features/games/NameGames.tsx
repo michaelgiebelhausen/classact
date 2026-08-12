@@ -150,9 +150,13 @@ function MemoryTiles({
       </p>
       {/* Six across on a laptop: 9 pairs = three full rows, not a slog. */}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-        {tiles.map((tile) => {
+        {tiles.map((tile, i) => {
           const isUp = flipped.includes(tile.key) || matched.has(tile.playerId);
           const isGone = matched.has(tile.playerId);
+          // Six across on a laptop; the grid narrows on small screens, but a
+          // stable row/column still beats "one of nine identical tiles" for
+          // anyone navigating by screen reader.
+          const where = `row ${Math.floor(i / 6) + 1}, column ${(i % 6) + 1}`;
           return (
             <button
               key={tile.key}
@@ -162,22 +166,25 @@ function MemoryTiles({
               aria-label={
                 isUp
                   ? tile.kind === "name"
-                    ? tile.content
-                    : "Photo tile"
+                    ? `${tile.content}, ${where}`
+                    : `Photo tile, ${where}`
                   : tile.kind === "name"
-                    ? "Face-down name tile"
-                    : "Face-down photo tile"
+                    ? `Face-down name tile, ${where}`
+                    : `Face-down photo tile, ${where}`
               }
               className={[
                 "flex aspect-square items-center justify-center overflow-hidden rounded-lg border text-center text-xs font-medium transition-all",
-                isGone ? "opacity-25" : "",
+                // Matched pairs stay legible: this is the moment the game
+                // has to land the name on the face, so don't wash it out.
+                isGone ? "opacity-60" : "",
                 // Face down, the back says which half of the pair it is —
                 // you hunt a name for a face, not through twice as many
-                // unknowns. Photos stay the familiar orange.
+                // unknowns. Photos stay the familiar orange; the blue is
+                // the palette's own --sky, which holds in both themes.
                 isUp
                   ? "bg-background"
                   : tile.kind === "name"
-                    ? "bg-sky-700"
+                    ? "bg-[var(--sky)]"
                     : "bg-primary/90",
               ].join(" ")}
             >
@@ -642,10 +649,29 @@ export interface RosterPerson {
  * Classmates without a photo still appear, as initials — a roster with
  * people missing from it isn't a roster.
  */
-function Roster({ people }: { people: RosterPerson[] }) {
+function Roster({
+  people,
+  available,
+}: {
+  people: RosterPerson[];
+  available: boolean;
+}) {
   // Unlike the games, a reference sheet shouldn't reshuffle or swap faces
   // under you — sorted once, same photo every time.
   const sorted = useMemo(() => sortByLastName(people, (p) => p.name), [people]);
+  // A signed photo URL expires after an hour; on the one tab meant to be
+  // left open, a stale URL should fall back to initials rather than paint
+  // a grid of broken-image icons.
+  const [broken, setBroken] = useState<Set<string>>(new Set());
+
+  if (!available) {
+    return (
+      <p className="py-12 text-center text-muted-foreground">
+        The roster can&apos;t be loaded — this server is missing its
+        Supabase service role key. (Your class isn&apos;t empty.)
+      </p>
+    );
+  }
 
   if (sorted.length === 0) {
     return (
@@ -669,11 +695,14 @@ function Roster({ people }: { people: RosterPerson[] }) {
       <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         {sorted.map((p) => (
           <li key={p.enrollmentId} className="grid justify-items-center gap-2">
-            {p.photoUrl ? (
+            {p.photoUrl && !broken.has(p.enrollmentId) ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={p.photoUrl}
                 alt={p.name}
+                onError={() =>
+                  setBroken((b) => new Set(b).add(p.enrollmentId))
+                }
                 className="aspect-square w-full rounded-lg object-cover"
               />
             ) : (
@@ -700,11 +729,13 @@ function Roster({ people }: { people: RosterPerson[] }) {
 export function NameGames({
   players,
   roster,
+  rosterAvailable,
   courseId,
   minPlayers,
 }: {
   players: GamePlayer[];
   roster: RosterPerson[];
+  rosterAvailable: boolean;
   courseId: string;
   minPlayers: number;
 }) {
@@ -792,7 +823,7 @@ export function NameGames({
       <TabsContent value="roster">
         <Card>
           <CardContent className="pt-6">
-            <Roster people={roster} />
+            <Roster people={roster} available={rosterAvailable} />
           </CardContent>
         </Card>
       </TabsContent>
