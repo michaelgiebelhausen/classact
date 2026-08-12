@@ -27,6 +27,8 @@ export interface SeatInfo {
   y: number;
   section: string;
   tableId: string | null;
+  /** Furniture drawn under a table's seats; carried from the room layout. */
+  tableShape?: "rect" | "oval" | "ushape";
   neighbors: SeatNeighbors;
 }
 

@@ -18,6 +18,7 @@ import {
   type SeatInfo,
 } from "@/components/features/checkin/CheckInLive";
 import { SessionControls } from "@/components/features/checkin/SessionControls";
+import type { RoomLayout } from "@/lib/roomlayout";
 
 export default async function CheckInPage({
   params,
@@ -33,7 +34,7 @@ export default async function CheckInPage({
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, professor_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
+      "id, name, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
     )
     .eq("id", courseId)
     .single();
@@ -121,6 +122,21 @@ export default async function CheckInPage({
     .from("seats")
     .select("id, label, row_index, col_index, x, y, section, table_id, neighbors")
     .eq("course_id", courseId);
+  // Table shape lives in the room's layout, not on the seat rows — without
+  // it every table draws as an oval however it was designed.
+  const tableShapes = new Map<string, "rect" | "oval" | "ushape">();
+  if (course.room_id) {
+    const { data: room } = await supabase
+      .from("rooms")
+      .select("layout")
+      .eq("id", course.room_id)
+      .maybeSingle();
+    const layout = room?.layout as unknown as RoomLayout | null;
+    for (const section of layout?.sections ?? []) {
+      if (section.kind === "table") tableShapes.set(section.id, section.shape);
+    }
+  }
+
   const seats: SeatInfo[] = (seatRows ?? []).map((s) => ({
     id: s.id,
     label: s.label,
@@ -128,6 +144,7 @@ export default async function CheckInPage({
     y: s.y ?? (s.row_index ?? 0) * 1.25,
     section: s.section ?? "main",
     tableId: s.table_id ?? null,
+    tableShape: s.table_id ? tableShapes.get(s.table_id) : undefined,
     neighbors: s.neighbors ?? {},
   }));
 

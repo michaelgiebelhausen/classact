@@ -536,7 +536,14 @@ export type PresetParams =
       blocks?: BlockSpec[];
     }
   | { type: "seminar"; shape: TableShape; seats: number; endSeats?: number }
-  | { type: "horseshoe"; rows: number; frontSeats: number; backSeats?: number }
+  | {
+      type: "horseshoe";
+      rows: number;
+      frontSeats: number;
+      backSeats?: number;
+      /** Single block, kept in step with frontSeats/backSeats by the designer. */
+      blocks?: BlockSpec[];
+    }
   | {
       type: "auditorium";
       rows: number;
@@ -582,17 +589,29 @@ export function podCellSize(seatsPerTable: number): number {
   return rx * 2 + 2;
 }
 
+/**
+ * Split a total into exactly `parts` blocks, using the same rounding as
+ * `evenAisles` so a block split matches where the legacy aisles fell.
+ * Never returns an empty block — `parts` is capped at `total`.
+ */
+export function splitTotal(total: number, parts: number): number[] {
+  // Always exactly `parts` entries, so a front and back split zip cleanly.
+  // A zero is legitimate: a narrow front row can have nothing in a block
+  // that fills in further back; empty blocks drop out row by row.
+  const n = Math.max(1, parts);
+  const out: number[] = [];
+  let placed = 0;
+  for (let i = 1; i <= n; i++) {
+    const target = Math.round((total * i) / n);
+    out.push(target - placed);
+    placed = target;
+  }
+  return out;
+}
+
 /** Split a row total at its aisles — the block sizes the legacy knobs imply. */
 export function defaultBlocks(total: number, aisleCount: number): number[] {
-  const aisles = evenAisles(total, aisleCount);
-  const blocks: number[] = [];
-  let prev = 0;
-  for (const a of aisles) {
-    blocks.push(a - prev);
-    prev = a;
-  }
-  blocks.push(total - prev);
-  return blocks.filter((n) => n > 0);
+  return splitTotal(total, aisleCount + 1);
 }
 
 /**
@@ -610,13 +629,25 @@ export function blocksForParams(params: PresetParams): BlockSpec[] {
   }
   if (params.type === "auditorium") {
     if (params.blocks?.length) return params.blocks;
-    const front = defaultBlocks(params.frontSeats, params.aisleCount);
-    const back = defaultBlocks(params.backSeats, params.aisleCount);
-    return front.map((f, i) => ({ front: f, back: back[i] ?? f }));
+    // Derive from the geometry the legacy knobs actually draw: interpolate
+    // the row totals, then split the front and back rows into the SAME
+    // number of blocks so the two lists always zip cleanly.
+    const rowSeats = interpolateRows(params.rows, params.frontSeats, params.backSeats);
+    const parts = params.aisleCount + 1;
+    const front = splitTotal(rowSeats[0], parts);
+    const back = splitTotal(rowSeats[rowSeats.length - 1], parts);
+    return Array.from({ length: parts }, (_, i) => ({
+      front: front[i] ?? 0,
+      back: back[i] ?? 0,
+    })).filter((b) => b.front > 0 || b.back > 0);
   }
   if (params.type === "horseshoe") {
+    if (params.blocks?.length) return params.blocks;
     return [
-      { front: params.frontSeats, back: params.backSeats ?? params.frontSeats + (params.rows - 1) * 2 },
+      {
+        front: params.frontSeats,
+        back: params.backSeats ?? params.frontSeats + (params.rows - 1) * 2,
+      },
     ];
   }
   return [];
@@ -633,7 +664,24 @@ function blocksToRowBlocks(rows: number, blocks: BlockSpec[]): number[][] {
 export function buildLayout(params: PresetParams): RoomLayout {
   switch (params.type) {
     case "classroom": {
-      const rowBlocks = blocksToRowBlocks(params.rows, blocksForParams(params));
+      // Untouched blocks → the exact legacy geometry, so a stored room
+      // re-renders byte-identically. Edited blocks → explicit per-block sizes.
+      if (!params.blocks?.length) {
+        return {
+          version: 1,
+          type: "classroom",
+          sections: [
+            {
+              id: "main",
+              kind: "rows",
+              rowSeats: Array.from({ length: params.rows }, () => params.cols),
+              aisles: evenAisles(params.cols, params.aisleCount),
+            },
+          ],
+          params: { ...params },
+        };
+      }
+      const rowBlocks = blocksToRowBlocks(params.rows, params.blocks);
       return {
         version: 1,
         type: "classroom",
@@ -665,9 +713,14 @@ export function buildLayout(params: PresetParams): RoomLayout {
         params: { ...params },
       };
     case "horseshoe": {
-      // Each row wraps wider than the one inside it; the professor can set
-      // exactly how much wider by naming the back row.
+      // Each row wraps wider than the one inside it; the professor can say
+      // exactly how much wider by naming the back row. Blocks (when edited)
+      // are authoritative — otherwise the legacy +2-per-row wrap.
       const rowBlocks = blocksToRowBlocks(params.rows, blocksForParams(params));
+      const rowSeats =
+        params.blocks?.length || params.backSeats !== undefined
+          ? rowBlocks.map((b) => b.reduce((a, c) => a + c, 0))
+          : Array.from({ length: params.rows }, (_, r) => params.frontSeats + r * 2);
       return {
         version: 1,
         type: "horseshoe",
@@ -675,8 +728,11 @@ export function buildLayout(params: PresetParams): RoomLayout {
           {
             id: "main",
             kind: "rows",
-            rowSeats: rowBlocks.map((b) => b.reduce((a, c) => a + c, 0)),
-            rowBlocks,
+            rowSeats,
+            rowBlocks:
+              params.blocks?.length || params.backSeats !== undefined
+                ? rowBlocks
+                : undefined,
             curve: 0.85,
             tiered: true,
           },
@@ -685,7 +741,45 @@ export function buildLayout(params: PresetParams): RoomLayout {
       };
     }
     case "auditorium": {
-      const blocks = blocksForParams(params);
+      // Untouched blocks → the exact legacy geometry (one interpolated row
+      // total, aisles scaled per row). Rounding each block separately and
+      // summing would quietly reshape every auditorium saved before blocks
+      // existed — and those seats' neighbors are what check-in verifies.
+      if (!params.blocks?.length) {
+        const rowSeats = interpolateRows(
+          params.rows,
+          params.frontSeats,
+          params.backSeats
+        );
+        const sections: LayoutSection[] = [
+          {
+            id: "main",
+            kind: "rows",
+            rowSeats,
+            curve: params.curve,
+            tiered: true,
+            aisles: evenAisles(Math.max(...rowSeats), params.aisleCount),
+          },
+        ];
+        if (params.balconyRows > 0) {
+          sections.push({
+            id: "balcony",
+            kind: "rows",
+            rowSeats: Array.from(
+              { length: params.balconyRows },
+              () => params.backSeats
+            ),
+            curve: params.curve,
+            tiered: true,
+            aisles: evenAisles(params.backSeats, params.aisleCount),
+            level: 2,
+            rowLetterStart: params.rows,
+          });
+        }
+        return { version: 1, type: "auditorium", sections, params: { ...params } };
+      }
+
+      const blocks = params.blocks;
       const rowBlocks = blocksToRowBlocks(params.rows, blocks);
       const sections: LayoutSection[] = [
         {
@@ -699,7 +793,7 @@ export function buildLayout(params: PresetParams): RoomLayout {
       ];
       if (params.balconyRows > 0) {
         // The balcony repeats the back row's shape, block for block.
-        const balconyRow = blocks.map((b) => b.back);
+        const balconyRow = blocks.map((b) => b.back).filter((n) => n > 0);
         const balconyBlocks = Array.from(
           { length: params.balconyRows },
           () => [...balconyRow]
@@ -768,6 +862,24 @@ export function validateLayout(layout: RoomLayout): string | null {
       if (s.rowSeats.length > 40) return "Rooms are limited to 40 rows.";
       if (s.rowSeats.some((n) => !Number.isInteger(n) || n < 1 || n > 40)) {
         return "Rows are limited to 1–40 seats.";
+      }
+      // Unbounded/huge values here spin rowLetter() forever on the server.
+      if (
+        s.rowLetterStart !== undefined &&
+        (!Number.isInteger(s.rowLetterStart) ||
+          s.rowLetterStart < 0 ||
+          s.rowLetterStart > 200)
+      ) {
+        return "Invalid row lettering.";
+      }
+      if (s.curve !== undefined && (!Number.isFinite(s.curve) || s.curve < 0 || s.curve > 1)) {
+        return "Curve must be between 0 and 1.";
+      }
+      if (s.aisles && (!Array.isArray(s.aisles) || s.aisles.length > 12)) {
+        return "Too many aisles.";
+      }
+      if (s.aisles?.some((a) => !Number.isInteger(a) || a < 0 || a > 40)) {
+        return "Invalid aisle position.";
       }
       if (s.rowBlocks) {
         if (!Array.isArray(s.rowBlocks) || s.rowBlocks.length !== s.rowSeats.length) {

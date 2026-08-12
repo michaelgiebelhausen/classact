@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 /**
@@ -87,6 +87,15 @@ export function RoomMap({
   ariaLabel = "Classroom seat map",
   captions = false,
 }: Props) {
+  // Live pixel offset of the table being dragged, before it's committed.
+  const [drag, setDrag] = useState<{
+    tableId: string;
+    dx: number;
+    dy: number;
+  } | null>(null);
+  const dragOffset = (tableId: string | null | undefined) =>
+    drag && tableId === drag.tableId ? drag : null;
+
   const geo = useMemo(() => {
     if (seats.length === 0) return null;
     // Caption mode widens the pitch so a first name fits under each seat.
@@ -204,11 +213,15 @@ export function RoomMap({
         </text>
 
         {geo.tables.map((t) => {
+          const off = dragOffset(t.id);
           const surface = {
             fill: "var(--muted-foreground)",
             opacity: 0.1,
             stroke: "var(--border)",
             strokeWidth: 1.5,
+            ...(off
+              ? { transform: `translate(${off.dx}px, ${off.dy}px)` }
+              : {}),
           };
           if (t.shape === "rect") {
             return (
@@ -363,6 +376,12 @@ export function RoomMap({
               top: geo.py(seat.y) - SEAT / 2,
               width: SEAT,
               height: SEAT,
+              // Seats ride along with their table while it's being dragged.
+              transform: dragOffset(seat.tableId)
+                ? `translate(${dragOffset(seat.tableId)!.dx}px, ${
+                    dragOffset(seat.tableId)!.dy
+                  }px)`
+                : undefined,
             }}
           >
             {(state.kind === "taken" || state.kind === "verified" || state.kind === "mine") &&
@@ -393,8 +412,14 @@ export function RoomMap({
         geo.tables.map((t) => (
           <div
             key={`handle-${t.id}`}
-            className="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1"
-            style={{ left: t.cx, top: t.cy }}
+            className="absolute z-20 flex items-center gap-1"
+            style={{
+              left: t.cx,
+              top: t.cy,
+              transform: `translate(-50%, -50%) translate(${
+                dragOffset(t.id)?.dx ?? 0
+              }px, ${dragOffset(t.id)?.dy ?? 0}px)`,
+            }}
           >
             {onTableMove && (
               <button
@@ -403,25 +428,35 @@ export function RoomMap({
                 onPointerDown={(e) => {
                   e.preventDefault();
                   e.currentTarget.setPointerCapture(e.pointerId);
-                  let lastX = e.clientX;
-                  let lastY = e.clientY;
+                  const startX = e.clientX;
+                  const startY = e.clientY;
                   const target = e.currentTarget;
+                  // The whole drag is local: the parent hears one committed
+                  // delta on release. Reporting each increment instead would
+                  // re-render the map mid-drag (restarting this listener) and
+                  // re-anchor the layout under the cursor.
                   const onMove = (ev: PointerEvent) => {
-                    const dx = (ev.clientX - lastX) / geo.hu;
-                    const dy = (ev.clientY - lastY) / geo.vu;
-                    lastX = ev.clientX;
-                    lastY = ev.clientY;
-                    onTableMove(t.id, dx, dy);
+                    setDrag({
+                      tableId: t.id,
+                      dx: ev.clientX - startX,
+                      dy: ev.clientY - startY,
+                    });
                   };
-                  const onUp = (ev: PointerEvent) => {
-                    target.releasePointerCapture(ev.pointerId);
+                  const finish = (ev: PointerEvent) => {
                     target.removeEventListener("pointermove", onMove);
-                    target.removeEventListener("pointerup", onUp);
-                    target.removeEventListener("pointercancel", onUp);
+                    target.removeEventListener("pointerup", finish);
+                    target.removeEventListener("pointercancel", finish);
+                    if (target.hasPointerCapture(ev.pointerId)) {
+                      target.releasePointerCapture(ev.pointerId);
+                    }
+                    setDrag(null);
+                    const dx = (ev.clientX - startX) / geo.hu;
+                    const dy = (ev.clientY - startY) / geo.vu;
+                    if (dx !== 0 || dy !== 0) onTableMove(t.id, dx, dy);
                   };
                   target.addEventListener("pointermove", onMove);
-                  target.addEventListener("pointerup", onUp);
-                  target.addEventListener("pointercancel", onUp);
+                  target.addEventListener("pointerup", finish);
+                  target.addEventListener("pointercancel", finish);
                 }}
                 onKeyDown={(e) => {
                   const step = e.shiftKey ? 1 : 0.5;

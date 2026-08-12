@@ -169,9 +169,11 @@ export function RoomDesigner({
     ? selectedHit.capacity
     : previewSeats.filter((s) => !removedSeats.has(s.label)).length;
 
-  function updateParams(patch: Partial<PresetParams>) {
+  function updateParams(patch: Partial<PresetParams>, keepRemovals = false) {
     setSelectedHit(null);
-    setRemovedSeats(new Set());
+    // Reshaping the room invalidates seat labels, so removals are dropped —
+    // but sliding a table around keeps every label intact.
+    if (!keepRemovals) setRemovedSeats(new Set());
     setParams((prev) => ({ ...prev, ...patch }) as PresetParams);
   }
 
@@ -183,11 +185,25 @@ export function RoomDesigner({
   const tiered = params.type === "auditorium" || params.type === "horseshoe";
 
   function setBlocks(next: BlockSpec[]) {
-    const cleaned = next.map((b) => ({
-      front: clampInt(b.front, 0, 40),
-      back: clampInt(tiered ? b.back : b.front, 0, 40),
-    }));
-    updateParams({ blocks: cleaned } as Partial<PresetParams>);
+    const cleaned = next
+      .map((b) => ({
+        front: clampInt(b.front, 0, 40),
+        back: clampInt(tiered ? b.back : b.front, 0, 40),
+      }))
+      // A block with no seats in any row isn't a section, it's nothing.
+      .filter((b) => b.front > 0 || b.back > 0);
+    if (cleaned.length === 0) return;
+    // Horseshoe reads frontSeats/backSeats as well as blocks — keep them in
+    // step so its single block stays editable.
+    const patch: Partial<PresetParams> =
+      params.type === "horseshoe"
+        ? ({
+            blocks: cleaned,
+            frontSeats: cleaned[0].front,
+            backSeats: cleaned[0].back,
+          } as Partial<PresetParams>)
+        : ({ blocks: cleaned } as Partial<PresetParams>);
+    updateParams(patch);
   }
 
   function editBlock(index: number, patch: Partial<BlockSpec>) {
@@ -221,17 +237,18 @@ export function RoomDesigner({
   function moveTable(tableId: string, dx: number, dy: number) {
     if (params.type !== "pods") return;
     const index = Number(tableId.replace(/^t/, "")) - 1;
-    if (!Number.isInteger(index) || index < 0) return;
+    if (!Number.isInteger(index) || index < 0 || index >= podPositions.length) return;
+    // One committed delta per drag, so the half-unit snap lands on the final
+    // position instead of rounding each mouse increment away to nothing.
     const next = podPositions.map((p, i) =>
       i === index
         ? {
-            // Snap to a half-unit grid so dragged tables still line up.
             x: Math.round(Math.max(0, p.x + dx) * 2) / 2,
             y: Math.round(Math.max(0, p.y + dy) * 2) / 2,
           }
         : p
     );
-    updateParams({ positions: next } as Partial<PresetParams>);
+    updateParams({ positions: next } as Partial<PresetParams>, true);
   }
 
   function removeTable(tableId: string) {
@@ -532,8 +549,23 @@ export function RoomDesigner({
                         ))}
                       </div>
                     </div>
-                    <Knob label="Seats" value={params.seats} min={2} max={26}
-                      onChange={(v) => updateParams({ seats: v })} />
+                    <Knob
+                      label="Seats"
+                      value={params.seats}
+                      min={2}
+                      max={26}
+                      onChange={(v) => {
+                        // Shrinking the table can strand an end count that
+                        // leaves no seats for the long sides — save would
+                        // reject a preview that looked fine.
+                        const maxEnds = Math.max(0, Math.floor((v - 2) / 2));
+                        const ends =
+                          params.endSeats === undefined
+                            ? undefined
+                            : Math.min(params.endSeats, maxEnds);
+                        updateParams({ seats: v, endSeats: ends });
+                      }}
+                    />
                     {params.shape === "rect" && (
                       <Knob
                         label="Seats on each end"
@@ -615,7 +647,7 @@ export function RoomDesigner({
                         ? "Seats per row"
                         : "Seat sections (split by aisles)"}
                     </Label>
-                    {params.type !== "horseshoe" && (
+                    {params.type !== "horseshoe" ? (
                       <>
                         <Button
                           type="button"
@@ -631,6 +663,10 @@ export function RoomDesigner({
                           back row of the middle block independently.
                         </span>
                       </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        How far the horseshoe opens out from front row to back.
+                      </span>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2">

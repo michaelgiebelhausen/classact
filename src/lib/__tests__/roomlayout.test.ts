@@ -13,6 +13,102 @@ function byLabel(layout: RoomLayout) {
   return new Map(seats.map((s) => [s.label, s]));
 }
 
+describe("legacy geometry is preserved until blocks are edited", () => {
+  // Seat neighbors are persisted and drive check-in verification, so an
+  // untouched preset must rebuild the exact room it built before.
+  const auditorium = {
+    type: "auditorium" as const,
+    rows: 10,
+    frontSeats: 10,
+    backSeats: 16,
+    aisleCount: 2,
+    curve: 0.4,
+    balconyRows: 0,
+  };
+
+  it("keeps the interpolated row profile (not per-block rounding)", () => {
+    const layout = buildLayout(auditorium);
+    const section = layout.sections[0];
+    if (section.kind !== "rows") throw new Error("expected a rows section");
+    expect(section.rowSeats).toEqual([10, 11, 11, 12, 13, 13, 14, 15, 15, 16]);
+    // No rowBlocks means the legacy aisle-scaling path stays in charge.
+    expect(section.rowBlocks).toBeUndefined();
+  });
+
+  it("rebuilds an identical room when reopened from stored params", () => {
+    const first = layoutToSeats(buildLayout(auditorium));
+    const reopened = layoutToSeats(
+      buildLayout(buildLayout(auditorium).params as unknown as typeof auditorium)
+    );
+    expect(reopened).toEqual(first);
+  });
+
+  it("gives the block editor the same seat totals the room actually has", () => {
+    const blocks = blocksForParams(auditorium);
+    expect(blocks.reduce((a, b) => a + b.front, 0)).toBe(10);
+    expect(blocks.reduce((a, b) => a + b.back, 0)).toBe(16);
+  });
+
+  it("never drops a block when front and back split unevenly", () => {
+    // front 3 / back 24 across 3 aisles used to zip to 3 blocks and lose
+    // the fourth, silently shrinking the back row.
+    const blocks = blocksForParams({
+      type: "auditorium",
+      rows: 6,
+      frontSeats: 3,
+      backSeats: 24,
+      aisleCount: 3,
+      curve: 0,
+      balconyRows: 1,
+    });
+    expect(blocks.reduce((a, b) => a + b.back, 0)).toBe(24);
+    expect(blocks.reduce((a, b) => a + b.front, 0)).toBe(3);
+    // A block may be empty at the front and fill in further back — a narrow
+    // front row is real — but every block must hold seats somewhere.
+    expect(blocks.every((b) => b.front > 0 || b.back > 0)).toBe(true);
+  });
+});
+
+describe("horseshoe stays editable", () => {
+  it("honors an edited block instead of the fixed +2-per-row wrap", () => {
+    const layout = buildLayout({
+      type: "horseshoe",
+      rows: 3,
+      frontSeats: 8,
+      backSeats: 20,
+      blocks: [{ front: 8, back: 20 }],
+    });
+    const section = layout.sections[0];
+    if (section.kind !== "rows") throw new Error("expected a rows section");
+    expect(section.rowSeats).toEqual([8, 14, 20]);
+  });
+
+  it("still wraps by two per row when untouched", () => {
+    const layout = buildLayout({ type: "horseshoe", rows: 3, frontSeats: 8 });
+    const section = layout.sections[0];
+    if (section.kind !== "rows") throw new Error("expected a rows section");
+    expect(section.rowSeats).toEqual([8, 10, 12]);
+  });
+});
+
+describe("validateLayout rejects hostile input", () => {
+  it("refuses a row-letter offset that would spin the label generator", () => {
+    const evil: RoomLayout = {
+      version: 1,
+      type: "classroom",
+      sections: [
+        {
+          id: "main",
+          kind: "rows",
+          rowSeats: [2],
+          rowLetterStart: Number.POSITIVE_INFINITY,
+        },
+      ],
+    };
+    expect(validateLayout(evil)).toMatch(/row lettering/i);
+  });
+});
+
 describe("column blocks", () => {
   it("sizes each aisle-separated block independently", () => {
     // The case the old model couldn't express: a wide middle block that
