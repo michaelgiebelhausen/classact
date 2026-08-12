@@ -30,13 +30,25 @@ export default async function CheckInPage({
 
   const supabase = await createClient();
   // RLS membership gate — non-members get null.
-  const { data: course } = await supabase
+  const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
       "id, name, professor_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
     )
     .eq("id", courseId)
     .single();
+  // PGRST116 = no row (not a member, or no such course). Anything else — e.g.
+  // 42703 from an unapplied migration — is a real failure, not a 404.
+  if (courseError && courseError.code !== "PGRST116") {
+    console.error("[checkin] course query failed:", {
+      code: courseError.code,
+      message: courseError.message,
+      hint: courseError.hint,
+    });
+    throw new Error(
+      `Check-in couldn't load: ${courseError.message}. If that names a missing column, run supabase/catchup_0019_to_0023.sql in the Supabase SQL editor.`
+    );
+  }
   if (!course) notFound();
   const isProfessor = course.professor_id === profile.id;
 

@@ -19,7 +19,7 @@ export default async function CourseSetupPage({
   if (!profile) redirect("/login");
 
   const supabase = await createClient();
-  const { data: course } = await supabase
+  const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
       "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
@@ -27,6 +27,19 @@ export default async function CourseSetupPage({
     .eq("id", courseId)
     .single();
 
+  // PGRST116 = no row matched (a genuinely missing/foreign course). Anything
+  // else — notably 42703, undefined_column when a migration hasn't run — is a
+  // real failure and must not masquerade as "that page isn't here".
+  if (courseError && courseError.code !== "PGRST116") {
+    console.error("[setup] course query failed:", {
+      code: courseError.code,
+      message: courseError.message,
+      hint: courseError.hint,
+    });
+    throw new Error(
+      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run supabase/catchup_0019_to_0023.sql in the Supabase SQL editor.`
+    );
+  }
   if (!course) notFound();
   if (course.professor_id !== profile.id) redirect(`/course/${courseId}`);
 

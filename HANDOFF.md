@@ -48,6 +48,11 @@ You already created the "Class Act" project at supabase.com. Now:
    `0015_byok_billing.sql`, `0016_lecture_pause.sql`,
    `0017_canvas_connections.sql`, then `0018_feedback.sql` (order matters).
    Each should say "Success".
+   **Then run `supabase/catchup_0019_to_0023.sql`** — one idempotent script
+   covering 0019–0023 (profile answers, LinkedIn, deck order, term dates,
+   sign-up role). It ends with a five-row verification query; every `ok`
+   must come back true. Skipping it 404s Setup and Check-In, because the
+   app selects columns those migrations add.
    *(0011 adds seat geometry + the shared room database; 0012 adds the
    class schedule that auto-opens check-in; 0013 adds Tasty Grading; 0014
    adds shout-outs + the professor's participation cockpit; 0015 adds the
