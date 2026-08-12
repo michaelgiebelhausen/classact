@@ -70,6 +70,25 @@ export const ICEBREAKER_CATALOG: IcebreakerField[] = [
     kind: "text",
     flashcardHint: true,
   },
+  {
+    key: "first_live_event",
+    label: "First live event",
+    prompt:
+      "First (or favorite) concert, play, or live event you ever attended?",
+    placeholder: "Springsteen at the Bi-Lo Center — I was twelve.",
+    multiline: true,
+    kind: "text",
+    flashcardHint: true,
+  },
+  {
+    key: "niche_expertise",
+    label: "Niche expertise",
+    prompt: "A niche skill, hobby, or area of expertise of yours?",
+    placeholder: "I can identify most birds by their call.",
+    multiline: true,
+    kind: "text",
+    flashcardHint: true,
+  },
 ];
 
 export const DEFAULT_ICEBREAKER_KEYS = [
