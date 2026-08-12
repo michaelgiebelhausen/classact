@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  blocksForParams,
   buildLayout,
   gridLayout,
   layoutToSeats,
@@ -11,6 +12,135 @@ function byLabel(layout: RoomLayout) {
   const seats = layoutToSeats(layout);
   return new Map(seats.map((s) => [s.label, s]));
 }
+
+describe("column blocks", () => {
+  it("sizes each aisle-separated block independently", () => {
+    // The case the old model couldn't express: a wide middle block that
+    // stays wide while the outside blocks taper.
+    const layout = buildLayout({
+      type: "auditorium",
+      rows: 3,
+      frontSeats: 0,
+      backSeats: 0,
+      aisleCount: 2,
+      curve: 0,
+      balconyRows: 0,
+      blocks: [
+        { front: 2, back: 4 },
+        { front: 6, back: 6 },
+        { front: 2, back: 4 },
+      ],
+    });
+    const section = layout.sections[0];
+    if (section.kind !== "rows") throw new Error("expected a rows section");
+    expect(section.rowBlocks).toEqual([
+      [2, 6, 2],
+      [3, 6, 3],
+      [4, 6, 4],
+    ]);
+    expect(section.rowSeats).toEqual([10, 12, 14]);
+    expect(layoutToSeats(layout)).toHaveLength(36);
+  });
+
+  it("keeps blocks apart with aisle gaps and blocks neighbor links across them", () => {
+    const layout = buildLayout({
+      type: "classroom",
+      rows: 1,
+      cols: 0,
+      aisleCount: 0,
+      blocks: [
+        { front: 2, back: 2 },
+        { front: 2, back: 2 },
+      ],
+    });
+    const seats = layoutToSeats(layout);
+    const a2 = seats.find((s) => s.label === "A2")!;
+    const a3 = seats.find((s) => s.label === "A3")!;
+    // A2 ends the first block, A3 starts the second — gap, and no link.
+    expect(a3.x - a2.x).toBeGreaterThan(1);
+    expect(a2.neighbors.right).toBeUndefined();
+    expect(a3.neighbors.left).toBeUndefined();
+  });
+
+  it("derives legacy blocks so rooms saved before the block model are unchanged", () => {
+    const legacy = blocksForParams({
+      type: "classroom",
+      rows: 5,
+      cols: 8,
+      aisleCount: 2,
+    });
+    expect(legacy.reduce((a, b) => a + b.front, 0)).toBe(8);
+    expect(legacy).toHaveLength(3);
+    // A flat classroom's back row matches its front row.
+    expect(legacy.every((b) => b.front === b.back)).toBe(true);
+  });
+
+  it("rejects blocks that disagree with the row totals", () => {
+    const broken: RoomLayout = {
+      version: 1,
+      type: "classroom",
+      sections: [
+        { id: "main", kind: "rows", rowSeats: [8], rowBlocks: [[3, 3]] },
+      ],
+    };
+    expect(validateLayout(broken)).toMatch(/don't add up/i);
+  });
+});
+
+describe("rectangular tables", () => {
+  it("seats the short ends exactly and splits the rest across the long sides", () => {
+    const layout = buildLayout({
+      type: "seminar",
+      shape: "rect",
+      seats: 12,
+      endSeats: 2,
+    });
+    const seats = layoutToSeats(layout);
+    expect(seats).toHaveLength(12);
+    const xs = seats.map((s) => s.x);
+    const ys = seats.map((s) => s.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    // Two seats on each end column, four along each long side.
+    const onLeftEnd = seats.filter((s) => Math.abs(s.x - minX) < 0.01);
+    const onRightEnd = seats.filter((s) => Math.abs(s.x - maxX) < 0.01);
+    expect(onLeftEnd).toHaveLength(2);
+    expect(onRightEnd).toHaveLength(2);
+    const minY = Math.min(...ys);
+    expect(seats.filter((s) => Math.abs(s.y - minY) < 0.01)).toHaveLength(4);
+  });
+
+  it("refuses an end count that would leave the sides empty", () => {
+    const layout = buildLayout({ type: "seminar", shape: "rect", seats: 6 });
+    const section = layout.sections[0];
+    if (section.kind !== "table") throw new Error("expected a table section");
+    expect(validateLayout({ ...layout, sections: [{ ...section, endSeats: 3 }] })).toMatch(
+      /long side/i
+    );
+  });
+});
+
+describe("pods", () => {
+  it("honors dragged table positions", () => {
+    const layout = buildLayout({
+      type: "pods",
+      tables: 2,
+      seatsPerTable: 4,
+      positions: [
+        { x: 0, y: 0 },
+        { x: 12, y: 6 },
+      ],
+    });
+    const second = layout.sections[1];
+    if (second.kind !== "table") throw new Error("expected a table section");
+    expect(second.cx).toBe(12);
+    expect(second.cy).toBe(6);
+    // Both tables still produce seats, and the far one really is farther out.
+    const seats = layoutToSeats(layout);
+    expect(seats).toHaveLength(8);
+    expect(Math.max(...seats.map((s) => s.x))).toBeGreaterThan(10);
+  });
+});
 
 describe("layoutToSeats — classroom grid", () => {
   it("reproduces the legacy rows × cols grid", () => {

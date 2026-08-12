@@ -29,6 +29,14 @@ export interface RowsSection {
   kind: "rows";
   /** Seats per row, front row first. */
   rowSeats: number[];
+  /**
+   * Per-row block sizes — the seats between aisles, left to right, front row
+   * first. `[[3,2,3],[4,2,4]]` is a two-row block with two aisles that widens
+   * only on the outside. Authoritative when present: every block owns its own
+   * count in every row, so a room can taper unevenly instead of having one
+   * row total divided proportionally. Falls back to `rowSeats` + `aisles`.
+   */
+  rowBlocks?: number[][];
   /** 0 = straight rows; 1 = strongly fanned around the front. */
   curve?: number;
   tiered?: boolean;
@@ -45,6 +53,12 @@ export interface TableSection {
   kind: "table";
   shape: TableShape;
   seats: number;
+  /**
+   * Rect tables: seats on each short end. The rest split across the long
+   * sides, and the table is drawn to fit. Omitted = spread evenly around
+   * the perimeter.
+   */
+  endSeats?: number;
   /** Center in seat units. Omitted = auto-placed (single table at origin). */
   cx?: number;
   cy?: number;
@@ -60,8 +74,12 @@ export interface RoomLayout {
   sections: LayoutSection[];
   /** Seat labels toggled off in fine-tune (broken/missing seats). */
   removedSeats?: string[];
-  /** The designer knobs that built this layout, for re-editing. */
-  params?: Record<string, number | string | boolean>;
+  /**
+   * The designer knobs that built this layout, for re-editing. Values are
+   * whatever `PresetParams` holds — including per-block arrays and table
+   * positions — and are re-validated by round-tripping through buildLayout.
+   */
+  params?: Record<string, unknown>;
 }
 
 export interface SeatPlacement {
@@ -116,23 +134,64 @@ function rowWidth(seats: number, aisleSet: Set<number>): number {
   return (seats - 1) * SEAT_SPACING + aisleSet.size * AISLE_GAP;
 }
 
-function buildRowsSection(section: RowsSection, yOffset: number): RowSeatDraft[] {
-  const { rowSeats } = section;
-  const curve = Math.max(0, Math.min(1, section.curve ?? 0));
+/** Block sizes → the aisle positions they imply (aisle after seat N, 1-based). */
+function aisleSetFromBlocks(blocks: number[]): Set<number> {
+  const set = new Set<number>();
+  let acc = 0;
+  for (let i = 0; i < blocks.length - 1; i++) {
+    acc += blocks[i];
+    if (acc >= 1) set.add(acc);
+  }
+  return set;
+}
+
+/** A row's seat total split at its aisles — the legacy shape as blocks. */
+function blocksFromAisleSet(seats: number, aisleSet: Set<number>): number[] {
+  const blocks: number[] = [];
+  let count = 0;
+  for (let c = 1; c <= seats; c++) {
+    count++;
+    if (aisleSet.has(c) && c < seats) {
+      blocks.push(count);
+      count = 0;
+    }
+  }
+  blocks.push(count);
+  return blocks;
+}
+
+/**
+ * Per-row blocks for a section: explicit `rowBlocks` when the designer set
+ * them, otherwise the legacy proportional aisle split — so rooms saved
+ * before blocks existed keep their exact geometry.
+ */
+export function resolveRowBlocks(section: RowsSection): number[][] {
+  if (section.rowBlocks?.length) {
+    return section.rowBlocks.map((blocks) => blocks.filter((n) => n > 0));
+  }
+  const maxSeats = Math.max(...section.rowSeats);
   const aisles = section.aisles ?? [];
-  const maxSeats = Math.max(...rowSeats);
+  return section.rowSeats.map((seats) =>
+    blocksFromAisleSet(seats, rowAisles(aisles, seats, maxSeats))
+  );
+}
+
+function buildRowsSection(section: RowsSection, yOffset: number): RowSeatDraft[] {
+  const rowBlocks = resolveRowBlocks(section);
+  const rowTotals = rowBlocks.map((blocks) => blocks.reduce((a, b) => a + b, 0));
+  const curve = Math.max(0, Math.min(1, section.curve ?? 0));
   const letterStart = section.rowLetterStart ?? 0;
 
   // Front-row geometry anchors the fan: sweep grows with `curve`.
-  const frontWidth = rowWidth(rowSeats[0], rowAisles(aisles, rowSeats[0], maxSeats));
+  const frontWidth = rowWidth(rowTotals[0], aisleSetFromBlocks(rowBlocks[0]));
   const sweep = curve * 1.75; // radians, ~100° at full curve
   const curved = curve > 0.02 && frontWidth > 0 && sweep > 0;
   const rFront = curved ? Math.max(frontWidth / sweep, 2) : 0;
 
   const drafts: RowSeatDraft[] = [];
-  for (let r = 0; r < rowSeats.length; r++) {
-    const seats = rowSeats[r];
-    const rowAisleSet = rowAisles(aisles, seats, maxSeats);
+  for (let r = 0; r < rowBlocks.length; r++) {
+    const seats = rowTotals[r];
+    const rowAisleSet = aisleSetFromBlocks(rowBlocks[r]);
     const width = rowWidth(seats, rowAisleSet);
     let offset = 0;
     for (let c = 0; c < seats; c++) {
@@ -216,7 +275,11 @@ interface TableSeatDraft {
 }
 
 /** Points around a table perimeter, spaced ~1 seat unit, starting at the front. */
-function tablePerimeterPoints(shape: TableShape, seats: number): Array<{ x: number; y: number }> {
+function tablePerimeterPoints(
+  shape: TableShape,
+  seats: number,
+  endSeats?: number
+): Array<{ x: number; y: number }> {
   const points: Array<{ x: number; y: number }> = [];
   if (shape === "oval") {
     // Ellipse sized so the perimeter fits `seats` at comfortable spacing.
@@ -231,6 +294,23 @@ function tablePerimeterPoints(shape: TableShape, seats: number): Array<{ x: numb
     return points;
   }
   if (shape === "rect") {
+    // With `endSeats`, seat the short ends exactly and split the remainder
+    // between the long sides — the arrangement a real seminar table has.
+    if (endSeats !== undefined && endSeats >= 0 && seats > endSeats * 2) {
+      const sides = seats - endSeats * 2;
+      const front = Math.ceil(sides / 2);
+      const back = sides - front;
+      const w = Math.max(front, back, 1) * TABLE_SEAT_SPACING;
+      const h = Math.max(endSeats, 1) * TABLE_SEAT_SPACING;
+      const spread = (count: number, length: number) =>
+        Array.from({ length: count }, (_, i) => ((i + 0.5) / count - 0.5) * length);
+      // Clockwise from the front edge so perimeter neighbor links stay sane.
+      for (const x of spread(front, w)) points.push({ x, y: -h / 2 });
+      for (const y of spread(endSeats, h)) points.push({ x: w / 2, y });
+      for (const x of spread(back, w).reverse()) points.push({ x, y: h / 2 });
+      for (const y of spread(endSeats, h).reverse()) points.push({ x: -w / 2, y });
+      return points;
+    }
     const perimeter = Math.max(seats, 4) * TABLE_SEAT_SPACING;
     const w = perimeter * 0.3; // 1.5:1 table
     const h = perimeter * 0.2;
@@ -284,7 +364,7 @@ function tablePerimeterPoints(shape: TableShape, seats: number): Array<{ x: numb
 const SEAT_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 function buildTableSection(section: TableSection): TableSeatDraft[] {
-  const points = tablePerimeterPoints(section.shape, section.seats);
+  const points = tablePerimeterPoints(section.shape, section.seats, section.endSeats);
   const cx = section.cx ?? 0;
   const cy = section.cy ?? 0;
   return points.map((p, i) => ({
@@ -440,10 +520,23 @@ function round2(n: number): number {
 // Presets — the designer's knobs, each producing a full RoomLayout
 // ---------------------------------------------------------------------------
 
+/** One aisle-separated column of seats, sized independently front to back. */
+export interface BlockSpec {
+  front: number;
+  back: number;
+}
+
 export type PresetParams =
-  | { type: "classroom"; rows: number; cols: number; aisleCount: number }
-  | { type: "seminar"; shape: TableShape; seats: number }
-  | { type: "horseshoe"; rows: number; frontSeats: number }
+  | {
+      type: "classroom";
+      rows: number;
+      cols: number;
+      aisleCount: number;
+      /** Per-block seat counts. Overrides cols/aisleCount when present. */
+      blocks?: BlockSpec[];
+    }
+  | { type: "seminar"; shape: TableShape; seats: number; endSeats?: number }
+  | { type: "horseshoe"; rows: number; frontSeats: number; backSeats?: number }
   | {
       type: "auditorium";
       rows: number;
@@ -452,8 +545,17 @@ export type PresetParams =
       aisleCount: number;
       curve: number;
       balconyRows: number;
+      /** Per-block front/back counts. Overrides frontSeats/backSeats/aisleCount. */
+      blocks?: BlockSpec[];
     }
-  | { type: "pods"; tables: number; seatsPerTable: number };
+  | {
+      type: "pods";
+      tables: number;
+      seatsPerTable: number;
+      shape?: TableShape;
+      /** Per-table centers in seat units; index-aligned with table order. */
+      positions?: Array<{ x: number; y: number }>;
+    };
 
 /** Evenly spaced aisle positions across the widest row. */
 function evenAisles(maxSeats: number, count: number): number[] {
@@ -473,10 +575,65 @@ function interpolateRows(rows: number, front: number, back: number): number[] {
   );
 }
 
+/** Grid pitch for auto-placed pods — one table's footprint plus breathing room. */
+export function podCellSize(seatsPerTable: number): number {
+  const circumference = Math.max(seatsPerTable, 3) * TABLE_SEAT_SPACING;
+  const rx = circumference / (2 * Math.PI * 0.845);
+  return rx * 2 + 2;
+}
+
+/** Split a row total at its aisles — the block sizes the legacy knobs imply. */
+export function defaultBlocks(total: number, aisleCount: number): number[] {
+  const aisles = evenAisles(total, aisleCount);
+  const blocks: number[] = [];
+  let prev = 0;
+  for (const a of aisles) {
+    blocks.push(a - prev);
+    prev = a;
+  }
+  blocks.push(total - prev);
+  return blocks.filter((n) => n > 0);
+}
+
+/**
+ * The per-block front/back counts a preset is currently drawing — what the
+ * designer's block editors show. Derived from the simple knobs until the
+ * professor edits a block, after which `params.blocks` is authoritative.
+ */
+export function blocksForParams(params: PresetParams): BlockSpec[] {
+  if (params.type === "classroom") {
+    if (params.blocks?.length) return params.blocks;
+    return defaultBlocks(params.cols, params.aisleCount).map((n) => ({
+      front: n,
+      back: n,
+    }));
+  }
+  if (params.type === "auditorium") {
+    if (params.blocks?.length) return params.blocks;
+    const front = defaultBlocks(params.frontSeats, params.aisleCount);
+    const back = defaultBlocks(params.backSeats, params.aisleCount);
+    return front.map((f, i) => ({ front: f, back: back[i] ?? f }));
+  }
+  if (params.type === "horseshoe") {
+    return [
+      { front: params.frontSeats, back: params.backSeats ?? params.frontSeats + (params.rows - 1) * 2 },
+    ];
+  }
+  return [];
+}
+
+/** Rows × blocks grid: each block interpolated independently front to back. */
+function blocksToRowBlocks(rows: number, blocks: BlockSpec[]): number[][] {
+  const perBlock = blocks.map((b) => interpolateRows(rows, b.front, b.back));
+  return Array.from({ length: rows }, (_, r) =>
+    perBlock.map((counts) => Math.max(0, counts[r])).filter((n) => n > 0)
+  );
+}
+
 export function buildLayout(params: PresetParams): RoomLayout {
   switch (params.type) {
     case "classroom": {
-      const rowSeats = Array.from({ length: params.rows }, () => params.cols);
+      const rowBlocks = blocksToRowBlocks(params.rows, blocksForParams(params));
       return {
         version: 1,
         type: "classroom",
@@ -484,8 +641,8 @@ export function buildLayout(params: PresetParams): RoomLayout {
           {
             id: "main",
             kind: "rows",
-            rowSeats,
-            aisles: evenAisles(params.cols, params.aisleCount),
+            rowSeats: rowBlocks.map((b) => b.reduce((a, c) => a + c, 0)),
+            rowBlocks,
           },
         ],
         params: { ...params },
@@ -501,49 +658,59 @@ export function buildLayout(params: PresetParams): RoomLayout {
             kind: "table",
             shape: params.shape,
             seats: params.seats,
+            endSeats: params.shape === "rect" ? params.endSeats : undefined,
             labelPrefix: "",
           },
         ],
         params: { ...params },
       };
     case "horseshoe": {
-      // Each row wraps a bit wider than the one inside it.
-      const rowSeats = Array.from({ length: params.rows }, (_, r) =>
-        params.frontSeats + r * 2
-      );
+      // Each row wraps wider than the one inside it; the professor can set
+      // exactly how much wider by naming the back row.
+      const rowBlocks = blocksToRowBlocks(params.rows, blocksForParams(params));
       return {
         version: 1,
         type: "horseshoe",
         sections: [
-          { id: "main", kind: "rows", rowSeats, curve: 0.85, tiered: true },
+          {
+            id: "main",
+            kind: "rows",
+            rowSeats: rowBlocks.map((b) => b.reduce((a, c) => a + c, 0)),
+            rowBlocks,
+            curve: 0.85,
+            tiered: true,
+          },
         ],
         params: { ...params },
       };
     }
     case "auditorium": {
-      const rowSeats = interpolateRows(params.rows, params.frontSeats, params.backSeats);
+      const blocks = blocksForParams(params);
+      const rowBlocks = blocksToRowBlocks(params.rows, blocks);
       const sections: LayoutSection[] = [
         {
           id: "main",
           kind: "rows",
-          rowSeats,
+          rowSeats: rowBlocks.map((b) => b.reduce((a, c) => a + c, 0)),
+          rowBlocks,
           curve: params.curve,
           tiered: true,
-          aisles: evenAisles(Math.max(...rowSeats), params.aisleCount),
         },
       ];
       if (params.balconyRows > 0) {
-        const balconySeats = Array.from(
+        // The balcony repeats the back row's shape, block for block.
+        const balconyRow = blocks.map((b) => b.back);
+        const balconyBlocks = Array.from(
           { length: params.balconyRows },
-          () => params.backSeats
+          () => [...balconyRow]
         );
         sections.push({
           id: "balcony",
           kind: "rows",
-          rowSeats: balconySeats,
+          rowSeats: balconyBlocks.map((b) => b.reduce((a, c) => a + c, 0)),
+          rowBlocks: balconyBlocks,
           curve: params.curve,
           tiered: true,
-          aisles: evenAisles(params.backSeats, params.aisleCount),
           level: 2,
           rowLetterStart: params.rows,
         });
@@ -551,23 +718,26 @@ export function buildLayout(params: PresetParams): RoomLayout {
       return { version: 1, type: "auditorium", sections, params: { ...params } };
     }
     case "pods": {
-      // Pods auto-arranged on a grid, spaced by table footprint.
+      // Auto-arranged on a grid until the professor drags them; then the
+      // saved positions win, table by table.
       const seats = params.seatsPerTable;
-      const circumference = Math.max(seats, 3) * TABLE_SEAT_SPACING;
-      const rx = circumference / (2 * Math.PI * 0.845);
-      const cell = rx * 2 + 2;
+      const shape = params.shape ?? "oval";
+      const cell = podCellSize(seats);
       const tcols = Math.ceil(Math.sqrt(params.tables));
       const sections: LayoutSection[] = Array.from(
         { length: params.tables },
-        (_, i) => ({
-          id: `t${i + 1}`,
-          kind: "table" as const,
-          shape: "oval" as const,
-          seats,
-          labelPrefix: `${i + 1}`,
-          cx: (i % tcols) * cell,
-          cy: Math.floor(i / tcols) * (cell * 0.8),
-        })
+        (_, i) => {
+          const placed = params.positions?.[i];
+          return {
+            id: `t${i + 1}`,
+            kind: "table" as const,
+            shape,
+            seats,
+            labelPrefix: `${i + 1}`,
+            cx: placed ? placed.x : (i % tcols) * cell,
+            cy: placed ? placed.y : Math.floor(i / tcols) * (cell * 0.8),
+          };
+        }
       );
       return { version: 1, type: "pods", sections, params: { ...params } };
     }
@@ -599,12 +769,44 @@ export function validateLayout(layout: RoomLayout): string | null {
       if (s.rowSeats.some((n) => !Number.isInteger(n) || n < 1 || n > 40)) {
         return "Rows are limited to 1–40 seats.";
       }
+      if (s.rowBlocks) {
+        if (!Array.isArray(s.rowBlocks) || s.rowBlocks.length !== s.rowSeats.length) {
+          return "Row sections don't line up with the rows.";
+        }
+        if (s.rowBlocks.some((b) => !Array.isArray(b) || b.length > 8)) {
+          return "Rows are limited to 8 sections.";
+        }
+        if (
+          s.rowBlocks.some((b) =>
+            b.some((n) => !Number.isInteger(n) || n < 0 || n > 40)
+          )
+        ) {
+          return "Each section holds 0–40 seats.";
+        }
+        for (let i = 0; i < s.rowBlocks.length; i++) {
+          const total = s.rowBlocks[i].reduce((a, b) => a + b, 0);
+          if (total !== s.rowSeats[i]) {
+            return "Section seat counts don't add up to the row total.";
+          }
+        }
+      }
     } else if (s.kind === "table") {
       if (!Number.isInteger(s.seats) || s.seats < 2 || s.seats > 26) {
         return "Tables seat 2–26 people.";
       }
       if (!["rect", "oval", "ushape"].includes(s.shape)) {
         return "Unknown table shape.";
+      }
+      if (
+        s.endSeats !== undefined &&
+        (!Number.isInteger(s.endSeats) || s.endSeats < 0 || s.endSeats * 2 >= s.seats)
+      ) {
+        return "Leave at least one seat for each long side of the table.";
+      }
+      for (const coord of [s.cx, s.cy]) {
+        if (coord !== undefined && (!Number.isFinite(coord) || Math.abs(coord) > 500)) {
+          return "A table is positioned off the map.";
+        }
       }
     } else {
       return "Unknown section kind.";

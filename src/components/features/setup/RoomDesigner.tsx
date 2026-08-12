@@ -24,8 +24,11 @@ import {
 } from "@/components/ui/dialog";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
 import {
+  blocksForParams,
   buildLayout,
   layoutToSeats,
+  podCellSize,
+  type BlockSpec,
   type PresetParams,
   type RoomLayout,
   type TableShape,
@@ -142,6 +145,11 @@ export function RoomDesigner({
   // Full layout (removals shown ghosted, not hidden) drives the preview.
   const previewSeats = useMemo(() => {
     const source = selectedHit ? selectedHit.layout : buildLayout(params);
+    // Table shape rides along so the map draws real furniture, not always an oval.
+    const shapeByTable = new Map<string, TableShape>();
+    for (const s of source.sections) {
+      if (s.kind === "table") shapeByTable.set(s.id, s.shape);
+    }
     try {
       return layoutToSeats({ ...source, removedSeats: [] }).map((p, i) => ({
         id: `${p.label}-${i}`,
@@ -150,6 +158,7 @@ export function RoomDesigner({
         y: p.y,
         section: p.section,
         tableId: p.tableId,
+        tableShape: p.tableId ? shapeByTable.get(p.tableId) : undefined,
       }));
     } catch {
       return [];
@@ -164,6 +173,85 @@ export function RoomDesigner({
     setSelectedHit(null);
     setRemovedSeats(new Set());
     setParams((prev) => ({ ...prev, ...patch }) as PresetParams);
+  }
+
+  // --- Column blocks: the seats between aisles, each sized on its own ---
+  const blocks = useMemo(
+    () => (selectedHit ? [] : blocksForParams(params)),
+    [params, selectedHit]
+  );
+  const tiered = params.type === "auditorium" || params.type === "horseshoe";
+
+  function setBlocks(next: BlockSpec[]) {
+    const cleaned = next.map((b) => ({
+      front: clampInt(b.front, 0, 40),
+      back: clampInt(tiered ? b.back : b.front, 0, 40),
+    }));
+    updateParams({ blocks: cleaned } as Partial<PresetParams>);
+  }
+
+  function editBlock(index: number, patch: Partial<BlockSpec>) {
+    setBlocks(blocks.map((b, i) => (i === index ? { ...b, ...patch } : b)));
+  }
+
+  function addBlock() {
+    if (blocks.length >= 8) return;
+    const last = blocks[blocks.length - 1] ?? { front: 4, back: 4 };
+    setBlocks([...blocks, { ...last }]);
+  }
+
+  function removeBlock(index: number) {
+    if (blocks.length <= 1) return;
+    setBlocks(blocks.filter((_, i) => i !== index));
+  }
+
+  // --- Pods: drag to place, X to remove ---
+  const podPositions = useMemo(() => {
+    if (params.type !== "pods") return [];
+    const cell = podCellSize(params.seatsPerTable);
+    const cols = Math.ceil(Math.sqrt(params.tables));
+    return Array.from({ length: params.tables }, (_, i) => {
+      const placed = params.positions?.[i];
+      return placed
+        ? { ...placed }
+        : { x: (i % cols) * cell, y: Math.floor(i / cols) * (cell * 0.8) };
+    });
+  }, [params]);
+
+  function moveTable(tableId: string, dx: number, dy: number) {
+    if (params.type !== "pods") return;
+    const index = Number(tableId.replace(/^t/, "")) - 1;
+    if (!Number.isInteger(index) || index < 0) return;
+    const next = podPositions.map((p, i) =>
+      i === index
+        ? {
+            // Snap to a half-unit grid so dragged tables still line up.
+            x: Math.round(Math.max(0, p.x + dx) * 2) / 2,
+            y: Math.round(Math.max(0, p.y + dy) * 2) / 2,
+          }
+        : p
+    );
+    updateParams({ positions: next } as Partial<PresetParams>);
+  }
+
+  function removeTable(tableId: string) {
+    if (params.type !== "pods" || params.tables <= 1) return;
+    const index = Number(tableId.replace(/^t/, "")) - 1;
+    if (!Number.isInteger(index) || index < 0) return;
+    updateParams({
+      tables: params.tables - 1,
+      positions: podPositions.filter((_, i) => i !== index),
+    } as Partial<PresetParams>);
+  }
+
+  function addTable() {
+    if (params.type !== "pods" || params.tables >= 20) return;
+    const cell = podCellSize(params.seatsPerTable);
+    const last = podPositions[podPositions.length - 1] ?? { x: 0, y: 0 };
+    updateParams({
+      tables: params.tables + 1,
+      positions: [...podPositions, { x: last.x + cell, y: last.y }],
+    } as Partial<PresetParams>);
   }
 
   function switchPreset(type: PresetParams["type"]) {
@@ -423,14 +511,8 @@ export function RoomDesigner({
 
               <div className="flex flex-wrap items-end gap-4">
                 {params.type === "classroom" && (
-                  <>
-                    <Knob label="Rows" value={params.rows} min={1} max={40}
-                      onChange={(v) => updateParams({ rows: v })} />
-                    <Knob label="Seats per row" value={params.cols} min={1} max={40}
-                      onChange={(v) => updateParams({ cols: v })} />
-                    <Knob label="Aisles" value={params.aisleCount} min={0} max={3}
-                      onChange={(v) => updateParams({ aisleCount: v })} />
-                  </>
+                  <Knob label="Rows" value={params.rows} min={1} max={40}
+                    onChange={(v) => updateParams({ rows: v })} />
                 )}
                 {params.type === "seminar" && (
                   <>
@@ -452,26 +534,25 @@ export function RoomDesigner({
                     </div>
                     <Knob label="Seats" value={params.seats} min={2} max={26}
                       onChange={(v) => updateParams({ seats: v })} />
+                    {params.shape === "rect" && (
+                      <Knob
+                        label="Seats on each end"
+                        value={params.endSeats ?? 1}
+                        min={0}
+                        max={Math.max(0, Math.floor((params.seats - 2) / 2))}
+                        onChange={(v) => updateParams({ endSeats: v })}
+                      />
+                    )}
                   </>
                 )}
                 {params.type === "horseshoe" && (
-                  <>
-                    <Knob label="Rows" value={params.rows} min={1} max={6}
-                      onChange={(v) => updateParams({ rows: v })} />
-                    <Knob label="Front row seats" value={params.frontSeats} min={4} max={30}
-                      onChange={(v) => updateParams({ frontSeats: v })} />
-                  </>
+                  <Knob label="Rows" value={params.rows} min={1} max={6}
+                    onChange={(v) => updateParams({ rows: v })} />
                 )}
                 {params.type === "auditorium" && (
                   <>
                     <Knob label="Rows" value={params.rows} min={2} max={40}
                       onChange={(v) => updateParams({ rows: v })} />
-                    <Knob label="Front row seats" value={params.frontSeats} min={2} max={40}
-                      onChange={(v) => updateParams({ frontSeats: v })} />
-                    <Knob label="Back row seats" value={params.backSeats} min={2} max={40}
-                      onChange={(v) => updateParams({ backSeats: v })} />
-                    <Knob label="Aisles" value={params.aisleCount} min={0} max={4}
-                      onChange={(v) => updateParams({ aisleCount: v })} />
                     <div className="grid gap-2">
                       <Label htmlFor="curve">Curve</Label>
                       <input
@@ -492,13 +573,126 @@ export function RoomDesigner({
                 )}
                 {params.type === "pods" && (
                   <>
-                    <Knob label="Tables" value={params.tables} min={1} max={20}
-                      onChange={(v) => updateParams({ tables: v })} />
                     <Knob label="Seats per table" value={params.seatsPerTable} min={2} max={10}
                       onChange={(v) => updateParams({ seatsPerTable: v })} />
+                    <div className="grid gap-2">
+                      <Label>Table shape</Label>
+                      <div className="flex gap-1">
+                        {(["oval", "rect"] as TableShape[]).map((shape) => (
+                          <Button
+                            key={shape}
+                            type="button"
+                            size="sm"
+                            variant={(params.shape ?? "oval") === shape ? "default" : "outline"}
+                            onClick={() => updateParams({ shape })}
+                          >
+                            {shape === "oval" ? "Round" : "Rectangle"}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Tables</Label>
+                      <div className="flex items-center gap-2">
+                        <Button type="button" size="sm" variant="outline" onClick={addTable}>
+                          + Add table
+                        </Button>
+                        <span className="text-sm text-muted-foreground">
+                          {params.tables} · drag to arrange
+                        </span>
+                      </div>
+                    </div>
                   </>
                 )}
               </div>
+
+              {/* Blocks sit above the seats they control, in the same order. */}
+              {blocks.length > 0 && (
+                <div className="grid gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Label>
+                      {blocks.length === 1
+                        ? "Seats per row"
+                        : "Seat sections (split by aisles)"}
+                    </Label>
+                    {params.type !== "horseshoe" && (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={addBlock}
+                          disabled={blocks.length >= 8}
+                        >
+                          + Add aisle
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          Each section is sized on its own — set the front and
+                          back row of the middle block independently.
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {blocks.map((block, i) => (
+                      <div
+                        key={i}
+                        className="grid gap-1.5 rounded-lg border bg-muted/20 p-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {blocks.length === 1 ? "All seats" : `Section ${i + 1}`}
+                          </span>
+                          {blocks.length > 1 && params.type !== "horseshoe" && (
+                            <button
+                              type="button"
+                              onClick={() => removeBlock(i)}
+                              aria-label={`Remove section ${i + 1}`}
+                              className="text-xs text-muted-foreground hover:text-destructive"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <label className="grid gap-1 text-xs text-muted-foreground">
+                            {tiered ? "Front row" : "Seats"}
+                            <Input
+                              type="number"
+                              min={0}
+                              max={40}
+                              value={block.front}
+                              onChange={(e) =>
+                                editBlock(i, {
+                                  front: clampInt(Number(e.target.value), 0, 40),
+                                })
+                              }
+                              className="w-20"
+                            />
+                          </label>
+                          {tiered && (
+                            <label className="grid gap-1 text-xs text-muted-foreground">
+                              Back row
+                              <Input
+                                type="number"
+                                min={0}
+                                max={40}
+                                value={block.back}
+                                onChange={(e) =>
+                                  editBlock(i, {
+                                    back: clampInt(Number(e.target.value), 0, 40),
+                                  })
+                                }
+                                className="w-20"
+                              />
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center gap-3">
                 <Button onClick={() => doSave(false)} disabled={saving || previewSeats.length === 0}>
@@ -538,6 +732,16 @@ export function RoomDesigner({
               <RoomMap
                 seats={previewSeats}
                 ariaLabel="Room designer preview"
+                onTableMove={
+                  params.type === "pods" && !selectedHit && !editSeats
+                    ? moveTable
+                    : undefined
+                }
+                onTableRemove={
+                  params.type === "pods" && !selectedHit && !editSeats && params.tables > 1
+                    ? removeTable
+                    : undefined
+                }
                 onSeatTap={(seat) => {
                   if (!editSeats || selectedHit) return;
                   setRemovedSeats((prev) => {

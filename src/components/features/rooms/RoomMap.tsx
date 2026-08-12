@@ -22,6 +22,8 @@ export interface RoomMapSeat {
   y: number;
   section: string;
   tableId: string | null;
+  /** Furniture drawn under a table's seats. Defaults to an oval. */
+  tableShape?: "rect" | "oval" | "ushape";
 }
 
 export interface RoomMapSeatState {
@@ -43,6 +45,13 @@ interface Props {
   /** Visual state per seat; defaults to an empty, untappable room preview. */
   stateFor?: (seat: RoomMapSeat) => RoomMapSeatState;
   onSeatTap?: (seat: RoomMapSeat) => void;
+  /**
+   * Enables drag handles on each table. Deltas arrive in seat units, so the
+   * caller never needs to know the pixel scale.
+   */
+  onTableMove?: (tableId: string, dx: number, dy: number) => void;
+  /** Adds an X on each table when set (designer only). */
+  onTableRemove?: (tableId: string) => void;
   frontLabel?: string;
   ariaLabel?: string;
   /** Widen the seat pitch to make room for name captions under seats. */
@@ -72,6 +81,8 @@ export function RoomMap({
   seats,
   stateFor,
   onSeatTap,
+  onTableMove,
+  onTableRemove,
   frontLabel = "Front of room",
   ariaLabel = "Classroom seat map",
   captions = false,
@@ -90,8 +101,15 @@ export function RoomMap({
     const px = (x: number) => (x - minX + PAD_L) * hu;
     const py = (y: number) => (y - minY + PAD_T) * vu;
 
-    // Tables: a surface under each seat cluster.
-    const tables: Array<{ cx: number; cy: number; rx: number; ry: number }> = [];
+    // Tables: a surface under each seat cluster, drawn in its real shape.
+    const tables: Array<{
+      id: string;
+      shape: "rect" | "oval" | "ushape";
+      cx: number;
+      cy: number;
+      rx: number;
+      ry: number;
+    }> = [];
     const byTable = new Map<string, RoomMapSeat[]>();
     for (const s of seats) {
       if (!s.tableId) continue;
@@ -99,7 +117,7 @@ export function RoomMap({
       list.push(s);
       byTable.set(s.tableId, list);
     }
-    for (const members of byTable.values()) {
+    for (const [id, members] of byTable) {
       const xs = members.map((m) => px(m.x));
       const ys = members.map((m) => py(m.y));
       const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
@@ -107,7 +125,7 @@ export function RoomMap({
       // Inset so seats ring the table edge instead of sitting on it.
       const rx = Math.max((Math.max(...xs) - Math.min(...xs)) / 2 - SEAT * 0.35, UNIT * 0.45);
       const ry = Math.max((Math.max(...ys) - Math.min(...ys)) / 2 - SEAT * 0.35, UNIT * 0.35);
-      tables.push({ cx, cy, rx, ry });
+      tables.push({ id, shape: members[0].tableShape ?? "oval", cx, cy, rx, ry });
     }
 
     // Row letters: left of each lettered row (rows sections only).
@@ -142,7 +160,7 @@ export function RoomMap({
       balconyY = (mainMaxY + balconyMinY) / 2;
     }
 
-    return { width, height, px, py, tables, rowMarks, balconyY, hu };
+    return { width, height, px, py, tables, rowMarks, balconyY, hu, vu };
   }, [seats, captions]);
 
   if (!geo) return null;
@@ -185,21 +203,58 @@ export function RoomMap({
           {frontLabel.toUpperCase()}
         </text>
 
-        {geo.tables.map((t, i) => (
-          <ellipse
-            key={i}
-            cx={t.cx}
-            cy={t.cy}
-            rx={t.rx}
-            ry={t.ry}
-            style={{
-              fill: "var(--muted-foreground)",
-              opacity: 0.1,
-              stroke: "var(--border)",
-              strokeWidth: 1.5,
-            }}
-          />
-        ))}
+        {geo.tables.map((t) => {
+          const surface = {
+            fill: "var(--muted-foreground)",
+            opacity: 0.1,
+            stroke: "var(--border)",
+            strokeWidth: 1.5,
+          };
+          if (t.shape === "rect") {
+            return (
+              <rect
+                key={t.id}
+                x={t.cx - t.rx}
+                y={t.cy - t.ry}
+                width={t.rx * 2}
+                height={t.ry * 2}
+                rx={6}
+                style={surface}
+              />
+            );
+          }
+          if (t.shape === "ushape") {
+            // Open toward the front: two legs and a base, not a filled slab.
+            const thickness = Math.min(t.rx, t.ry) * 0.55;
+            return (
+              <path
+                key={t.id}
+                d={[
+                  `M ${t.cx - t.rx} ${t.cy - t.ry}`,
+                  `h ${thickness}`,
+                  `V ${t.cy + t.ry - thickness}`,
+                  `H ${t.cx + t.rx - thickness}`,
+                  `V ${t.cy - t.ry}`,
+                  `h ${thickness}`,
+                  `V ${t.cy + t.ry}`,
+                  `H ${t.cx - t.rx}`,
+                  "Z",
+                ].join(" ")}
+                style={surface}
+              />
+            );
+          }
+          return (
+            <ellipse
+              key={t.id}
+              cx={t.cx}
+              cy={t.cy}
+              rx={t.rx}
+              ry={t.ry}
+              style={surface}
+            />
+          );
+        })}
 
         {geo.rowMarks.map((m) => (
           <text
@@ -332,6 +387,72 @@ export function RoomMap({
           </Fragment>
         );
       })}
+
+      {/* Designer-only: drag a table to reposition it, X to remove it. */}
+      {(onTableMove || onTableRemove) &&
+        geo.tables.map((t) => (
+          <div
+            key={`handle-${t.id}`}
+            className="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1"
+            style={{ left: t.cx, top: t.cy }}
+          >
+            {onTableMove && (
+              <button
+                type="button"
+                aria-label={`Move table ${t.id}. Arrow keys nudge it.`}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  let lastX = e.clientX;
+                  let lastY = e.clientY;
+                  const target = e.currentTarget;
+                  const onMove = (ev: PointerEvent) => {
+                    const dx = (ev.clientX - lastX) / geo.hu;
+                    const dy = (ev.clientY - lastY) / geo.vu;
+                    lastX = ev.clientX;
+                    lastY = ev.clientY;
+                    onTableMove(t.id, dx, dy);
+                  };
+                  const onUp = (ev: PointerEvent) => {
+                    target.releasePointerCapture(ev.pointerId);
+                    target.removeEventListener("pointermove", onMove);
+                    target.removeEventListener("pointerup", onUp);
+                    target.removeEventListener("pointercancel", onUp);
+                  };
+                  target.addEventListener("pointermove", onMove);
+                  target.addEventListener("pointerup", onUp);
+                  target.addEventListener("pointercancel", onUp);
+                }}
+                onKeyDown={(e) => {
+                  const step = e.shiftKey ? 1 : 0.5;
+                  const nudge: Record<string, [number, number]> = {
+                    ArrowLeft: [-step, 0],
+                    ArrowRight: [step, 0],
+                    ArrowUp: [0, -step],
+                    ArrowDown: [0, step],
+                  };
+                  const delta = nudge[e.key];
+                  if (!delta) return;
+                  e.preventDefault();
+                  onTableMove(t.id, delta[0], delta[1]);
+                }}
+                className="cursor-grab touch-none rounded-full border bg-background/90 px-2 py-1 text-[10px] font-medium shadow-sm backdrop-blur active:cursor-grabbing"
+              >
+                ✥ drag
+              </button>
+            )}
+            {onTableRemove && (
+              <button
+                type="button"
+                aria-label={`Remove table ${t.id}`}
+                onClick={() => onTableRemove(t.id)}
+                className="rounded-full border bg-background/90 px-1.5 py-1 text-[10px] font-semibold text-destructive shadow-sm backdrop-blur hover:bg-destructive hover:text-destructive-foreground"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        ))}
     </div>
   );
 }
