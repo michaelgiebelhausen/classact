@@ -11,10 +11,11 @@ import { syncCanvasRoster } from "@/server/actions/canvas";
 import {
   disconnectCanvas,
   listCanvasCourses,
+  listCanvasSections,
   saveCanvasConnection,
   type CanvasConnectionView,
 } from "@/server/actions/canvassettings";
-import type { CanvasTeacherCourse } from "@/server/canvascreds";
+import type { CanvasSection, CanvasTeacherCourse } from "@/server/canvascreds";
 
 /**
  * The Canvas onboarding + sync card. Not connected: a three-step guided
@@ -38,6 +39,14 @@ export function CanvasSync({ courseId, connection }: Props) {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [manualId, setManualId] = useState("");
   const [disconnecting, setDisconnecting] = useState(false);
+  // Cross-listed Canvas shell: pick which sections belong in THIS course.
+  const [picker, setPicker] = useState<{
+    canvasCourseId: string;
+    courseName: string | null;
+    sections: CanvasSection[];
+    selected: Set<string>;
+  } | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
 
   async function connect() {
     if (!baseUrl.trim() || !token.trim()) {
@@ -72,11 +81,46 @@ export function CanvasSync({ courseId, connection }: Props) {
     }
   }
 
-  async function sync(canvasCourseId: string) {
+  /**
+   * Check the course's sections before syncing: one section syncs straight
+   * through; a cross-listed shell opens the picker instead.
+   */
+  async function beginSync(canvasCourseId: string, courseName?: string) {
+    // One sync flow at a time — no second check, no clobbering an open picker.
+    if (!canvasCourseId || syncingId || checkingId || picker) return;
+    setCheckingId(canvasCourseId);
+    let result: Awaited<ReturnType<typeof listCanvasSections>>;
+    try {
+      result = await listCanvasSections(canvasCourseId);
+    } catch {
+      toast.error("Couldn't reach Canvas — try again.");
+      return;
+    } finally {
+      setCheckingId(null);
+    }
+    if (!result.ok || !result.data) {
+      toast.error(result.ok ? "Couldn't check that course." : result.error);
+      return;
+    }
+    if (result.data.sections.length <= 1) {
+      void sync(canvasCourseId);
+      return;
+    }
+    setPicker({
+      canvasCourseId,
+      courseName: courseName ?? null,
+      sections: result.data.sections,
+      selected: new Set(result.data.sections.map((s) => s.id)),
+    });
+  }
+
+  async function sync(canvasCourseId: string, sectionIds?: string[]) {
+    if (syncingId) return;
     setSyncingId(canvasCourseId);
-    const result = await syncCanvasRoster({ courseId, canvasCourseId });
+    const result = await syncCanvasRoster({ courseId, canvasCourseId, sectionIds });
     setSyncingId(null);
     if (result.ok && result.data) {
+      setPicker(null);
       toast.success(
         `Synced ${result.data.imported} student(s) from Canvas${
           result.data.skipped ? `, skipped ${result.data.skipped} already added` : ""
@@ -253,14 +297,88 @@ export function CanvasSync({ courseId, connection }: Props) {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void sync(c.id)}
-                disabled={syncingId !== null}
+                onClick={() => void beginSync(c.id, c.name)}
+                disabled={syncingId !== null || checkingId !== null}
               >
-                {syncingId === c.id ? "Syncing…" : "Sync roster"}
+                {syncingId === c.id || checkingId === c.id
+                  ? "Syncing…"
+                  : "Sync roster"}
               </Button>
             </li>
           ))}
         </ul>
+      )}
+
+      {picker && (
+        <div className="grid gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
+          <div>
+            <p className="text-sm font-medium">
+              {picker.courseName ?? "This Canvas course"} is cross-listed —{" "}
+              {picker.sections.length} sections in one Canvas shell.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Sections that meet at different times work best as separate
+              ClassAct courses (each gets its own seat map and check-in).
+              Pick the section(s) that meet as{" "}
+              <span className="font-medium">this</span> course; repeat for
+              the others in their own courses.
+            </p>
+          </div>
+          <div className="grid gap-1.5">
+            {picker.sections.map((s) => (
+              <label
+                key={s.id}
+                className="flex cursor-pointer items-center gap-2 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  checked={picker.selected.has(s.id)}
+                  onChange={(e) => {
+                    setPicker((prev) => {
+                      if (!prev) return prev;
+                      const selected = new Set(prev.selected);
+                      if (e.target.checked) selected.add(s.id);
+                      else selected.delete(s.id);
+                      return { ...prev, selected };
+                    });
+                  }}
+                />
+                <span className="min-w-0 flex-1 break-words" title={s.name}>
+                  {s.name}
+                </span>
+                {s.totalStudents !== null && (
+                  <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                    {s.totalStudents} students
+                  </span>
+                )}
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={() =>
+                void sync(picker.canvasCourseId, [...picker.selected])
+              }
+              disabled={picker.selected.size === 0 || syncingId !== null}
+            >
+              {syncingId === picker.canvasCourseId
+                ? "Syncing…"
+                : `Sync ${picker.selected.size} ${
+                    picker.selected.size === 1 ? "section" : "sections"
+                  }`}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={() => setPicker(null)}
+              disabled={syncingId !== null}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
       )}
 
       <div className="flex flex-wrap items-end gap-2">
@@ -279,8 +397,8 @@ export function CanvasSync({ courseId, connection }: Props) {
         </div>
         <Button
           variant="outline"
-          onClick={() => void sync(manualId.trim())}
-          disabled={syncingId !== null || !manualId}
+          onClick={() => void beginSync(manualId.trim())}
+          disabled={syncingId !== null || checkingId !== null || !manualId}
         >
           Sync
         </Button>

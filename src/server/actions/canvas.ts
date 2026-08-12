@@ -17,6 +17,8 @@ interface CanvasUser {
   sortable_name?: string;
   email?: string | null;
   avatar_url?: string | null;
+  /** Present when the roster fetch asks for include[]=enrollments. */
+  enrollments?: Array<{ course_section_id?: number | null }> | null;
 }
 
 export interface CanvasStudent {
@@ -25,12 +27,29 @@ export interface CanvasStudent {
   avatarUrl: string | null; // null when Canvas returns a generic default
 }
 
-/** Parse the `next` URL from a Canvas Link header for pagination. */
-function nextLink(header: string | null): string | null {
+/**
+ * Parse the `next` URL from a Canvas Link header for pagination. Only a URL
+ * on the same origin as `base` is followed — Canvas's own pagination always
+ * is, and refusing anything else stops a hostile Canvas host from steering
+ * our token-bearing server fetch at an internal address (SSRF).
+ */
+function nextLink(header: string | null, base: string): string | null {
   if (!header) return null;
+  let baseOrigin: string;
+  try {
+    baseOrigin = new URL(base).origin;
+  } catch {
+    return null;
+  }
   for (const part of header.split(",")) {
     const m = part.match(/<([^>]+)>\s*;\s*rel="next"/);
-    if (m) return m[1];
+    if (!m) continue;
+    try {
+      if (new URL(m[1]).origin === baseOrigin) return m[1];
+    } catch {
+      // ignore an unparseable Link target
+    }
+    return null;
   }
   return null;
 }
@@ -75,23 +94,37 @@ async function downloadImage(
  */
 async function fetchCanvasRoster(
   canvasCourseId: string,
-  creds: CanvasCreds
+  creds: CanvasCreds,
+  sectionIds?: string[]
 ): Promise<{
   students: CanvasStudent[];
   noEmail: number;
   withPhoto: number;
 }> {
   const base = creds.baseUrl.replace(/\/+$/, "");
+  // Cross-listed shells: keep only students in the chosen sections. We scope
+  // the request server-side with section_ids[] (so a small section pulled
+  // from a huge merged shell only pages its own students, well under the cap)
+  // AND filter by enrollment client-side, so we stay correct even if a Canvas
+  // instance ignores the param.
+  const wanted =
+    sectionIds && sectionIds.length > 0 ? new Set(sectionIds) : null;
+  const sectionParam = wanted
+    ? [...wanted]
+        .map((id) => `&section_ids[]=${encodeURIComponent(id)}`)
+        .join("")
+    : "";
   let url:
     | string
-    | null = `${base}/api/v1/courses/${encodeURIComponent(canvasCourseId)}/users?enrollment_type[]=student&include[]=email&include[]=avatar_url&per_page=100`;
+    | null = `${base}/api/v1/courses/${encodeURIComponent(canvasCourseId)}/users?enrollment_type[]=student&include[]=email&include[]=avatar_url&include[]=enrollments&per_page=100${sectionParam}`;
 
   const students: CanvasStudent[] = [];
   let noEmail = 0;
   let withPhoto = 0;
   let pages = 0;
+  const MAX_PAGES = 40;
 
-  while (url && pages < 20) {
+  while (url && pages < MAX_PAGES) {
     pages++;
     const res = await fetch(url, {
       headers: {
@@ -111,6 +144,15 @@ async function fetchCanvasRoster(
     }
     const batch = (await res.json()) as CanvasUser[];
     for (const u of batch) {
+      if (
+        wanted &&
+        !(u.enrollments ?? []).some(
+          (e) =>
+            e.course_section_id != null && wanted.has(String(e.course_section_id))
+        )
+      ) {
+        continue; // enrolled in a section the professor didn't pick
+      }
       const email = (u.email ?? "").trim().toLowerCase();
       if (!email) {
         noEmail++;
@@ -124,7 +166,15 @@ async function fetchCanvasRoster(
         avatarUrl: real ? (u.avatar_url as string) : null,
       });
     }
-    url = nextLink(res.headers.get("link"));
+    url = nextLink(res.headers.get("link"), base);
+  }
+
+  // Loudly refuse to report a partial roster as a success. With section
+  // scoping this only trips on a genuinely enormous single import.
+  if (url) {
+    throw new Error(
+      "This Canvas course has more students than we can import at once. Sync one section at a time, or import a CSV."
+    );
   }
 
   return { students, noEmail, withPhoto };
@@ -136,12 +186,16 @@ const inputSchema = z.object({
     .string()
     .trim()
     .regex(/^\d+$/, "The Canvas course ID is the number in your course's URL."),
+  /** Canvas section ids to import; empty/absent = the whole course. */
+  sectionIds: z.array(z.string().regex(/^\d+$/)).max(50).optional(),
 });
 
 /** Sync a ClassAct course's roster from a Canvas course (FR-003 alternative). */
 export async function syncCanvasRoster(input: {
   courseId: string;
   canvasCourseId: string;
+  /** Canvas section ids to import; empty/absent = the whole course. */
+  sectionIds?: string[];
 }): Promise<
   ActionResult<{
     imported: number;
@@ -187,7 +241,11 @@ export async function syncCanvasRoster(input: {
     withPhoto: number;
   };
   try {
-    roster = await fetchCanvasRoster(parsed.data.canvasCourseId, creds);
+    roster = await fetchCanvasRoster(
+      parsed.data.canvasCourseId,
+      creds,
+      parsed.data.sectionIds
+    );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Canvas sync failed." };
   }

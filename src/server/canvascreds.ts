@@ -82,13 +82,80 @@ export interface CanvasTeacherCourse {
 }
 
 /** Parse the `next` URL from a Canvas Link header for pagination. */
-function nextLink(header: string | null): string | null {
+function nextLink(header: string | null, base: string): string | null {
   if (!header) return null;
+  let baseOrigin: string;
+  try {
+    baseOrigin = new URL(base).origin;
+  } catch {
+    return null;
+  }
   for (const part of header.split(",")) {
     const m = part.match(/<([^>]+)>\s*;\s*rel="next"/);
-    if (m) return m[1];
+    if (!m) continue;
+    // Only follow Canvas's own pagination — never an origin a hostile host
+    // could inject to point our token-bearing fetch at an internal address.
+    try {
+      if (new URL(m[1]).origin === baseOrigin) return m[1];
+    } catch {
+      // ignore an unparseable Link target
+    }
+    return null;
   }
   return null;
+}
+
+export interface CanvasSection {
+  id: string;
+  name: string;
+  totalStudents: number | null;
+}
+
+/**
+ * A Canvas course's sections. Cross-listed courses (several meeting times
+ * merged into one Canvas shell) come back as multiple sections; the sync UI
+ * lets the professor pick which ones belong in this ClassAct course.
+ */
+export async function fetchCourseSections(
+  creds: CanvasCreds,
+  canvasCourseId: string
+): Promise<CanvasSection[]> {
+  let url: string | null =
+    `${creds.baseUrl}/api/v1/courses/${encodeURIComponent(canvasCourseId)}/sections?include[]=total_students&per_page=100`;
+  const sections: CanvasSection[] = [];
+  let pages = 0;
+  while (url && pages < 5) {
+    pages++;
+    const res: Response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${creds.token}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 404) {
+      throw new Error("Canvas course not found — double-check the course ID.");
+    }
+    if (!res.ok) {
+      throw new Error(`Canvas returned ${res.status} while listing sections.`);
+    }
+    const batch = (await res.json()) as Array<{
+      id: number;
+      name?: string | null;
+      total_students?: number | null;
+    }>;
+    for (const s of batch) {
+      if (!s?.id) continue;
+      sections.push({
+        id: String(s.id),
+        name: s.name?.trim() || `Section ${s.id}`,
+        totalStudents: s.total_students ?? null,
+      });
+    }
+    url = nextLink(res.headers.get("link"), creds.baseUrl);
+  }
+  return sections;
 }
 
 /** Courses this token's owner teaches — for the "pick your course" list. */
@@ -127,7 +194,7 @@ export async function fetchTeacherCourses(
         term: c.term?.name ?? null,
       });
     }
-    url = nextLink(res.headers.get("link"));
+    url = nextLink(res.headers.get("link"), creds.baseUrl);
   }
   courses.sort((a, b) => a.name.localeCompare(b.name));
   return courses;

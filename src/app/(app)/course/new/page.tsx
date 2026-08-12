@@ -80,6 +80,32 @@ export default function NewCoursePage() {
               {saving ? "Creating…" : "Create course"}
             </Button>
           </form>
+
+          <div className="mt-6 grid gap-1.5 border-t pt-4 text-sm text-muted-foreground">
+            <p className="font-medium text-foreground">What happens next</p>
+            <p>
+              1. <span className="font-medium">Room</span> — pick your
+              classroom from the shared database, or upload a photo and let
+              the AI draw the seat map.
+            </p>
+            <p>
+              2. <span className="font-medium">Roster from Canvas</span> —
+              in Setup → Roster, connect your Canvas account once (a
+              two-minute guided setup), then pick your course from a list.
+              Students import with names, emails, and photos. Combined
+              multiple sections in Canvas? You&apos;ll choose which section
+              belongs to this course — make one ClassAct course per meeting
+              time.
+            </p>
+            <p>
+              3. <span className="font-medium">Invite</span> — students
+              activate with your join code and find their own seat.
+            </p>
+            <p className="text-xs">
+              Teaching several sections? Create a course for each — same
+              room, same Canvas connection, one section apiece.
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

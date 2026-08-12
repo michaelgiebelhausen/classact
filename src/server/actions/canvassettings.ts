@@ -6,9 +6,11 @@ import { isConfigured } from "@/lib/env";
 import { encryptSecret } from "@/lib/aicrypto";
 import { normalizeCanvasBaseUrl } from "@/lib/canvasurl";
 import {
+  fetchCourseSections,
   fetchTeacherCourses,
   resolveCanvasCreds,
   validateCanvasToken,
+  type CanvasSection,
   type CanvasTeacherCourse,
 } from "@/server/canvascreds";
 import type { ActionResult } from "@/server/actions/auth";
@@ -140,6 +142,36 @@ export async function disconnectCanvas(): Promise<ActionResult> {
   const admin = createAdminClient();
   await admin.from("professor_canvas").delete().eq("profile_id", user.id);
   return { ok: true };
+}
+
+/**
+ * Sections of one Canvas course. More than one usually means a cross-listed
+ * shell (several meeting times merged in Canvas) — the sync UI offers a
+ * section picker so each ClassAct course gets the students who actually
+ * meet together.
+ */
+export async function listCanvasSections(
+  canvasCourseId: string
+): Promise<ActionResult<{ sections: CanvasSection[] }>> {
+  const { user } = await requireProfessor();
+  if (!user) return { ok: false, error: "Professors only." };
+  const id = canvasCourseId.trim();
+  if (!/^\d+$/.test(id)) {
+    return { ok: false, error: "That doesn't look like a Canvas course ID." };
+  }
+  const creds = await resolveCanvasCreds(user.id);
+  if (!creds) {
+    return { ok: false, error: "Connect your Canvas account first." };
+  }
+  try {
+    const sections = await fetchCourseSections(creds, id);
+    return { ok: true, data: { sections } };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Couldn't list that course's sections.",
+    };
+  }
 }
 
 /** Courses the professor teaches, for the pick-a-course sync list. */
