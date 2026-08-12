@@ -55,6 +55,14 @@ export function CanvasSync({ courseId, connection }: Props) {
   // token page, so steps 2–3 never ask them to hunt through menus.
   const [connectStep, setConnectStep] = useState(1);
   const [confirmedHost, setConfirmedHost] = useState<string | null>(null);
+  // Optimistic bridge: after a successful connect, the `connection` prop
+  // stays stale until router.refresh() round-trips. Holding the fresh
+  // identity here lets the card show the connected view immediately instead
+  // of snapping back to step 1 (or, over an env fallback, claiming the
+  // course list belongs to someone else's token).
+  const [justConnected, setJustConnected] = useState<{ name: string } | null>(
+    null
+  );
 
   function confirmHost() {
     const normalized = normalizeCanvasBaseUrl(baseUrl);
@@ -83,16 +91,27 @@ export function CanvasSync({ courseId, connection }: Props) {
       return;
     }
     setSaving(true);
-    const result = await saveCanvasConnection({
-      baseUrl: confirmedHost ?? baseUrl,
-      token,
-    });
-    setSaving(false);
+    let result: Awaited<ReturnType<typeof saveCanvasConnection>>;
+    try {
+      result = await saveCanvasConnection({
+        baseUrl: confirmedHost ?? baseUrl,
+        token,
+      });
+    } catch {
+      toast.error(
+        "Couldn't reach the server — check your connection and try again."
+      );
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (result.ok && result.data) {
       setToken("");
       setShowConnect(false);
       setConnectStep(1);
       setCourses(null);
+      setPicker(null);
+      setJustConnected({ name: result.data.name });
       toast.success(`Connected to Canvas as ${result.data.name}.`);
       router.refresh();
       // Keep the walkthrough moving: show their courses right away instead
@@ -105,8 +124,15 @@ export function CanvasSync({ courseId, connection }: Props) {
 
   async function loadCourses() {
     setLoadingCourses(true);
-    const result = await listCanvasCourses();
-    setLoadingCourses(false);
+    let result: Awaited<ReturnType<typeof listCanvasCourses>>;
+    try {
+      result = await listCanvasCourses();
+    } catch {
+      toast.error("Couldn't reach the server — try again.");
+      return;
+    } finally {
+      setLoadingCourses(false);
+    }
     if (result.ok && result.data) {
       setCourses(result.data.courses);
       if (result.data.courses.length === 0) {
@@ -155,8 +181,15 @@ export function CanvasSync({ courseId, connection }: Props) {
   async function sync(canvasCourseId: string, sectionIds?: string[]) {
     if (syncingId) return;
     setSyncingId(canvasCourseId);
-    const result = await syncCanvasRoster({ courseId, canvasCourseId, sectionIds });
-    setSyncingId(null);
+    let result: Awaited<ReturnType<typeof syncCanvasRoster>>;
+    try {
+      result = await syncCanvasRoster({ courseId, canvasCourseId, sectionIds });
+    } catch {
+      toast.error("Couldn't reach the server — the sync may not have run. Try again.");
+      return;
+    } finally {
+      setSyncingId(null);
+    }
     if (result.ok && result.data) {
       setPicker(null);
       toast.success(
@@ -182,10 +215,19 @@ export function CanvasSync({ courseId, connection }: Props) {
 
   async function handleDisconnect() {
     setDisconnecting(true);
-    const result = await disconnectCanvas();
-    setDisconnecting(false);
+    let result: Awaited<ReturnType<typeof disconnectCanvas>>;
+    try {
+      result = await disconnectCanvas();
+    } catch {
+      toast.error("Couldn't reach the server — try again.");
+      return;
+    } finally {
+      setDisconnecting(false);
+    }
     if (result.ok) {
       setCourses(null);
+      setPicker(null);
+      setJustConnected(null);
       toast.success("Canvas disconnected — the token has been deleted.");
       router.refresh();
     } else {
@@ -193,7 +235,22 @@ export function CanvasSync({ courseId, connection }: Props) {
     }
   }
 
-  if (!connection.connected || showConnect) {
+  // Render-time reconcile: once the refreshed prop reflects the professor's
+  // own connection, the optimistic bridge has served its purpose.
+  if (justConnected && connection.connected && connection.source === "professor") {
+    setJustConnected(null);
+  }
+  const effective: CanvasConnectionView = justConnected
+    ? {
+        connected: true,
+        source: "professor",
+        baseUrl: confirmedHost ?? connection.baseUrl,
+        tokenLast4: "",
+        connectedName: justConnected.name,
+      }
+    : connection;
+
+  if (!effective.connected || showConnect) {
     const hostLabel = confirmedHost?.replace("https://", "");
     return (
       <div className="grid gap-4 rounded-lg border border-dashed p-4">
@@ -213,7 +270,12 @@ export function CanvasSync({ courseId, connection }: Props) {
           <button
             type="button"
             className="flex items-center gap-2 text-left text-sm"
-            onClick={() => setConnectStep(1)}
+            onClick={() => {
+              setConnectStep(1);
+              // A pasted token belongs to the host it was minted on — don't
+              // let it silently pair with a different address next pass.
+              setToken("");
+            }}
             disabled={saving}
           >
             <CheckCircle2 className="size-4 shrink-0 text-green-600" />
@@ -332,13 +394,14 @@ export function CanvasSync({ courseId, connection }: Props) {
         )}
 
         {/* Escape hatch when this panel was opened over a working fallback. */}
-        {connection.connected && showConnect && (
+        {effective.connected && showConnect && (
           <button
             type="button"
             className="justify-self-start text-xs text-muted-foreground underline"
             onClick={() => {
               setShowConnect(false);
               setConnectStep(1);
+              setToken("");
             }}
             disabled={saving}
           >
@@ -349,7 +412,7 @@ export function CanvasSync({ courseId, connection }: Props) {
     );
   }
 
-  const host = connection.baseUrl.replace(/^https?:\/\//, "");
+  const host = effective.baseUrl.replace(/^https?:\/\//, "");
   return (
     <div className="grid gap-3 rounded-lg border border-dashed p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -359,9 +422,9 @@ export function CanvasSync({ courseId, connection }: Props) {
           </p>
           <p className="text-sm text-muted-foreground">
             {host}
-            {connection.connectedName ? ` · ${connection.connectedName}` : ""}
-            {connection.tokenLast4 ? ` · token ••••${connection.tokenLast4}` : ""}
-            {connection.source === "env" ? " · using this server's Canvas token" : ""}
+            {effective.connectedName ? ` · ${effective.connectedName}` : ""}
+            {effective.tokenLast4 ? ` · token ••••${effective.tokenLast4}` : ""}
+            {effective.source === "env" ? " · using this server's Canvas token" : ""}
           </p>
         </div>
         <div className="flex gap-2">
@@ -383,7 +446,7 @@ export function CanvasSync({ courseId, connection }: Props) {
               "Pick a course to sync"
             )}
           </Button>
-          {connection.source === "professor" ? (
+          {effective.source === "professor" ? (
             <Button
               variant="ghost"
               size="sm"
@@ -406,7 +469,7 @@ export function CanvasSync({ courseId, connection }: Props) {
         </div>
       </div>
 
-      {connection.source === "env" && (
+      {effective.source === "env" && (
         <p className="rounded-lg border border-dashed p-2 text-xs text-muted-foreground">
           This is the server&apos;s Canvas token, so the list below shows{" "}
           <span className="font-medium">its owner&apos;s</span> courses — not
@@ -417,7 +480,7 @@ export function CanvasSync({ courseId, connection }: Props) {
       {courses?.length === 0 && (
         <p className="rounded-lg border border-dashed p-2 text-sm text-muted-foreground">
           Canvas returned no active courses for this token
-          {connection.source === "env"
+          {effective.source === "env"
             ? " — it belongs to the server, not to you. Connect your own account above."
             : ". Check that you're listed as the teacher, or paste the course ID below."}
         </p>
@@ -441,7 +504,9 @@ export function CanvasSync({ courseId, connection }: Props) {
                 size="sm"
                 variant="outline"
                 onClick={() => void beginSync(c.id, c.name)}
-                disabled={syncingId !== null || checkingId !== null}
+                disabled={
+                  syncingId !== null || checkingId !== null || picker !== null
+                }
               >
                 {syncingId === c.id || checkingId === c.id
                   ? "Syncing…"
@@ -541,7 +606,12 @@ export function CanvasSync({ courseId, connection }: Props) {
         <Button
           variant="outline"
           onClick={() => void beginSync(manualId.trim())}
-          disabled={syncingId !== null || checkingId !== null || !manualId}
+          disabled={
+            syncingId !== null ||
+            checkingId !== null ||
+            picker !== null ||
+            !manualId
+          }
         >
           Sync
         </Button>

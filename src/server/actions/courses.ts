@@ -107,7 +107,13 @@ export async function duplicateCourse(input: {
   term?: string;
   copyDecks: boolean;
 }): Promise<
-  ActionResult<{ id: string; joinCode: string; seats: number; decks: number }>
+  ActionResult<{
+    id: string;
+    joinCode: string;
+    seats: number;
+    decks: number;
+    warnings: string[];
+  }>
 > {
   const parsed = createCourseSchema.safeParse({
     name: input.name,
@@ -188,13 +194,23 @@ export async function duplicateCourse(input: {
     return { ok: false, error: "Couldn't generate a unique join code. Try again." };
   }
 
+  // Anything that only partially copies must say so — a clean success toast
+  // over a half-copied course is worse than a failure.
+  const warnings: string[] = [];
+
   // Seats copy verbatim: `neighbors` holds seat *labels*, so the map and the
   // check-in verification links it encodes survive untouched.
   let seatCount = 0;
-  const { data: sourceSeats } = await supabase
+  const { data: sourceSeats, error: seatReadError } = await supabase
     .from("seats")
     .select("label, row_index, col_index, x, y, section, table_id, neighbors")
     .eq("course_id", input.courseId);
+  if (seatReadError) {
+    console.error("[duplicateCourse] seat read failed:", seatReadError.message);
+    warnings.push(
+      "The seat map couldn't be copied. Open Setup → Room in the new course and re-save the layout."
+    );
+  }
   if (sourceSeats && sourceSeats.length > 0) {
     const { error: seatError } = await supabase.from("seats").insert(
       sourceSeats.map((s) => ({
@@ -211,6 +227,9 @@ export async function duplicateCourse(input: {
     );
     if (seatError) {
       console.error("[duplicateCourse] seat copy failed:", seatError.message);
+      warnings.push(
+        "The seat map didn't copy. Open Setup → Room in the new course and re-save the layout."
+      );
     } else {
       seatCount = sourceSeats.length;
     }
@@ -221,14 +240,24 @@ export async function duplicateCourse(input: {
   // a deck whose file won't copy is skipped rather than left pointing at a
   // file the new course's students can't read.
   let deckCount = 0;
+  let decksSkipped = 0;
   if (input.copyDecks) {
-    const { data: decks } = await supabase
+    const { data: decks, error: deckReadError } = await supabase
       .from("lecture_decks")
       .select(
         "id, title, kind, storage_path, embed_url, page_count, reading_path, reading_title, position"
       )
       .eq("course_id", input.courseId)
       .order("position", { ascending: true });
+    if (deckReadError) {
+      console.error(
+        "[duplicateCourse] deck read failed:",
+        deckReadError.message
+      );
+      warnings.push(
+        "The slide decks couldn't be read, so none were copied — upload them in the new course."
+      );
+    }
 
     const copyFile = async (path: string | null): Promise<string | null> => {
       if (!path) return null;
@@ -242,7 +271,12 @@ export async function duplicateCourse(input: {
       let storagePath: string | null = null;
       if (deck.kind === "pdf") {
         storagePath = await copyFile(deck.storage_path);
-        if (!storagePath) continue; // no file, no usable deck
+        if (!storagePath) {
+          // No file, no usable deck.
+          console.error("[duplicateCourse] deck file copy failed:", deck.title);
+          decksSkipped++;
+          continue;
+        }
       }
       const readingPath = await copyFile(deck.reading_path);
 
@@ -259,37 +293,80 @@ export async function duplicateCourse(input: {
         reading_title: readingPath ? deck.reading_title : null,
         position: deck.position,
       });
-      if (deckError) continue;
+      if (deckError) {
+        // The files were copied before the row failed — don't leave them
+        // orphaned in the bucket where nothing references or cleans them.
+        const copied = [storagePath, readingPath].filter(
+          (p): p is string => p !== null
+        );
+        if (copied.length > 0) {
+          await supabase.storage.from(DECK_BUCKET).remove(copied);
+        }
+        console.error("[duplicateCourse] deck insert failed:", deckError.message);
+        decksSkipped++;
+        continue;
+      }
       deckCount++;
 
-      const { data: questions } = await supabase
+      const { data: questions, error: questionReadError } = await supabase
         .from("deck_questions")
         .select(
           "prompt, options, correct_indices, rationale, position_after_page, approved, source"
         )
         .eq("deck_id", deck.id);
-      if (questions && questions.length > 0) {
-        await supabase.from("deck_questions").insert(
-          questions.map((q) => ({
-            course_id: newId,
-            deck_id: newDeckId,
-            prompt: q.prompt,
-            options: q.options,
-            correct_indices: q.correct_indices,
-            rationale: q.rationale,
-            position_after_page: q.position_after_page,
-            approved: q.approved,
-            source: q.source,
-          }))
+      if (questionReadError) {
+        console.error(
+          "[duplicateCourse] question read failed:",
+          questionReadError.message
+        );
+        warnings.push(
+          `The questions for "${deck.title}" didn't copy — re-generate them in the new course.`
         );
       }
+      if (questions && questions.length > 0) {
+        const { error: questionError } = await supabase
+          .from("deck_questions")
+          .insert(
+            questions.map((q) => ({
+              course_id: newId,
+              deck_id: newDeckId,
+              prompt: q.prompt,
+              options: q.options,
+              correct_indices: q.correct_indices,
+              rationale: q.rationale,
+              position_after_page: q.position_after_page,
+              approved: q.approved,
+              source: q.source,
+            }))
+          );
+        if (questionError) {
+          console.error(
+            "[duplicateCourse] question copy failed:",
+            questionError.message
+          );
+          warnings.push(
+            `The questions for "${deck.title}" didn't copy — re-generate them in the new course.`
+          );
+        }
+      }
+    }
+    if (decksSkipped > 0) {
+      warnings.push(
+        `${decksSkipped} deck(s) couldn't be copied — re-upload them in the new course.`
+      );
     }
   }
 
   revalidatePath("/dashboard");
   return {
     ok: true,
-    data: { id: newId, joinCode, seats: seatCount, decks: deckCount },
+    data: {
+      id: newId,
+      joinCode,
+      seats: seatCount,
+      decks: deckCount,
+      warnings,
+    },
   };
 }
 

@@ -57,12 +57,18 @@ export function CopyCourseButton({
           result.data.decks > 0 ? `, ${result.data.decks} deck(s)` : ""
         }. Set the meeting time for this section.`
       );
+      // Partial-copy warnings: anything that didn't come across, said plainly.
+      for (const warning of result.data.warnings) {
+        toast.warning(warning, { duration: 10000 });
+      }
       router.push(`/course/${result.data.id}/setup`);
       router.refresh();
       return;
     }
     if (!result.ok && result.error === "billing_required") {
-      toast.message("Each section is $4.99/month — taking you to checkout.");
+      toast.message(
+        "ClassAct is $4.99/month — one subscription covers all your courses and sections. Taking you to checkout."
+      );
       const checkout = await startCheckout();
       if (checkout.ok && checkout.data) {
         window.location.href = checkout.data.url;
