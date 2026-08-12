@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { BecomeProfessorButton } from "@/components/features/profile/BecomeProfessorButton";
+import { CopyCourseButton } from "@/components/features/CopyCourseButton";
 
 export default async function DashboardPage() {
   const profile = await getProfile();
@@ -51,13 +52,18 @@ export default async function DashboardPage() {
                     <span className="font-mono">{c.join_code}</span>
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="flex gap-2">
+                <CardContent className="flex flex-wrap gap-2">
                   <Button asChild size="sm">
                     <Link href={`/course/${c.id}`}>Open</Link>
                   </Button>
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/course/${c.id}/setup`}>Setup</Link>
                   </Button>
+                  <CopyCourseButton
+                    courseId={c.id}
+                    courseName={c.name}
+                    term={c.term}
+                  />
                 </CardContent>
               </Card>
             ))}
