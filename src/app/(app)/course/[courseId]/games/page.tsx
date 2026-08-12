@@ -5,7 +5,11 @@ import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { getSignedPhotoUrls, resolveEnrollmentPhotos } from "@/lib/storage";
 import { flashcardHintFields } from "@/lib/icebreakers";
-import { NameGames, type GamePlayer } from "@/components/features/games/NameGames";
+import {
+  NameGames,
+  type GamePlayer,
+  type RosterPerson,
+} from "@/components/features/games/NameGames";
 
 const MIN_PLAYERS = 6;
 
@@ -28,7 +32,10 @@ export default async function GamesPage({
   if (!course) notFound();
 
   // Build the player pool (classmates with >=1 photo, excluding yourself).
+  // The Roster tab is a class list rather than a game, so it takes everyone —
+  // a photo just isn't required to appear on it.
   const players: GamePlayer[] = [];
+  const roster: RosterPerson[] = [];
   if (isConfigured.supabaseAdmin) {
     const admin = createAdminClient();
     const { data: enrollments } = await admin
@@ -122,6 +129,12 @@ export default async function GamesPage({
       const urls = paths
         .map((p) => urlMap[p])
         .filter((u): u is string => Boolean(u));
+      roster.push({
+        enrollmentId: `professor:${course.professor_id}`,
+        name: prof?.full_name ?? "Your professor",
+        photoUrl: urls[0] ?? null,
+        phonetic: prof?.name_phonetic ?? null,
+      });
       if (urls.length > 0) {
         const answerByKey = new Map(
           (profAnswers ?? []).map((a) => [a.field_key, a.value])
@@ -144,15 +157,22 @@ export default async function GamesPage({
 
     for (const e of candidates) {
       const urls = photoMap.get(e.id) ?? [];
+      const phonetic =
+        (e.profile_id ? phoneticByProfile.get(e.profile_id) : null) ??
+        e.roster_name_phonetic ??
+        null;
+      roster.push({
+        enrollmentId: e.id,
+        name: e.roster_name,
+        photoUrl: urls[0] ?? null,
+        phonetic,
+      });
       if (urls.length > 0) {
         players.push({
           enrollmentId: e.id,
           name: e.roster_name,
           photoUrls: urls,
-          phonetic:
-            (e.profile_id ? phoneticByProfile.get(e.profile_id) : null) ??
-            e.roster_name_phonetic ??
-            null,
+          phonetic,
           hints: hintsByEnrollment.get(e.id) ?? [],
           linkedinUrl: e.profile_id
             ? (linkedinByProfile.get(e.profile_id) ?? null)
@@ -170,7 +190,12 @@ export default async function GamesPage({
           {course.name} — learn the room before class starts.
         </p>
       </div>
-      <NameGames players={players} courseId={courseId} minPlayers={MIN_PLAYERS} />
+      <NameGames
+        players={players}
+        roster={roster}
+        courseId={courseId}
+        minPlayers={MIN_PLAYERS}
+      />
     </div>
   );
 }

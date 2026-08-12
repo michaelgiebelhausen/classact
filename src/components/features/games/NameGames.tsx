@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ExternalLink, Shuffle } from "lucide-react";
+import { ExternalLink, Shuffle, Type, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { recordGameScore } from "@/server/actions/games";
 import { capture } from "@/lib/analytics";
-import { sortByLastName } from "@/lib/names";
+import { initialsOf, sortByLastName } from "@/lib/names";
 import type { GameType } from "@/types/db";
 
 export interface GamePlayer {
@@ -159,11 +159,26 @@ function MemoryTiles({
               type="button"
               onClick={() => tapTile(tile)}
               disabled={isGone}
-              aria-label={isUp ? (tile.kind === "name" ? tile.content : "Photo tile") : "Face-down tile"}
+              aria-label={
+                isUp
+                  ? tile.kind === "name"
+                    ? tile.content
+                    : "Photo tile"
+                  : tile.kind === "name"
+                    ? "Face-down name tile"
+                    : "Face-down photo tile"
+              }
               className={[
                 "flex aspect-square items-center justify-center overflow-hidden rounded-lg border text-center text-xs font-medium transition-all",
                 isGone ? "opacity-25" : "",
-                isUp ? "bg-background" : "bg-primary/90",
+                // Face down, the back says which half of the pair it is —
+                // you hunt a name for a face, not through twice as many
+                // unknowns. Photos stay the familiar orange.
+                isUp
+                  ? "bg-background"
+                  : tile.kind === "name"
+                    ? "bg-sky-700"
+                    : "bg-primary/90",
               ].join(" ")}
             >
               {isUp ? (
@@ -184,8 +199,12 @@ function MemoryTiles({
                     ) : null}
                   </span>
                 )
+              ) : // A glyph as well as a colour, so the shortcut still works
+              // for the colour-blind students in the room.
+              tile.kind === "name" ? (
+                <Type className="size-5 text-white" aria-hidden />
               ) : (
-                <span className="text-primary-foreground">?</span>
+                <User className="size-5 text-primary-foreground" aria-hidden />
               )}
             </button>
           );
@@ -609,41 +628,62 @@ function GameResult({
   );
 }
 
+/** Everyone on the roster — unlike GamePlayer, a photo is optional. */
+export interface RosterPerson {
+  enrollmentId: string;
+  name: string;
+  photoUrl: string | null;
+  phonetic?: string | null;
+}
+
 /**
  * The class list, not a game: every face and name at once, filed by last
  * name. Somewhere to look someone up (or study) without being quizzed.
+ * Classmates without a photo still appear, as initials — a roster with
+ * people missing from it isn't a roster.
  */
-function Roster({ players }: { players: GamePlayer[] }) {
+function Roster({ people }: { people: RosterPerson[] }) {
   // Unlike the games, a reference sheet shouldn't reshuffle or swap faces
-  // under you — sorted once, and always the first photo.
-  const people = useMemo(
-    () => sortByLastName(players, (p) => p.name),
-    [players]
-  );
+  // under you — sorted once, same photo every time.
+  const sorted = useMemo(() => sortByLastName(people, (p) => p.name), [people]);
 
-  if (people.length === 0) {
+  if (sorted.length === 0) {
     return (
       <p className="py-12 text-center text-muted-foreground">
-        No photos yet — classmates appear here as they add one.
+        Nobody on the roster yet — classmates appear here as they join.
       </p>
     );
   }
 
+  const withPhotos = sorted.filter((p) => p.photoUrl).length;
   return (
     <div className="grid gap-4">
       <p className="text-sm text-muted-foreground">
-        {people.length} {people.length === 1 ? "person" : "people"}, by last
-        name.
+        {sorted.length} {sorted.length === 1 ? "person" : "people"}, by last
+        name
+        {withPhotos < sorted.length
+          ? ` · ${sorted.length - withPhotos} without a photo yet`
+          : ""}
+        .
       </p>
       <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {people.map((p) => (
+        {sorted.map((p) => (
           <li key={p.enrollmentId} className="grid justify-items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={p.photoUrls[0]}
-              alt={p.name}
-              className="aspect-square w-full rounded-lg object-cover"
-            />
+            {p.photoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.photoUrl}
+                alt={p.name}
+                className="aspect-square w-full rounded-lg object-cover"
+              />
+            ) : (
+              <div
+                aria-hidden
+                className="grid aspect-square w-full place-items-center rounded-lg border border-dashed bg-muted text-xl font-semibold text-muted-foreground"
+              >
+                {initialsOf(p.name)}
+              </div>
+            )}
             <div className="text-center">
               <p className="text-sm font-medium leading-tight">{p.name}</p>
               {p.phonetic && (
@@ -659,10 +699,12 @@ function Roster({ players }: { players: GamePlayer[] }) {
 
 export function NameGames({
   players,
+  roster,
   courseId,
   minPlayers,
 }: {
   players: GamePlayer[];
+  roster: RosterPerson[];
   courseId: string;
   minPlayers: number;
 }) {
@@ -750,7 +792,7 @@ export function NameGames({
       <TabsContent value="roster">
         <Card>
           <CardContent className="pt-6">
-            <Roster players={players} />
+            <Roster people={roster} />
           </CardContent>
         </Card>
       </TabsContent>

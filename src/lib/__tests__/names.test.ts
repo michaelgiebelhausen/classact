@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { compareByLastName, lastNameOf, sortByLastName } from "@/lib/names";
+import {
+  compareByLastName,
+  initialsOf,
+  lastNameOf,
+  sortByLastName,
+} from "@/lib/names";
 
 describe("lastNameOf", () => {
   it("takes the last token, not the second", () => {
@@ -37,6 +42,25 @@ describe("compareByLastName", () => {
   it("ignores case and accents so variants file together", () => {
     expect(compareByLastName("aad de souza", "Bea De Souza")).toBeLessThan(0);
     expect(lastNameOf("Renée Müller")).toBe("Müller");
+  });
+});
+
+describe("initialsOf", () => {
+  it("takes first and last, skipping the middle", () => {
+    expect(initialsOf("Emma Mabel Roethke")).toBe("ER");
+  });
+
+  it("gives the same initials whichever way the name is written", () => {
+    expect(initialsOf("Roethke, Emma")).toBe("ER");
+  });
+
+  it("gives one letter for a single name", () => {
+    expect(initialsOf("Cher")).toBe("C");
+  });
+
+  it("keeps accented letters intact and falls back when empty", () => {
+    expect(initialsOf("Renée Müller")).toBe("RM");
+    expect(initialsOf("   ")).toBe("?");
   });
 });
 
