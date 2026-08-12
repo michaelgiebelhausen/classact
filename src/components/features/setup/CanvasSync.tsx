@@ -39,6 +39,10 @@ export function CanvasSync({ courseId, connection }: Props) {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [manualId, setManualId] = useState("");
   const [disconnecting, setDisconnecting] = useState(false);
+  // Lets a professor connect their own account even when the server has a
+  // fallback token configured — that token only ever sees its owner's
+  // courses, so "connected" isn't the same as "connected as you".
+  const [showConnect, setShowConnect] = useState(false);
   // Cross-listed Canvas shell: pick which sections belong in THIS course.
   const [picker, setPicker] = useState<{
     canvasCourseId: string;
@@ -58,6 +62,8 @@ export function CanvasSync({ courseId, connection }: Props) {
     setSaving(false);
     if (result.ok && result.data) {
       setToken("");
+      setShowConnect(false);
+      setCourses(null);
       toast.success(`Connected to Canvas as ${result.data.name}.`);
       router.refresh();
     } else {
@@ -155,7 +161,7 @@ export function CanvasSync({ courseId, connection }: Props) {
     }
   }
 
-  if (!connection.connected) {
+  if (!connection.connected || showConnect) {
     return (
       <div className="grid gap-4 rounded-lg border border-dashed p-4">
         <div>
@@ -266,7 +272,7 @@ export function CanvasSync({ courseId, connection }: Props) {
               "Pick a course to sync"
             )}
           </Button>
-          {connection.source === "professor" && (
+          {connection.source === "professor" ? (
             <Button
               variant="ghost"
               size="sm"
@@ -276,9 +282,35 @@ export function CanvasSync({ courseId, connection }: Props) {
             >
               Disconnect
             </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() => setShowConnect(true)}
+            >
+              Connect my own account
+            </Button>
           )}
         </div>
       </div>
+
+      {connection.source === "env" && (
+        <p className="rounded-lg border border-dashed p-2 text-xs text-muted-foreground">
+          This is the server&apos;s Canvas token, so the list below shows{" "}
+          <span className="font-medium">its owner&apos;s</span> courses — not
+          yours. Connect your own account to see the classes you teach.
+        </p>
+      )}
+
+      {courses?.length === 0 && (
+        <p className="rounded-lg border border-dashed p-2 text-sm text-muted-foreground">
+          Canvas returned no active courses for this token
+          {connection.source === "env"
+            ? " — it belongs to the server, not to you. Connect your own account above."
+            : ". Check that you're listed as the teacher, or paste the course ID below."}
+        </p>
+      )}
 
       {courses && courses.length > 0 && (
         <ul className="grid gap-2">
