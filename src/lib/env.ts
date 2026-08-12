@@ -51,6 +51,19 @@ export const isConfigured = {
   ),
 } as const
 
+/**
+ * Which variables a secret-storing flow (Canvas token, OpenRouter key) is
+ * missing. Storing needs the vault key AND the service role, so naming the
+ * actual gap beats a message that always blames the encryption key.
+ */
+export function missingVaultEnv(): string[] {
+  const missing: string[] = []
+  if (!env.appEncryptionKey) missing.push("APP_ENCRYPTION_KEY")
+  if (!env.supabaseServiceRoleKey) missing.push("SUPABASE_SERVICE_ROLE_KEY")
+  if (!env.supabaseUrl) missing.push("NEXT_PUBLIC_SUPABASE_URL")
+  return missing
+}
+
 /** Throw only when a piece of server code genuinely cannot proceed without a key. */
 export function requireEnv<K extends keyof typeof env>(key: K): string {
   const value = env[key]

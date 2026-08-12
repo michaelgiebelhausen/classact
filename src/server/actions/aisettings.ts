@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isConfigured } from "@/lib/env";
+import { isConfigured, missingVaultEnv } from "@/lib/env";
 import { encryptSecret, decryptSecret } from "@/lib/aicrypto";
 import {
   fetchKeyInfo,
@@ -88,10 +88,14 @@ export async function getAiSettings(): Promise<AiSettingsView | null> {
 export async function saveAiKey(rawKey: string): Promise<ActionResult> {
   const { user } = await requireProfessor();
   if (!user) return { ok: false, error: "Professors only." };
-  if (!isConfigured.supabaseAdmin || !isConfigured.keyVault) {
+  const missingVault = missingVaultEnv();
+  if (missingVault.length > 0) {
+    console.error("[saveAiKey] vault not configured:", missingVault);
     return {
       ok: false,
-      error: "The key vault isn't configured on this server (APP_ENCRYPTION_KEY).",
+      error: `This server can't store secrets yet — missing ${missingVault.join(
+        " and "
+      )}. Add it in the hosting environment settings and redeploy.`,
     };
   }
   const key = rawKey.trim();
