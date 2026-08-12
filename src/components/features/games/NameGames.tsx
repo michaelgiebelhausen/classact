@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { recordGameScore } from "@/server/actions/games";
 import { capture } from "@/lib/analytics";
+import { sortByLastName } from "@/lib/names";
 import type { GameType } from "@/types/db";
 
 export interface GamePlayer {
@@ -608,6 +609,54 @@ function GameResult({
   );
 }
 
+/**
+ * The class list, not a game: every face and name at once, filed by last
+ * name. Somewhere to look someone up (or study) without being quizzed.
+ */
+function Roster({ players }: { players: GamePlayer[] }) {
+  // Unlike the games, a reference sheet shouldn't reshuffle or swap faces
+  // under you — sorted once, and always the first photo.
+  const people = useMemo(
+    () => sortByLastName(players, (p) => p.name),
+    [players]
+  );
+
+  if (people.length === 0) {
+    return (
+      <p className="py-12 text-center text-muted-foreground">
+        No photos yet — classmates appear here as they add one.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid gap-4">
+      <p className="text-sm text-muted-foreground">
+        {people.length} {people.length === 1 ? "person" : "people"}, by last
+        name.
+      </p>
+      <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+        {people.map((p) => (
+          <li key={p.enrollmentId} className="grid justify-items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={p.photoUrls[0]}
+              alt={p.name}
+              className="aspect-square w-full rounded-lg object-cover"
+            />
+            <div className="text-center">
+              <p className="text-sm font-medium leading-tight">{p.name}</p>
+              {p.phonetic && (
+                <p className="text-xs text-muted-foreground">{p.phonetic}</p>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function NameGames({
   players,
   courseId,
@@ -617,7 +666,7 @@ export function NameGames({
   courseId: string;
   minPlayers: number;
 }) {
-  const [game, setGame] = useState<GameType>("matching");
+  const [game, setGame] = useState<GameType | "roster">("matching");
   // Per-game round counters: bumping one remounts that game via its key,
   // which deals a fresh board (boards are dealt once per mount).
   const [rounds, setRounds] = useState<Record<GameType, number>>({
@@ -628,58 +677,80 @@ export function NameGames({
   const nextRound = (g: GameType) =>
     setRounds((r) => ({ ...r, [g]: r[g] + 1 }));
 
-  if (players.length < minPlayers) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          Not enough players yet — the games open up once {minPlayers}{" "}
-          classmates have added photos. ({players.length} so far.)
-        </CardContent>
-      </Card>
-    );
-  }
+  // The games need a crowd, but the roster is useful from the first photo —
+  // so the gate lives inside the game tabs instead of in front of everything.
+  const enoughPlayers = players.length >= minPlayers;
+  const notEnoughYet = (
+    <p className="py-12 text-center text-muted-foreground">
+      Not enough players yet — the games open up once {minPlayers} classmates
+      have added photos. ({players.length} so far.)
+    </p>
+  );
 
   return (
-    <Tabs value={game} onValueChange={(v) => setGame(v as GameType)}>
+    <Tabs
+      value={game}
+      onValueChange={(v) => setGame(v as GameType | "roster")}
+    >
       <TabsList>
         <TabsTrigger value="matching">Matching</TabsTrigger>
         <TabsTrigger value="memory_tiles">Memory tiles</TabsTrigger>
         <TabsTrigger value="flash_cards">Flash cards</TabsTrigger>
+        <TabsTrigger value="roster">Roster</TabsTrigger>
       </TabsList>
       <TabsContent value="matching">
         <Card>
           <CardContent className="pt-6">
-            <Matching
-              key={rounds.matching}
-              players={players}
-              courseId={courseId}
-              setNumber={rounds.matching + 1}
-              onNextRound={() => nextRound("matching")}
-            />
+            {enoughPlayers ? (
+              <Matching
+                key={rounds.matching}
+                players={players}
+                courseId={courseId}
+                setNumber={rounds.matching + 1}
+                onNextRound={() => nextRound("matching")}
+              />
+            ) : (
+              notEnoughYet
+            )}
           </CardContent>
         </Card>
       </TabsContent>
       <TabsContent value="memory_tiles">
         <Card>
           <CardContent className="pt-6">
-            <MemoryTiles
-              key={rounds.memory_tiles}
-              players={players}
-              courseId={courseId}
-              onNextRound={() => nextRound("memory_tiles")}
-            />
+            {enoughPlayers ? (
+              <MemoryTiles
+                key={rounds.memory_tiles}
+                players={players}
+                courseId={courseId}
+                onNextRound={() => nextRound("memory_tiles")}
+              />
+            ) : (
+              notEnoughYet
+            )}
           </CardContent>
         </Card>
       </TabsContent>
       <TabsContent value="flash_cards">
         <Card>
           <CardContent className="pt-6">
-            <FlashCards
-              key={rounds.flash_cards}
-              players={players}
-              courseId={courseId}
-              onNextRound={() => nextRound("flash_cards")}
-            />
+            {enoughPlayers ? (
+              <FlashCards
+                key={rounds.flash_cards}
+                players={players}
+                courseId={courseId}
+                onNextRound={() => nextRound("flash_cards")}
+              />
+            ) : (
+              notEnoughYet
+            )}
+          </CardContent>
+        </Card>
+      </TabsContent>
+      <TabsContent value="roster">
+        <Card>
+          <CardContent className="pt-6">
+            <Roster players={players} />
           </CardContent>
         </Card>
       </TabsContent>
