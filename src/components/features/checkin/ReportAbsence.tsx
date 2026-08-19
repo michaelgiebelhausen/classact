@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { CalendarOff, CheckCircle2, Paperclip, XCircle } from "lucide-react";
@@ -38,14 +38,39 @@ export function ReportAbsence({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(upcomingDates[0] ?? "");
+  // The dates refresh as classes pass; if the one we're holding is no longer
+  // offered, fall back to the next class rather than submitting a stale day.
+  const [knownDates, setKnownDates] = useState(upcomingDates);
+  if (knownDates !== upcomingDates) {
+    setKnownDates(upcomingDates);
+    if (upcomingDates.length > 0 && !upcomingDates.includes(date)) {
+      setDate(upcomingDates[0]);
+    }
+  }
   const [category, setCategory] = useState<AbsenceCategory>("illness");
   const [explanation, setExplanation] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [appealFor, setAppealFor] = useState<string | null>(null);
   const [appealNote, setAppealNote] = useState("");
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
   const chosen = ABSENCE_CATEGORIES.find((c) => c.key === category);
+
+  /**
+   * Close and forget. Clearing the file matters: a document attached to a
+   * cancelled report would otherwise still be in state and get sent with a
+   * later, unrelated absence.
+   */
+  function closeForm() {
+    setOpen(false);
+    setExplanation("");
+    setFile(null);
+    setDate(upcomingDates[0] ?? "");
+    // The <input type="file"> keeps its own value; reset the element too or
+    // it still shows the old filename.
+    if (fileInput.current) fileInput.current.value = "";
+  }
 
   async function submit() {
     if (!date) {
@@ -79,9 +104,7 @@ export function ReportAbsence({
         excused ? "Recorded as excused." : "Recorded as unexcused.",
         { description: result.data!.reason, duration: 12000 }
       );
-      setOpen(false);
-      setExplanation("");
-      setFile(null);
+      closeForm();
       router.refresh();
     } catch {
       toast.error("Couldn't send that — check your connection and try again.");
@@ -200,6 +223,7 @@ export function ReportAbsence({
               </Label>
               <input
                 id="absence-doc"
+                ref={fileInput}
                 type="file"
                 accept="image/jpeg,image/png,image/webp,application/pdf"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -220,11 +244,7 @@ export function ReportAbsence({
               <Button onClick={submit} disabled={busy}>
                 {busy ? "Checking…" : "Submit"}
               </Button>
-              <Button
-                variant="ghost"
-                onClick={() => setOpen(false)}
-                disabled={busy}
-              >
+              <Button variant="ghost" onClick={closeForm} disabled={busy}>
                 Cancel
               </Button>
             </div>

@@ -65,11 +65,15 @@ create index if not exists idx_absences_enrollment
 
 alter table public.absences enable row level security;
 
+-- Professors only. A student's own rows carry ai_legitimacy and
+-- ai_doc_authenticity, and RLS is row-scoped rather than column-scoped —
+-- a "select *" from the browser would hand the student the scores the
+-- design says are for the professor alone, and tell them exactly how
+-- convincing their story was. Students read their absences through
+-- listMyAbsences(), which returns only verdict, reason, and their own text.
 drop policy if exists absences_select on public.absences;
 create policy absences_select on public.absences for select
-  using (
-    public.is_course_professor(course_id) or public.owns_enrollment(enrollment_id)
-  );
+  using (public.is_course_professor(course_id));
 
 drop policy if exists absences_professor_all on public.absences;
 create policy absences_professor_all on public.absences for all

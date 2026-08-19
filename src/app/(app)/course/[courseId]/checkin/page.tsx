@@ -28,6 +28,13 @@ import {
 } from "@/server/actions/absences";
 import { parseAttendancePolicy } from "@/lib/absences";
 import { upcomingMeetingDates } from "@/lib/schedule";
+
+/**
+ * Absence assessment posts to this route and waits on a model call (60s
+ * client-side timeout). The platform default is shorter than that, so the
+ * function would be killed before the fetch could give up gracefully.
+ */
+export const maxDuration = 90;
 import type { RoomLayout } from "@/lib/roomlayout";
 
 export default async function CheckInPage({

@@ -65,8 +65,16 @@ export function AttendancePolicyTab({
         text,
         excusedCategories: Array.from(excused),
         docsRequiredFor: Array.from(docsFor),
-        advanceNoticeHours: Number(noticeHours),
-        freeUnexcused: Number(freeUnexcused),
+        // A cleared field is "unset", not zero — Number("") is 0, which
+        // would silently mean "no notice expected" / "no free absences".
+        advanceNoticeHours:
+          noticeHours.trim() === ""
+            ? DEFAULT_ATTENDANCE_POLICY.advanceNoticeHours
+            : Number(noticeHours),
+        freeUnexcused:
+          freeUnexcused.trim() === ""
+            ? DEFAULT_ATTENDANCE_POLICY.freeUnexcused
+            : Number(freeUnexcused),
       });
     } catch {
       toast.error("Couldn't reach the server — try again.");

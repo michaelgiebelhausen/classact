@@ -10,6 +10,7 @@ import {
   advanceHours,
   categoryLabel,
   finalVerdict,
+  flagPolicyConflicts,
   isAbsenceCategory,
   isVerdict,
   noticeLabel,
@@ -20,11 +21,14 @@ import {
 import {
   formatSchedule,
   isScheduleComplete,
+  isWithinTerm,
   meetingStartInstant,
   type CourseSchedule,
 } from "@/lib/schedule";
 import { resolveCourseAi } from "@/server/aicreds";
 import { assessAbsence } from "@/server/absenceai";
+import { checkedInElsewhere } from "@/server/absences";
+import { rateLimit } from "@/lib/ratelimit";
 import { sendAbsenceAppealNotification } from "@/lib/email";
 import type { AbsenceRow, AbsenceVerdict } from "@/types/db";
 import type { ActionResult } from "@/server/actions/auth";
@@ -37,6 +41,60 @@ import type { ActionResult } from "@/server/actions/auth";
  */
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The regex only checks shape — "2026-13-45" passes it and then rolls over
+ * into 2027 inside Date.UTC. Round-trip the parts to reject anything that
+ * isn't a real calendar day.
+ */
+function isRealDate(date: string): boolean {
+  const [y, m, d] = date.split("-").map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return (
+    dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+  );
+}
+
+/** How far ahead a student may report, so the date picker can't be bypassed. */
+const MAX_DAYS_AHEAD = 180;
+/** How late a student may report a class they already missed. */
+const MAX_DAYS_LATE = 14;
+
+/** Whole days between today (UTC) and a date string; negative = past. */
+function daysFromToday(date: string): number {
+  const [y, m, d] = date.split("-").map(Number);
+  const target = Date.UTC(y, m - 1, d);
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((target - today) / 86_400_000);
+}
+
+/**
+ * Why this date can't be reported, or null if it's fine. Keeps the student
+ * out of the model when the answer is a plain calendar fact.
+ */
+function describeDateProblem(
+  schedule: CourseSchedule,
+  date: string
+): string | null {
+  const [y, m, d] = date.split("-").map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  if (!schedule.days.includes(weekday)) {
+    return "This class doesn't meet that day — pick a class date.";
+  }
+  if (!isWithinTerm(schedule, date)) {
+    return "That date is outside this course's term.";
+  }
+  const drift = daysFromToday(date);
+  if (drift > MAX_DAYS_AHEAD) {
+    return "That's too far ahead to report — closer to the date, please.";
+  }
+  if (drift < -MAX_DAYS_LATE) {
+    return "That class was more than two weeks ago — email your professor instead.";
+  }
+  return null;
+}
 
 function needsAdmin(): { ok: false; error: string } | null {
   if (isConfigured.supabaseAdmin) return null;
@@ -136,8 +194,12 @@ export async function submitAbsence(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in first." };
 
-  // Validate the report before spending anything on it.
-  if (!DATE_RE.test(input.date)) return { ok: false, error: "Pick the class date." };
+  // Validate the report before spending anything on it. Every AI call here
+  // is paid for by the platform, so nothing reaches the model until the
+  // request is known to be well-formed, in-bounds, and not a flood.
+  if (!DATE_RE.test(input.date) || !isRealDate(input.date)) {
+    return { ok: false, error: "Pick the class date." };
+  }
   if (!isAbsenceCategory(input.category)) {
     return { ok: false, error: "Pick the reason that fits best." };
   }
@@ -177,6 +239,29 @@ export async function submitAbsence(
     return { ok: false, error: "You're not on this course's active roster." };
   }
 
+  // The date has to be a class this course actually holds. Without this, any
+  // well-formed date buys a model call — 180 of them a year, per student.
+  if (course.schedule) {
+    const dateCheck = describeDateProblem(course.schedule, input.date);
+    if (dateCheck) return { ok: false, error: dateCheck };
+  } else {
+    const drift = daysFromToday(input.date);
+    if (drift > MAX_DAYS_AHEAD || drift < -MAX_DAYS_LATE) {
+      return { ok: false, error: "Pick a date inside this term." };
+    }
+  }
+
+  // Cheap flood guard on a platform-paid call. Generous enough that no real
+  // student notices: a handful of reports an hour, one course at a time.
+  const limit = rateLimit(`absence:${user.id}`, { limit: 6, windowMs: 60 * 60 * 1000 });
+  if (!limit.allowed) {
+    return {
+      ok: false,
+      error:
+        "That's a lot of absence reports at once — try again in an hour, or email your professor.",
+    };
+  }
+
   // One report per class date; point at the existing one rather than fail.
   const { data: existing } = await admin
     .from("absences")
@@ -214,7 +299,11 @@ export async function submitAbsence(
   }
 
   // Already checked into another ClassAct class on this date?
-  const attendedElsewhere = await checkedInElsewhere(admin, user.id, input.courseId, input.date);
+  const attendedElsewhere = await checkedInElsewhere(
+    user.id,
+    input.courseId,
+    input.date
+  );
 
   // Policy facts first; the model only rules on what's genuinely a judgment.
   const override = policyOverride(course.policy, {
@@ -268,7 +357,12 @@ export async function submitAbsence(
     reason = result.assessment.reason;
     docKind = result.assessment.docKind;
     docAuthenticity = result.assessment.docAuthenticity;
-    flags = result.assessment.flags;
+    // Shape validation can't catch a verdict that disagrees with the policy
+    // it was handed — flag it so the professor sees the disagreement.
+    flags = flagPolicyConflicts(result.assessment, course.policy, {
+      category: input.category,
+      advanceHours: notice,
+    });
   }
 
   // The document is out of scope from here on — nothing below touches it.
@@ -308,64 +402,6 @@ export async function submitAbsence(
     ok: true,
     data: { id: created.id, verdict, reason, date: input.date },
   };
-}
-
-/**
- * Did this profile check into a class_session dated `date` in any course
- * other than `courseId`? Enrollment ids are per-course, so we go through
- * profile_id. Service role: RLS scopes check_ins to each course's members.
- */
-async function checkedInElsewhere(
-  admin: ReturnType<typeof createAdminClient>,
-  profileId: string,
-  courseId: string,
-  date: string
-): Promise<boolean> {
-  const { data: myEnrollments } = await admin
-    .from("enrollments")
-    .select("id, course_id")
-    .eq("profile_id", profileId)
-    .neq("course_id", courseId);
-  const ids = (myEnrollments ?? []).map((e) => e.id);
-  if (ids.length === 0) return false;
-  const { data: rows } = await admin
-    .from("check_ins")
-    .select("id, class_sessions!inner(session_date)")
-    .in("enrollment_id", ids)
-    .eq("class_sessions.session_date", date)
-    .limit(1);
-  return (rows ?? []).length > 0;
-}
-
-/**
- * Called after a successful check-in: if this student reported an absence
- * for today in another ClassAct course, mark it. Best-effort — never blocks
- * the check-in.
- */
-export async function flagAbsencesElsewhere(
-  profileId: string,
-  courseId: string,
-  date: string
-): Promise<void> {
-  if (!isConfigured.supabaseAdmin) return;
-  try {
-    const admin = createAdminClient();
-    const { data: others } = await admin
-      .from("enrollments")
-      .select("id")
-      .eq("profile_id", profileId)
-      .neq("course_id", courseId);
-    const ids = (others ?? []).map((e) => e.id);
-    if (ids.length === 0) return;
-    await admin
-      .from("absences")
-      .update({ attended_elsewhere: true, updated_at: new Date().toISOString() })
-      .in("enrollment_id", ids)
-      .eq("absence_date", date)
-      .eq("attended_elsewhere", false);
-  } catch (e) {
-    console.error("[absences] flagAbsencesElsewhere:", e);
-  }
 }
 
 /* ---------------- Appeal (student) ---------------- */
@@ -602,16 +638,24 @@ export async function listMyAbsences(courseId: string): Promise<MyAbsenceView[]>
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return [];
-  const { data: enrollment } = await supabase
+  if (!isConfigured.supabaseAdmin) return [];
+
+  // Read through the service role and hand back only the student-safe
+  // fields. The absences table is professor-only under RLS precisely so a
+  // student can't select the legitimacy and authenticity scores.
+  const admin = createAdminClient();
+  const { data: enrollment } = await admin
     .from("enrollments")
     .select("id")
     .eq("course_id", courseId)
     .eq("profile_id", user.id)
     .maybeSingle();
   if (!enrollment) return [];
-  const { data: rows } = await supabase
+  const { data: rows } = await admin
     .from("absences")
-    .select("*")
+    .select(
+      "id, absence_date, category, explanation, ai_verdict, ai_reason, professor_verdict, professor_note, appealed_at, decided_at, has_documentation"
+    )
     .eq("enrollment_id", enrollment.id)
     .order("absence_date", { ascending: false });
   return (rows ?? []).map((r) => ({

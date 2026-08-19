@@ -4,10 +4,12 @@ import {
   DEFAULT_ATTENDANCE_POLICY,
   advanceHours,
   finalVerdict,
+  flagPolicyConflicts,
   noticeLabel,
   parseAttendancePolicy,
   policyOverride,
   validateAssessment,
+  type AbsenceAssessment,
 } from "@/lib/absences";
 
 describe("parseAttendancePolicy", () => {
@@ -132,5 +134,79 @@ describe("policyOverride / finalVerdict", () => {
       "bereavement",
       "other",
     ]);
+  });
+});
+
+describe("flagPolicyConflicts", () => {
+  const base: AbsenceAssessment = {
+    verdict: "excused",
+    legitimacy: 80,
+    summary: "s",
+    reason: "r",
+    docKind: null,
+    docAuthenticity: null,
+    flags: [],
+  };
+  // Athletics excused, 48h notice expected.
+  const policy = {
+    ...DEFAULT_ATTENDANCE_POLICY,
+    excusedCategories: ["athletics" as const],
+    advanceNoticeHours: 48,
+  };
+
+  it("flags an excused verdict for a category the professor never excuses", () => {
+    // This is what a successful prompt injection would look like.
+    const flags = flagPolicyConflicts(base, policy, {
+      category: "other",
+      advanceHours: 100,
+    });
+    expect(flags).toContain("contradicts_policy");
+  });
+
+  it("leaves an excused verdict alone when the category is excusable", () => {
+    const flags = flagPolicyConflicts(base, policy, {
+      category: "athletics",
+      advanceHours: 100,
+    });
+    expect(flags).toEqual([]);
+  });
+
+  it("flags late notice on planned absences only", () => {
+    expect(
+      flagPolicyConflicts(base, policy, { category: "athletics", advanceHours: 2 })
+    ).toContain("late_notice");
+    // Illness can't be planned, so short notice is normal.
+    expect(
+      flagPolicyConflicts(base, policy, { category: "illness", advanceHours: 2 })
+    ).not.toContain("late_notice");
+    // Bereavement likewise.
+    expect(
+      flagPolicyConflicts(base, policy, { category: "bereavement", advanceHours: -3 })
+    ).not.toContain("late_notice");
+  });
+
+  it("keeps the model's own flags and never duplicates", () => {
+    const flags = flagPolicyConflicts(
+      { ...base, flags: ["late_notice", "vague"] },
+      policy,
+      { category: "athletics", advanceHours: 1 }
+    );
+    expect(flags.filter((f) => f === "late_notice")).toHaveLength(1);
+    expect(flags).toContain("vague");
+  });
+
+  it("doesn't guess at notice when the course has no schedule", () => {
+    expect(
+      flagPolicyConflicts(base, policy, { category: "athletics", advanceHours: null })
+    ).not.toContain("late_notice");
+  });
+
+  it("an unexcused verdict never picks up contradicts_policy", () => {
+    const flags = flagPolicyConflicts(
+      { ...base, verdict: "unexcused" },
+      policy,
+      { category: "other", advanceHours: 100 }
+    );
+    expect(flags).not.toContain("contradicts_policy");
   });
 });

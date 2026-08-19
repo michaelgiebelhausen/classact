@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/server/actions/auth";
-import { flagAbsencesElsewhere } from "@/server/actions/absences";
+import { flagAbsencesElsewhere } from "@/server/absences";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
 
 /** Today's date in the server's local calendar, YYYY-MM-DD. */

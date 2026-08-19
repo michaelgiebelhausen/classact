@@ -218,6 +218,38 @@ export function validateAssessment(
   };
 }
 
+/**
+ * Cross-check the model's verdict against the policy it was given. The
+ * validator upstream only checks shape — it can't tell that "excused" was
+ * handed to a category the professor never marked excusable, which is what
+ * a drifting model or a prompt-injected explanation would produce. We don't
+ * overturn the verdict (the policy text may be broader than the checkboxes),
+ * but the professor sees the disagreement.
+ */
+export function flagPolicyConflicts(
+  assessment: AbsenceAssessment,
+  policy: AttendancePolicy,
+  input: { category: AbsenceCategory; advanceHours: number | null }
+): AiFlag[] {
+  const flags = new Set<AiFlag>(assessment.flags);
+  if (
+    assessment.verdict === "excused" &&
+    !policy.excusedCategories.includes(input.category)
+  ) {
+    flags.add("contradicts_policy");
+  }
+  // Planned absences only: illness and bereavement can't be scheduled.
+  const planned = !["illness", "bereavement"].includes(input.category);
+  if (
+    planned &&
+    input.advanceHours !== null &&
+    input.advanceHours < policy.advanceNoticeHours
+  ) {
+    flags.add("late_notice");
+  }
+  return Array.from(flags);
+}
+
 /** The verdict that counts: the professor's if they ruled, else the AI's. */
 export function finalVerdict(row: {
   ai_verdict: AbsenceVerdict;

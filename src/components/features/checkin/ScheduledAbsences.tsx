@@ -43,14 +43,24 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Record<string, string>>({});
 
   const appeals = rows.filter((r) => r.appealedAt && !r.professorVerdict);
 
-  async function decide(id: string, verdict: "excused" | "unexcused") {
+  /**
+   * Record the professor's call. `note` is optional but reaches the student
+   * verbatim, which matters most when overturning: without it they'd see a
+   * flipped verdict sitting next to ClassAct's contradicting explanation.
+   */
+  async function decide(
+    id: string,
+    verdict: "excused" | "unexcused",
+    note?: string
+  ) {
     setBusyId(id);
     let result: Awaited<ReturnType<typeof decideAbsence>>;
     try {
-      result = await decideAbsence(id, verdict);
+      result = await decideAbsence(id, verdict, note);
     } catch {
       toast.error("Couldn't reach the server — try again.");
       return;
@@ -58,7 +68,8 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
       setBusyId(null);
     }
     if (result.ok) {
-      toast.success(`Marked ${verdict}.`);
+      toast.success(`Marked ${verdict}. The student can see your decision.`);
+      setNotes((n) => ({ ...n, [id]: "" }));
       router.refresh();
     } else {
       toast.error(result.error);
@@ -102,35 +113,43 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
                 key={a.id}
                 className="grid gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-medium">
-                    {a.studentName} is appealing {formatDate(a.date)} — ClassAct
-                    said {a.aiVerdict}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => decide(a.id, "excused")}
-                      disabled={busyId === a.id}
-                    >
-                      Excuse it
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => decide(a.id, "unexcused")}
-                      disabled={busyId === a.id}
-                    >
-                      Keep unexcused
-                    </Button>
-                  </div>
-                </div>
+                <p className="text-sm font-medium">
+                  {a.studentName} is appealing {formatDate(a.date)} — ClassAct
+                  said {a.aiVerdict}
+                </p>
                 <p className="text-xs text-muted-foreground">{a.summary}</p>
                 {a.appealNote && (
                   <p className="text-sm">
                     <span className="font-medium">Their appeal:</span> {a.appealNote}
                   </p>
                 )}
+                <textarea
+                  value={notes[a.id] ?? ""}
+                  onChange={(e) =>
+                    setNotes((n) => ({ ...n, [a.id]: e.target.value }))
+                  }
+                  rows={2}
+                  maxLength={2000}
+                  placeholder="A line back to the student (optional) — they'll see it."
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => decide(a.id, "excused", notes[a.id])}
+                    disabled={busyId === a.id}
+                  >
+                    Excuse it
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => decide(a.id, "unexcused", notes[a.id])}
+                    disabled={busyId === a.id}
+                  >
+                    Keep unexcused
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -151,18 +170,27 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
             </TableHeader>
             <TableBody>
               {rows.map((r) => (
-                <TableRow
-                  key={r.id}
-                  className="cursor-pointer"
-                  onClick={() => setExpanded(expanded === r.id ? null : r.id)}
-                >
+                <TableRow key={r.id}>
                   <TableCell className="whitespace-nowrap font-medium">
                     {formatDate(r.date)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{r.studentName}</TableCell>
                   <TableCell className="min-w-[220px]">
-                    <div className="text-sm">{r.categoryLabel}</div>
-                    <div className="text-xs text-muted-foreground">{r.summary}</div>
+                    {/* A real button, so the student's own words are
+                        reachable by keyboard and announced to a reader. */}
+                    <button
+                      type="button"
+                      className="text-left"
+                      aria-expanded={expanded === r.id}
+                      onClick={() => setExpanded(expanded === r.id ? null : r.id)}
+                    >
+                      <span className="block text-sm underline decoration-dotted underline-offset-2">
+                        {r.categoryLabel}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {r.summary}
+                      </span>
+                    </button>
                     {expanded === r.id && (
                       <div className="mt-2 grid gap-1 text-xs">
                         <p className="text-muted-foreground">
@@ -229,23 +257,31 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
                           your call
                         </span>
                       )}
-                      {!r.professorVerdict && (
-                        <button
-                          type="button"
-                          className="text-[10px] text-muted-foreground underline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            decide(
-                              r.id,
-                              r.finalVerdict === "excused" ? "unexcused" : "excused"
-                            );
-                          }}
-                          disabled={busyId === r.id}
-                        >
-                          change to{" "}
-                          {r.finalVerdict === "excused" ? "unexcused" : "excused"}
-                        </button>
-                      )}
+                      {/* Always offered, including after a decision — an
+                          override was previously a one-way door. */}
+                      <button
+                        type="button"
+                        className="text-[10px] text-muted-foreground underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const to =
+                            r.finalVerdict === "excused" ? "unexcused" : "excused";
+                          if (
+                            !window.confirm(
+                              `Mark ${r.studentName}'s ${formatDate(
+                                r.date
+                              )} absence ${to}? They'll see the change.`
+                            )
+                          ) {
+                            return;
+                          }
+                          decide(r.id, to);
+                        }}
+                        disabled={busyId === r.id}
+                      >
+                        change to{" "}
+                        {r.finalVerdict === "excused" ? "unexcused" : "excused"}
+                      </button>
                     </div>
                   </TableCell>
                 </TableRow>
