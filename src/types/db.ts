@@ -105,6 +105,10 @@ export type CourseRow = {
   participation_weights: Record<string, unknown>
   /** Attendance policy the AI applies to self-reported absences (0025). */
   attendance_policy: Record<string, unknown>
+  /** The professor's invite email, tokens ({name}, {course}, {link}, {code})
+   * left unrendered. Null = send the shipped default (0026). */
+  invite_subject: string | null
+  invite_message: string | null
   created_at: string
 }
 
@@ -357,6 +361,10 @@ export type EnrollmentRow = {
   status: EnrollmentStatus
   roster_photo_path: string | null
   roster_name_phonetic: string | null
+  /** Receipt for the last invite attempt (0026): when it was accepted by the
+   * mail provider, or why it wasn't. Never both. */
+  invited_at: string | null
+  invite_error: string | null
   created_at: string
 }
 

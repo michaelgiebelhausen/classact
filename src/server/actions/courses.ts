@@ -371,6 +371,37 @@ export async function duplicateCourse(input: {
   };
 }
 
+/**
+ * Rename a course. The name is the only thing that changes — the join code
+ * students already typed in keeps working, so a mid-term correction
+ * ("BIO 101" → "BIO 101 — Cell Biology") costs nobody their enrollment.
+ */
+export async function renameCourse(
+  courseId: string,
+  name: string
+): Promise<ActionResult<{ name: string }>> {
+  const parsed = createCourseSchema.shape.name.safeParse(name);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0].message };
+  }
+
+  const supabase = await createClient();
+  // RLS restricts the update to the owning professor.
+  const { error } = await supabase
+    .from("courses")
+    .update({ name: parsed.data })
+    .eq("id", courseId);
+
+  if (error) {
+    return { ok: false, error: "Couldn't rename the course. Try again." };
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath(`/course/${courseId}`);
+  revalidatePath(`/course/${courseId}/setup`);
+  return { ok: true, data: { name: parsed.data } };
+}
+
 /** Toggle which icebreaker fields students answer (FR-004). */
 export async function updateIcebreakerFields(
   courseId: string,

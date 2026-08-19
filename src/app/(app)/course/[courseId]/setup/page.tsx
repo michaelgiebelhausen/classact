@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
+import { CourseNameEditor } from "@/components/features/setup/CourseNameEditor";
 import { getCanvasConnection } from "@/server/actions/canvassettings";
 import { parseAttendancePolicy } from "@/lib/absences";
 import type { DeckListItem } from "@/components/features/follow/DeckManager";
@@ -23,7 +24,7 @@ export default async function CourseSetupPage({
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy"
+      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy, invite_subject, invite_message"
     )
     .eq("id", courseId)
     .single();
@@ -38,7 +39,7 @@ export default async function CourseSetupPage({
       hint: courseError.hint,
     });
     throw new Error(
-      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run the migrations that haven't been applied yet in the Supabase SQL editor (supabase/catchup_0019_to_0023.sql, then 0024 and 0025).`
+      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run the migrations that haven't been applied yet in the Supabase SQL editor (supabase/catchup_0019_to_0023.sql, then 0024, 0025 and 0026).`
     );
   }
   if (!course) notFound();
@@ -52,7 +53,7 @@ export default async function CourseSetupPage({
       .eq("course_id", courseId),
     supabase
       .from("enrollments")
-      .select("id, roster_name, roster_email, status")
+      .select("id, roster_name, roster_email, status, invited_at, invite_error")
       .eq("course_id", courseId)
       .order("roster_name"),
   ]);
@@ -157,7 +158,7 @@ export default async function CourseSetupPage({
   return (
     <div className="grid gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{course.name}</h1>
+        <CourseNameEditor courseId={course.id} name={course.name} />
         <p className="text-sm text-muted-foreground">
           Course setup — room, schedule, attendance, roster, slides,
           icebreakers, invites.
@@ -169,6 +170,8 @@ export default async function CourseSetupPage({
           name: course.name,
           join_code: course.join_code,
           icebreaker_fields: (course.icebreaker_fields as string[]) ?? [],
+          invite_subject: course.invite_subject,
+          invite_message: course.invite_message,
         }}
         roomSetup={{
           hasExistingRoom: (seatCount ?? 0) > 0,

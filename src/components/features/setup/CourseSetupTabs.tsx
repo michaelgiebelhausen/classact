@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -31,6 +32,15 @@ import {
   type DeckListItem,
 } from "@/components/features/follow/DeckManager";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
+import {
+  DEFAULT_INVITE_MESSAGE,
+  DEFAULT_INVITE_SUBJECT,
+  INVITE_MESSAGE_MAX,
+  INVITE_SUBJECT_MAX,
+  INVITE_TOKENS,
+  renderInvite,
+  validateInvite,
+} from "@/lib/invitetemplate";
 import { RoomDesigner } from "@/components/features/setup/RoomDesigner";
 import { AttendancePolicyTab } from "@/components/features/setup/AttendancePolicyTab";
 import type { AttendancePolicy } from "@/lib/absences";
@@ -53,6 +63,9 @@ interface EnrollmentItem {
   roster_name: string;
   roster_email: string;
   status: "invited" | "active";
+  /** Last invite attempt: when it was accepted, or why it wasn't (0026). */
+  invited_at?: string | null;
+  invite_error?: string | null;
 }
 
 interface Props {
@@ -61,6 +74,9 @@ interface Props {
     name: string;
     join_code: string;
     icebreaker_fields: string[];
+    /** Null = this course has never customized the invite (0026). */
+    invite_subject: string | null;
+    invite_message: string | null;
   };
   roomSetup: {
     hasExistingRoom: boolean;
@@ -471,32 +487,71 @@ function IcebreakerTab({
 
 /* ---------------- Invite + join code (TASK-024/025) ---------------- */
 
+/** One student's outcome from the most recent send in this browser session. */
+type SendOutcome = {
+  enrollmentId: string;
+  name: string;
+  sent: boolean;
+  error?: string;
+};
+
 function InviteTab({
   course,
   enrollments,
   siteUrl,
 }: {
-  course: { id: string; name: string; join_code: string };
+  course: Props["course"];
   enrollments: EnrollmentItem[];
   siteUrl: string;
 }) {
+  const router = useRouter();
   const [sending, setSending] = useState(false);
-  const joinUrl = `${siteUrl}/join/${encodeURIComponent(course.join_code)}`;
-  const invitedCount = enrollments.filter((e) => e.status === "invited").length;
+  const [subject, setSubject] = useState(
+    course.invite_subject ?? DEFAULT_INVITE_SUBJECT
+  );
+  const [message, setMessage] = useState(
+    course.invite_message ?? DEFAULT_INVITE_MESSAGE
+  );
+  const [outcomes, setOutcomes] = useState<SendOutcome[] | null>(null);
 
-  const activationMessage = `${course.name} is using ClassAct this term for seat check-in.\n\nJoin here (takes ~2 minutes): ${joinUrl}\nJoin code: ${course.join_code}\n\nTap your seat, meet the people next to you, and get on with your day.`;
+  const joinUrl = `${siteUrl}/join/${encodeURIComponent(course.join_code)}`;
+  const pending = enrollments.filter((e) => e.status === "invited");
+  const failedEarlier = pending.filter((e) => e.invite_error);
+
+  // What one student will actually receive. Rendering the preview through the
+  // same function the server uses is the point — the old page showed a
+  // hand-written approximation that had already drifted from the real email.
+  const previewVars = {
+    name: pending[0]?.roster_name ?? "Jordan Rivera",
+    course: course.name,
+    link: joinUrl,
+    code: course.join_code,
+  };
+  const preview = renderInvite(message, previewVars);
 
   async function copy(text: string, label: string) {
     await navigator.clipboard.writeText(text);
     toast.success(`${label} copied.`);
   }
 
-  async function sendInvites() {
+  async function send(enrollmentIds?: string[]) {
+    const checked = validateInvite({ subject, message });
+    if (!checked.ok) {
+      toast.error(checked.error);
+      return;
+    }
+
     setSending(true);
+    setOutcomes(null);
     const res = await fetch("/api/invites/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ courseId: course.id }),
+      body: JSON.stringify({
+        courseId: course.id,
+        subject: checked.subject,
+        message: checked.message,
+        ...(enrollmentIds ? { enrollmentIds } : {}),
+      }),
     });
     const json = await res.json();
     setSending(false);
@@ -504,24 +559,30 @@ function InviteTab({
       toast.error(json.error ?? "Couldn't send invites.");
       return;
     }
+
+    setOutcomes(json.results ?? []);
     if (json.sent > 0) toast.success(`Sent ${json.sent} invite(s).`);
     if (json.failed > 0) {
-      toast.message(
-        `${json.failed} invite(s) not sent${json.error ? ` — ${json.error}` : ""}. Share the join link below instead.`
+      toast.error(
+        `${json.failed} invite(s) didn't go out — see who below, then retry just those.`
       );
     }
     if (json.sent === 0 && json.failed === 0) {
       toast.message("Everyone on the roster is already active.");
     }
+    // Pull fresh invited_at / invite_error onto the roster.
+    router.refresh();
   }
+
+  const justFailed = (outcomes ?? []).filter((o) => !o.sent);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Invite students</CardTitle>
         <CardDescription>
-          Email everyone still marked “Invited”, or just share the join link
-          yourself.
+          Write the email, send it to everyone still marked “Invited”, or share
+          the join link yourself.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6">
@@ -541,27 +602,131 @@ function InviteTab({
         </div>
 
         <div className="grid gap-2">
-          <Label>Ready-to-send message</Label>
-          <pre className="whitespace-pre-wrap rounded-lg border bg-muted p-3 text-sm">
-            {activationMessage}
-          </pre>
-          <Button
-            variant="outline"
-            className="w-fit"
-            onClick={() => copy(activationMessage, "Message")}
-          >
-            Copy message
-          </Button>
+          <Label htmlFor="invite-subject">Subject</Label>
+          <Input
+            id="invite-subject"
+            value={subject}
+            maxLength={INVITE_SUBJECT_MAX}
+            onChange={(e) => setSubject(e.target.value)}
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="invite-message">Message</Label>
+          <Textarea
+            id="invite-message"
+            value={message}
+            rows={12}
+            maxLength={INVITE_MESSAGE_MAX}
+            className="font-mono text-sm"
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <p className="text-sm text-muted-foreground">
+            Fill-ins, replaced per student:{" "}
+            {INVITE_TOKENS.map((t, i) => (
+              <span key={t.token}>
+                {i > 0 && ", "}
+                <code className="rounded bg-muted px-1">{t.token}</code> ={" "}
+                {t.label.toLowerCase()}
+              </span>
+            ))}
+            . Your wording saves when you send.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => copy(preview, "Message")}>
+              Copy message
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSubject(DEFAULT_INVITE_SUBJECT);
+                setMessage(DEFAULT_INVITE_MESSAGE);
+                toast.message("Reset to the default wording — send to save it.");
+              }}
+            >
+              Reset to default
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Preview</Label>
+          <p className="text-sm text-muted-foreground">
+            What {previewVars.name} receives.
+          </p>
+          <div className="rounded-lg border bg-muted p-3 text-sm">
+            <p className="font-medium">{renderInvite(subject, previewVars)}</p>
+            <pre className="mt-2 whitespace-pre-wrap font-sans">{preview}</pre>
+          </div>
         </div>
 
         <div className="grid gap-2">
           <Label>Email invites</Label>
           <p className="text-sm text-muted-foreground">
-            {invitedCount} student(s) haven&apos;t activated yet.
+            {pending.length} student(s) haven&apos;t activated yet.
           </p>
-          <Button onClick={sendInvites} disabled={sending || invitedCount === 0} className="w-fit">
-            {sending ? "Sending…" : `Email ${invitedCount} invite(s)`}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => send()} disabled={sending || pending.length === 0}>
+              {sending ? "Sending…" : `Email ${pending.length} invite(s)`}
+            </Button>
+            {failedEarlier.length > 0 && (
+              <Button
+                variant="outline"
+                disabled={sending}
+                onClick={() => send(failedEarlier.map((e) => e.id))}
+              >
+                Retry {failedEarlier.length} that failed
+              </Button>
+            )}
+          </div>
+          {justFailed.length > 0 && (
+            <p className="text-sm text-destructive">
+              Didn&apos;t go out: {justFailed.map((o) => o.name).join(", ")} —{" "}
+              {justFailed[0].error}
+            </p>
+          )}
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Who&apos;s been emailed</Label>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Student</TableHead>
+                <TableHead>Invite</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {enrollments.map((e) => (
+                <TableRow key={e.id}>
+                  <TableCell>
+                    <div>{e.roster_name}</div>
+                    <div className="text-xs text-muted-foreground">{e.roster_email}</div>
+                  </TableCell>
+                  <TableCell>
+                    {e.status === "active" ? (
+                      <Badge>Activated</Badge>
+                    ) : e.invite_error ? (
+                      <div>
+                        <Badge variant="destructive">Failed</Badge>
+                        <div className="text-xs text-muted-foreground">{e.invite_error}</div>
+                      </div>
+                    ) : e.invited_at ? (
+                      <div>
+                        <Badge variant="secondary">Emailed</Badge>
+                        <div className="text-xs text-muted-foreground">
+                          {new Date(e.invited_at).toLocaleString()}
+                        </div>
+                      </div>
+                    ) : (
+                      <Badge variant="outline">Not emailed yet</Badge>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       </CardContent>
     </Card>

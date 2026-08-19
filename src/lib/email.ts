@@ -2,44 +2,95 @@ import "server-only";
 import { Resend } from "resend";
 import { env, isConfigured } from "@/lib/env";
 
-/**
- * Invite email for a student to activate their ClassAct account.
- * Returns { sent: false } (no throw) when Resend isn't configured — the UI
- * falls back to a copyable join link.
- */
-export async function sendInviteEmail(input: {
+/** One student's invite, already rendered — no templating happens below. */
+export type InviteRecipient = {
+  /** Echoed back in the result so the caller can update the right row. */
+  enrollmentId: string;
   to: string;
-  studentName: string;
-  courseName: string;
-  joinCode: string;
-}): Promise<{ sent: boolean; error?: string }> {
+  subject: string;
+  text: string;
+};
+
+export type InviteSendResult = {
+  enrollmentId: string;
+  sent: boolean;
+  error?: string;
+};
+
+/**
+ * Resend accepts 100 emails per batch call, and one batch call costs a single
+ * request against the rate limit. That is the whole fix for "it only sent 45
+ * of 60": the old code made one HTTP request per student, and Resend's
+ * 2-requests-per-second limit rejected everything past the first few seconds.
+ */
+const BATCH_SIZE = 100;
+
+/** Comfortably under 2 requests/sec even if the clock is unkind. */
+const BATCH_GAP_MS = 600;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Send every invite and report, per student, whether it left.
+ *
+ * Returns one result per recipient so the caller can write an accurate receipt
+ * to each enrollment row. Nothing here throws: a half-sent roster is
+ * information the professor needs, not an exception that discards the record
+ * of what already went out.
+ */
+export async function sendInviteEmails(
+  recipients: InviteRecipient[]
+): Promise<InviteSendResult[]> {
+  if (recipients.length === 0) return [];
   if (!isConfigured.email) {
-    return { sent: false, error: "Email isn't configured yet (RESEND_API_KEY)." };
+    return recipients.map((r) => ({
+      enrollmentId: r.enrollmentId,
+      sent: false,
+      error: "Email isn't configured yet (RESEND_API_KEY).",
+    }));
   }
 
-  const joinUrl = `${env.siteUrl}/join/${encodeURIComponent(input.joinCode)}`;
   const resend = new Resend(env.resendApiKey);
+  const results: InviteSendResult[] = [];
 
-  const { error } = await resend.emails.send({
-    from: env.emailFrom,
-    to: input.to,
-    subject: `${input.courseName} is using ClassAct — activate your seat`,
-    text: [
-      `Hi ${input.studentName},`,
-      ``,
-      `Your class ${input.courseName} uses ClassAct for seat check-in.`,
-      `Join with this link — it takes about two minutes:`,
-      ``,
-      joinUrl,
-      ``,
-      `Your join code (if asked): ${input.joinCode}`,
-      ``,
-      `Tap your seat, meet the people next to you, and get on with your day.`,
-    ].join("\n"),
-  });
+  for (let start = 0; start < recipients.length; start += BATCH_SIZE) {
+    const chunk = recipients.slice(start, start + BATCH_SIZE);
+    if (start > 0) await sleep(BATCH_GAP_MS);
 
-  if (error) return { sent: false, error: error.message };
-  return { sent: true };
+    // 'permissive' is what makes per-student attribution possible: strict mode
+    // rejects the entire batch when one address is malformed, punishing 99
+    // good students for a single typo in the roster.
+    let failures = new Map<number, string>();
+    let batchError: string | undefined;
+    try {
+      const { data, error } = await resend.batch.send(
+        chunk.map((r) => ({
+          from: env.emailFrom,
+          to: r.to,
+          subject: r.subject,
+          text: r.text,
+        })),
+        { batchValidation: "permissive" }
+      );
+      if (error) batchError = error.message;
+      else failures = new Map((data?.errors ?? []).map((e) => [e.index, e.message]));
+    } catch (err) {
+      batchError = err instanceof Error ? err.message : "Send failed.";
+    }
+
+    // A batch-level error means nothing in this chunk was accepted. An
+    // index-level error means everything *else* in the chunk was.
+    for (const [i, r] of chunk.entries()) {
+      const failure = batchError ?? failures.get(i);
+      results.push(
+        failure
+          ? { enrollmentId: r.enrollmentId, sent: false, error: failure }
+          : { enrollmentId: r.enrollmentId, sent: true }
+      );
+    }
+  }
+
+  return results;
 }
 
 /**
