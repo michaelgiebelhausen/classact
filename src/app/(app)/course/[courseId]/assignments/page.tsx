@@ -31,7 +31,7 @@ export default async function AssignmentsPage({
   const supabase = await createClient();
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, professor_id")
+    .select("id, name, professor_id, meeting_start")
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -55,7 +55,13 @@ export default async function AssignmentsPage({
         </p>
       </div>
 
-      {isProfessor && <AssignmentCreate courseId={courseId} />}
+      {isProfessor && (
+        <AssignmentCreate
+          courseId={courseId}
+          // Postgres hands back "09:30:00"; the time input wants "09:30".
+          classStart={course.meeting_start?.slice(0, 5) ?? null}
+        />
+      )}
 
       {(assignments ?? []).length === 0 ? (
         <Card>

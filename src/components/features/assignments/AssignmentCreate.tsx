@@ -24,13 +24,35 @@ import { createAssignment } from "@/server/actions/assignments";
 
 const ASSIGNMENT_BUCKET = "assignment-docs";
 
-export function AssignmentCreate({ courseId }: { courseId: string }) {
+/** Assignments are due at the end of the chosen day, the way Canvas does it. */
+const END_OF_DAY = "23:59";
+
+/** "09:30" → "9:30 AM", for the class-start button's label. */
+function formatClock(value: string): string {
+  const [h, m] = value.split(":").map(Number);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
+}
+
+export function AssignmentCreate({
+  courseId,
+  classStart,
+}: {
+  courseId: string;
+  /** The course's meeting start as "HH:MM", when it has a schedule. */
+  classStart?: string | null;
+}) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [deadline, setDeadline] = useState("");
-  const [peerClose, setPeerClose] = useState("");
+  // Day is the professor's to choose; the time starts where it almost
+  // always ends up.
+  const [deadlineDate, setDeadlineDate] = useState("");
+  const [deadlineTime, setDeadlineTime] = useState(END_OF_DAY);
+  const [peerCloseDate, setPeerCloseDate] = useState("");
+  const [peerCloseTime, setPeerCloseTime] = useState(END_OF_DAY);
   const [gradingMode, setGradingMode] = useState<"tasty" | "ai_only">("tasty");
   const [instructions, setInstructions] = useState("");
   const [saving, setSaving] = useState(false);
@@ -40,8 +62,12 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
       toast.error("Give the assignment a title.");
       return;
     }
-    if (!deadline) {
-      toast.error("Pick a deadline.");
+    if (!deadlineDate) {
+      toast.error("Pick a deadline date.");
+      return;
+    }
+    if (!deadlineTime) {
+      toast.error("Give the deadline a time.");
       return;
     }
     if (gradingMode === "ai_only" && !instructions.trim()) {
@@ -72,10 +98,12 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
       courseId,
       title,
       storagePath,
-      deadline: new Date(deadline).toISOString(),
+      deadline: new Date(`${deadlineDate}T${deadlineTime}`).toISOString(),
       peerCloseAt:
-        gradingMode === "tasty" && peerClose
-          ? new Date(peerClose).toISOString()
+        gradingMode === "tasty" && peerCloseDate
+          ? new Date(
+              `${peerCloseDate}T${peerCloseTime || END_OF_DAY}`
+            ).toISOString()
           : null,
       gradingMode,
       gradingInstructions: gradingMode === "ai_only" ? instructions : undefined,
@@ -85,8 +113,11 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
       toast.success("Assignment published — students can start their taste files now.");
       setTitle("");
       setFile(null);
-      setDeadline("");
-      setPeerClose("");
+      // Clear the days, keep the times at their defaults for the next one.
+      setDeadlineDate("");
+      setDeadlineTime(END_OF_DAY);
+      setPeerCloseDate("");
+      setPeerCloseTime(END_OF_DAY);
       router.refresh();
     } else {
       toast.error(result.error);
@@ -189,26 +220,73 @@ export function AssignmentCreate({ courseId }: { courseId: string }) {
               {file ? file.name : "Choose file"}
             </Button>
           </div>
+          {/* Date and time are separate controls so the time can carry a
+              real default. A single datetime-local can't: it takes the time
+              from the clock the moment you pick a day, which is never when
+              anything is actually due. */}
           <div className="grid gap-2">
-            <Label htmlFor="a-deadline">Deadline</Label>
-            <Input
-              id="a-deadline"
-              type="datetime-local"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-              className="w-56"
-            />
+            <Label htmlFor="a-deadline-date">Deadline</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                id="a-deadline-date"
+                type="date"
+                value={deadlineDate}
+                onChange={(e) => setDeadlineDate(e.target.value)}
+                className="w-44"
+              />
+              <Input
+                aria-label="Deadline time"
+                type="time"
+                value={deadlineTime}
+                onChange={(e) => setDeadlineTime(e.target.value)}
+                className="w-32"
+              />
+              {classStart && deadlineTime !== classStart && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  onClick={() => setDeadlineTime(classStart)}
+                >
+                  Use class start ({formatClock(classStart)})
+                </Button>
+              )}
+              {deadlineTime !== END_OF_DAY && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  onClick={() => setDeadlineTime(END_OF_DAY)}
+                >
+                  Use 11:59 PM
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Pick the day — the time is already 11:59 PM.
+            </p>
           </div>
           {gradingMode === "tasty" && (
             <div className="grid gap-2">
-              <Label htmlFor="a-peerclose">Peer grading ends (optional)</Label>
-              <Input
-                id="a-peerclose"
-                type="datetime-local"
-                value={peerClose}
-                onChange={(e) => setPeerClose(e.target.value)}
-                className="w-56"
-              />
+              <Label htmlFor="a-peerclose-date">Peer grading ends (optional)</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  id="a-peerclose-date"
+                  type="date"
+                  value={peerCloseDate}
+                  onChange={(e) => setPeerCloseDate(e.target.value)}
+                  className="w-44"
+                />
+                <Input
+                  aria-label="Peer grading end time"
+                  type="time"
+                  value={peerCloseTime}
+                  onChange={(e) => setPeerCloseTime(e.target.value)}
+                  className="w-32"
+                />
+              </div>
             </div>
           )}
         </div>
