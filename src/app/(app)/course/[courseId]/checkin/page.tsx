@@ -18,6 +18,16 @@ import {
   type SeatInfo,
 } from "@/components/features/checkin/CheckInLive";
 import { SessionControls } from "@/components/features/checkin/SessionControls";
+import { ReportAbsence } from "@/components/features/checkin/ReportAbsence";
+import { ScheduledAbsences } from "@/components/features/checkin/ScheduledAbsences";
+import {
+  listCourseAbsences,
+  listMyAbsences,
+  type CourseAbsenceView,
+  type MyAbsenceView,
+} from "@/server/actions/absences";
+import { parseAttendancePolicy } from "@/lib/absences";
+import { upcomingMeetingDates } from "@/lib/schedule";
 import type { RoomLayout } from "@/lib/roomlayout";
 
 export default async function CheckInPage({
@@ -34,7 +44,7 @@ export default async function CheckInPage({
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
+      "id, name, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy"
     )
     .eq("id", courseId)
     .single();
@@ -231,6 +241,21 @@ export default async function CheckInPage({
     }
   }
 
+  // Absences. The professor gets the whole judged list; a student gets their
+  // own reports plus the next few class dates to pick from.
+  const courseAbsences: CourseAbsenceView[] = isProfessor
+    ? await listCourseAbsences(courseId)
+    : [];
+  const myAbsences: MyAbsenceView[] = isProfessor
+    ? []
+    : await listMyAbsences(courseId);
+  const upcomingDates =
+    !isProfessor && schedule ? upcomingMeetingDates(schedule, new Date(), 8) : [];
+  const policy = parseAttendancePolicy(course.attendance_policy);
+  const policyNote = isProfessor
+    ? null
+    : `Your professor expects ${policy.advanceNoticeHours} hours' notice for planned absences.`;
+
   return (
     <div className="grid gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -264,6 +289,19 @@ export default async function CheckInPage({
             : null
         }
       />
+
+      {/* Absences: report one instead of emailing (student), or read the
+          already-judged list (professor). */}
+      {isProfessor ? (
+        <ScheduledAbsences rows={courseAbsences} />
+      ) : myEnrollmentId ? (
+        <ReportAbsence
+          courseId={courseId}
+          upcomingDates={upcomingDates}
+          mine={myAbsences}
+          policyNote={policyNote}
+        />
+      ) : null}
     </div>
   );
 }

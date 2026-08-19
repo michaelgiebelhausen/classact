@@ -103,7 +103,50 @@ export type CourseRow = {
   grading_defaults: Record<string, unknown>
   /** Professor's participation-score weights (competency key → 0..1). */
   participation_weights: Record<string, unknown>
+  /** Attendance policy the AI applies to self-reported absences (0025). */
+  attendance_policy: Record<string, unknown>
   created_at: string
+}
+
+export type AbsenceCategory =
+  | "athletics"
+  | "interview"
+  | "university_event"
+  | "religious"
+  | "family"
+  | "illness"
+  | "bereavement"
+  | "other"
+export type AbsenceVerdict = "excused" | "unexcused"
+
+/** A self-reported absence (0025). Documentation is never stored. */
+export type AbsenceRow = {
+  id: string
+  course_id: string
+  enrollment_id: string
+  /** "YYYY-MM-DD" in the course timezone. */
+  absence_date: string
+  category: AbsenceCategory
+  explanation: string
+  submitted_at: string
+  /** Hours before the meeting start; negative = after class began. */
+  advance_hours: number | null
+  has_documentation: boolean
+  documentation_kind: string | null
+  ai_doc_authenticity: number | null
+  ai_verdict: AbsenceVerdict
+  ai_legitimacy: number
+  ai_summary: string
+  ai_reason: string
+  ai_flags: string[]
+  appeal_note: string | null
+  appealed_at: string | null
+  professor_verdict: AbsenceVerdict | null
+  professor_note: string | null
+  decided_at: string | null
+  attended_elsewhere: boolean
+  created_at: string
+  updated_at: string
 }
 
 export type ShoutOutContext = "general" | "exercise" | "project" | "peer_review"
@@ -637,6 +680,7 @@ export type Database = {
       professor_ai: TableShape<ProfessorAiRow>
       professor_canvas: TableShape<ProfessorCanvasRow>
       feedback: TableShape<FeedbackRow>
+      absences: TableShape<AbsenceRow>
       profile_answers: TableShape<ProfileAnswerRow>
     }
     Views: { [_ in never]: never }

@@ -46,6 +46,43 @@ export async function sendInviteEmail(input: {
  * Notify founders that new feedback landed. Best-effort — never throws;
  * the feedback row is already stored before this is called.
  */
+/** A student appealed an absence verdict — tell the professor, once. */
+export async function sendAbsenceAppealNotification(input: {
+  to: string;
+  courseId: string;
+  courseName: string;
+  studentName: string;
+  date: string;
+  category: string;
+  summary: string;
+  note: string;
+}): Promise<void> {
+  if (!isConfigured.email) return;
+  const resend = new Resend(env.resendApiKey!);
+  try {
+    await resend.emails.send({
+      from: env.emailFrom,
+      to: input.to,
+      subject: `${input.courseName}: ${input.studentName} appealed an absence (${input.date})`,
+      text: [
+        `${input.studentName} is appealing the verdict on their ${input.category.toLowerCase()} absence for ${input.date}.`,
+        ``,
+        `ClassAct's read: ${input.summary}`,
+        ``,
+        `Their appeal:`,
+        input.note,
+        ``,
+        `Decide with one click under Scheduled absences:`,
+        `${env.siteUrl}/course/${input.courseId}/checkin`,
+        ``,
+        `— ClassAct`,
+      ].join("\n"),
+    });
+  } catch {
+    // Courtesy only; the appeal is already recorded.
+  }
+}
+
 export async function sendFeedbackNotification(input: {
   to: string[];
   kind: string;

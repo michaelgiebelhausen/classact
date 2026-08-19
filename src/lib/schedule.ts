@@ -114,6 +114,106 @@ export function sessionDateFor(schedule: CourseSchedule, now: Date): string {
   return zonedParts(now, schedule.timezone).date;
 }
 
+/** Wall-clock parts of an instant in a zone, as a UTC-style timestamp number. */
+function zoneWallClockAsUtc(instant: Date, timezone: string): number {
+  let formatter: Intl.DateTimeFormat;
+  const opts: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  };
+  try {
+    formatter = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, ...opts });
+  } catch {
+    formatter = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", ...opts });
+  }
+  const p = Object.fromEntries(
+    formatter.formatToParts(instant).map((x) => [x.type, x.value])
+  );
+  return Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour) % 24,
+    Number(p.minute),
+    Number(p.second)
+  );
+}
+
+/**
+ * The absolute instant of `date` at `minutes` past midnight in `timezone`.
+ * Pure Intl (no date library in the project): guess the instant as if the
+ * zone were UTC, measure the zone's offset at that guess, correct, and
+ * measure once more so a DST transition on that day can't leave us an hour
+ * out. Unknown zones fall back to UTC, matching zonedParts.
+ */
+export function zonedDateTimeToUtc(
+  date: string,
+  minutes: number,
+  timezone: string
+): Date {
+  const [y, m, d] = date.split("-").map(Number);
+  const guess = Date.UTC(y, m - 1, d, Math.floor(minutes / 60), minutes % 60);
+  let result = guess;
+  for (let i = 0; i < 2; i++) {
+    const offset = zoneWallClockAsUtc(new Date(result), timezone) - result;
+    result = guess - offset;
+  }
+  return new Date(result);
+}
+
+/**
+ * When class starts on a given date — the instant "how far in advance" is
+ * measured against. Null when the schedule has no parsable start time.
+ */
+export function meetingStartInstant(
+  schedule: CourseSchedule,
+  date: string
+): Date | null {
+  const start = parseTimeToMinutes(schedule.start);
+  if (start === null) return null;
+  return zonedDateTimeToUtc(date, start, schedule.timezone);
+}
+
+/** Add `n` days to a "YYYY-MM-DD" string with pure UTC calendar math. */
+function addDays(date: string, n: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * The next `limit` dates the class meets, starting today in the course
+ * timezone (today is included only until class ends). Bounded by the term,
+ * and by a year when the term has no end — the weekly pattern repeats
+ * forever otherwise.
+ */
+export function upcomingMeetingDates(
+  schedule: CourseSchedule,
+  now: Date,
+  limit = 12
+): string[] {
+  if (schedule.days.length === 0 || limit <= 0) return [];
+  const local = zonedParts(now, schedule.timezone);
+  const end = parseTimeToMinutes(schedule.end);
+  const out: string[] = [];
+  for (let i = 0; i < 366 && out.length < limit; i++) {
+    const date = addDays(local.date, i);
+    if (schedule.termEnd && date > schedule.termEnd) break;
+    if (!isWithinTerm(schedule, date)) continue;
+    const [y, m, d] = date.split("-").map(Number);
+    const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    if (!schedule.days.includes(weekday)) continue;
+    // Today only counts while class hasn't finished yet.
+    if (i === 0 && end !== null && local.minutes >= end) continue;
+    out.push(date);
+  }
+  return out;
+}
+
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function formatTime(value: string): string {

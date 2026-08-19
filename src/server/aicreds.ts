@@ -15,10 +15,20 @@ import { env, isConfigured } from "@/lib/env";
  * (awaiting_key), never bills the platform.
  */
 
-export type AiTask = "taste" | "rubric" | "baseline" | "scoring" | "questions";
+export type AiTask =
+  | "taste"
+  | "rubric"
+  | "baseline"
+  | "scoring"
+  | "questions"
+  | "absence";
 
-/** Tasks the platform covers on the system key when the professor has no key. */
-const PLATFORM_SUBSIDIZED: readonly AiTask[] = ["questions"];
+/**
+ * Tasks the platform covers on the system key when the professor has no key.
+ * The rule: non-grading AI is on the house; grading stays BYOK. Absence
+ * assessment is administrative (a few hundred tokens) and belongs here.
+ */
+const PLATFORM_SUBSIDIZED: readonly AiTask[] = ["questions", "absence"];
 
 export interface CourseAiCreds {
   apiKey: string;
@@ -33,6 +43,7 @@ interface StoredModels {
   baseline?: string;
   scoring?: string;
   questions?: string;
+  absence?: string;
   /** Pricing snapshot captured at settings-save time: modelId → $/Mtok. */
   pricing?: Record<string, { prompt: number; completion: number }>;
 }

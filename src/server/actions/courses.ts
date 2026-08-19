@@ -132,7 +132,7 @@ export async function duplicateCourse(input: {
   const { data: source } = await supabase
     .from("courses")
     .select(
-      "id, professor_id, term, room_id, icebreaker_fields, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, grading_defaults, participation_weights"
+      "id, professor_id, term, room_id, icebreaker_fields, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, grading_defaults, participation_weights, attendance_policy"
     )
     .eq("id", input.courseId)
     .single();
@@ -176,6 +176,7 @@ export async function duplicateCourse(input: {
       term_end: source.term_end,
       grading_defaults: source.grading_defaults,
       participation_weights: source.participation_weights,
+      attendance_policy: source.attendance_policy,
     });
     if (!error) {
       newId = id;

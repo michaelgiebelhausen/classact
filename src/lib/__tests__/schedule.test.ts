@@ -5,8 +5,11 @@ import {
   isMeetingWindow,
   isScheduleComplete,
   isWithinTerm,
+  meetingStartInstant,
   parseTimeToMinutes,
   sessionDateFor,
+  upcomingMeetingDates,
+  zonedDateTimeToUtc,
   zonedParts,
   type CourseSchedule,
 } from "@/lib/schedule";
@@ -126,5 +129,85 @@ describe("formatSchedule / isScheduleComplete", () => {
     expect(
       isScheduleComplete({ days: [1], start: "11:00", end: "10:00", timezone: "UTC" })
     ).toBe(false);
+  });
+});
+
+describe("zonedDateTimeToUtc", () => {
+  it("converts an Eastern wall-clock time to the right instant in summer (EDT, UTC-4)", () => {
+    expect(zonedDateTimeToUtc("2026-07-20", 9 * 60 + 30, "America/New_York").toISOString()).toBe(
+      "2026-07-20T13:30:00.000Z"
+    );
+  });
+
+  it("and in winter (EST, UTC-5)", () => {
+    expect(zonedDateTimeToUtc("2026-01-12", 9 * 60 + 30, "America/New_York").toISOString()).toBe(
+      "2026-01-12T14:30:00.000Z"
+    );
+  });
+
+  it("is right on the DST-change day itself", () => {
+    // US clocks spring forward 2026-03-08 at 2 AM; a 9:30 AM class that day is EDT.
+    expect(zonedDateTimeToUtc("2026-03-08", 9 * 60 + 30, "America/New_York").toISOString()).toBe(
+      "2026-03-08T13:30:00.000Z"
+    );
+    // And fall back 2026-11-01; 9:30 AM that day is EST.
+    expect(zonedDateTimeToUtc("2026-11-01", 9 * 60 + 30, "America/New_York").toISOString()).toBe(
+      "2026-11-01T14:30:00.000Z"
+    );
+  });
+
+  it("handles zones ahead of UTC and unknown zones (UTC fallback)", () => {
+    expect(zonedDateTimeToUtc("2026-07-20", 9 * 60, "Asia/Kolkata").toISOString()).toBe(
+      "2026-07-20T03:30:00.000Z"
+    );
+    expect(zonedDateTimeToUtc("2026-07-20", 9 * 60, "Not/AZone").toISOString()).toBe(
+      "2026-07-20T09:00:00.000Z"
+    );
+  });
+});
+
+describe("meetingStartInstant", () => {
+  it("is the class start on that date in the course zone", () => {
+    expect(meetingStartInstant(MWF, "2026-07-22")?.toISOString()).toBe("2026-07-22T13:30:00.000Z");
+  });
+
+  it("is null without a parsable start time", () => {
+    expect(meetingStartInstant({ ...MWF, start: "" }, "2026-07-22")).toBeNull();
+  });
+});
+
+describe("upcomingMeetingDates", () => {
+  // Monday 2026-07-20, 8:00 AM Eastern — before class.
+  const mondayMorning = utc("2026-07-20T12:00:00Z");
+
+  it("starts with today when class hasn't ended, then follows the pattern", () => {
+    expect(upcomingMeetingDates(MWF, mondayMorning, 4)).toEqual([
+      "2026-07-20",
+      "2026-07-22",
+      "2026-07-24",
+      "2026-07-27",
+    ]);
+  });
+
+  it("skips today once class is over", () => {
+    // Monday 11:00 AM Eastern — class ended at 10:20.
+    const mondayLate = utc("2026-07-20T15:00:00Z");
+    expect(upcomingMeetingDates(MWF, mondayLate, 2)).toEqual(["2026-07-22", "2026-07-24"]);
+  });
+
+  it("respects term bounds", () => {
+    const bounded = { ...MWF, termStart: "2026-07-22", termEnd: "2026-07-24" };
+    expect(upcomingMeetingDates(bounded, mondayMorning, 10)).toEqual(["2026-07-22", "2026-07-24"]);
+  });
+
+  it("uses the course zone for 'today', not UTC", () => {
+    // 11 PM Sunday Eastern is already Monday in UTC. Today in the course
+    // zone is still Sunday, so Monday is the next class.
+    const sundayNight = utc("2026-07-20T03:00:00Z");
+    expect(upcomingMeetingDates(MWF, sundayNight, 1)).toEqual(["2026-07-20"]);
+  });
+
+  it("is empty with no meeting days", () => {
+    expect(upcomingMeetingDates({ ...MWF, days: [] }, mondayMorning)).toEqual([]);
   });
 });

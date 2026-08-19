@@ -32,6 +32,8 @@ import {
 } from "@/components/features/follow/DeckManager";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { RoomDesigner } from "@/components/features/setup/RoomDesigner";
+import { AttendancePolicyTab } from "@/components/features/setup/AttendancePolicyTab";
+import type { AttendancePolicy } from "@/lib/absences";
 import type { RoomLayout } from "@/lib/roomlayout";
 import type { RoomLocation } from "@/server/actions/rooms";
 
@@ -72,6 +74,8 @@ interface Props {
   canvasConnection: CanvasConnectionView;
   /** Slide decks for this course — same manager the Follow Along page uses. */
   decks: DeckListItem[];
+  /** Parsed attendance policy the AI applies to self-reported absences. */
+  attendancePolicy: AttendancePolicy;
 }
 
 export function CourseSetupTabs({
@@ -82,12 +86,14 @@ export function CourseSetupTabs({
   siteUrl,
   canvasConnection,
   decks,
+  attendancePolicy,
 }: Props) {
   return (
     <Tabs defaultValue="seatmap" className="w-full">
       <TabsList>
         <TabsTrigger value="seatmap">Room</TabsTrigger>
         <TabsTrigger value="schedule">Schedule</TabsTrigger>
+        <TabsTrigger value="attendance">Attendance</TabsTrigger>
         <TabsTrigger value="roster">Roster</TabsTrigger>
         <TabsTrigger value="slides">Slides</TabsTrigger>
         <TabsTrigger value="icebreakers">Icebreakers</TabsTrigger>
@@ -104,6 +110,9 @@ export function CourseSetupTabs({
       </TabsContent>
       <TabsContent value="schedule">
         <ScheduleTab courseId={course.id} initial={schedule} />
+      </TabsContent>
+      <TabsContent value="attendance">
+        <AttendancePolicyTab courseId={course.id} initial={attendancePolicy} />
       </TabsContent>
       <TabsContent value="roster">
         <RosterTab

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/server/actions/auth";
+import { flagAbsencesElsewhere } from "@/server/actions/absences";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
 
 /** Today's date in the server's local calendar, YYYY-MM-DD. */
@@ -105,7 +106,7 @@ export async function checkIn(
   // Resolve the session + my enrollment in that course.
   const { data: session } = await supabase
     .from("class_sessions")
-    .select("id, course_id, closed_at")
+    .select("id, course_id, closed_at, session_date")
     .eq("id", sessionId)
     .single();
   if (!session || session.closed_at) {
@@ -167,6 +168,10 @@ export async function checkIn(
     }
     return { ok: false, error: "Check-in failed. Try again.", code: "unknown" };
   }
+
+  // Showed up here today? Then any absence they reported for today in
+  // another ClassAct class gets flagged for that professor. Best-effort.
+  await flagAbsencesElsewhere(user.id, session.course_id, session.session_date);
 
   return { ok: true, data: { checkInId: created.id, isNewSeat } };
 }

@@ -4,6 +4,7 @@ import { getProfile } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
 import { getCanvasConnection } from "@/server/actions/canvassettings";
+import { parseAttendancePolicy } from "@/lib/absences";
 import type { DeckListItem } from "@/components/features/follow/DeckManager";
 import type { QuestionItem } from "@/components/features/follow/DeckQuestions";
 import type { RoomLayout } from "@/lib/roomlayout";
@@ -22,7 +23,7 @@ export default async function CourseSetupPage({
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end"
+      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy"
     )
     .eq("id", courseId)
     .single();
@@ -37,7 +38,7 @@ export default async function CourseSetupPage({
       hint: courseError.hint,
     });
     throw new Error(
-      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run supabase/catchup_0019_to_0023.sql in the Supabase SQL editor.`
+      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run the migrations that haven't been applied yet in the Supabase SQL editor (supabase/catchup_0019_to_0023.sql, then 0024 and 0025).`
     );
   }
   if (!course) notFound();
@@ -158,7 +159,8 @@ export default async function CourseSetupPage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{course.name}</h1>
         <p className="text-sm text-muted-foreground">
-          Course setup — room, roster, slides, icebreakers, invites.
+          Course setup — room, schedule, attendance, roster, slides,
+          icebreakers, invites.
         </p>
       </div>
       <CourseSetupTabs
@@ -187,6 +189,7 @@ export default async function CourseSetupPage({
         siteUrl={env.siteUrl}
         canvasConnection={canvasConnection}
         decks={decks}
+        attendancePolicy={parseAttendancePolicy(course.attendance_policy)}
       />
     </div>
   );

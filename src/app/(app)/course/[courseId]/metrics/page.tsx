@@ -17,6 +17,8 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { formatMinutes } from "@/lib/projects";
+import { finalVerdict } from "@/lib/absences";
+import { listMyAbsences } from "@/server/actions/absences";
 import type { SignalLevel } from "@/lib/employability";
 import {
   getCourseMetrics,
@@ -79,6 +81,20 @@ export default async function MetricsPage({
     const projectStats = (await getCourseProjectStats(courseId)) ?? [];
     const cockpit = await getParticipationCockpit(courseId);
     const hasActivity = metrics.totalCheckIns > 0;
+
+    // Self-reported absences per student, counted by the verdict that
+    // stands (the professor's if they ruled, otherwise ClassAct's).
+    const { data: absenceRows } = await supabase
+      .from("absences")
+      .select("enrollment_id, ai_verdict, professor_verdict")
+      .eq("course_id", courseId);
+    const absenceTally = new Map<string, { excused: number; unexcused: number }>();
+    for (const a of absenceRows ?? []) {
+      const tally = absenceTally.get(a.enrollment_id) ?? { excused: 0, unexcused: 0 };
+      if (finalVerdict(a) === "excused") tally.excused++;
+      else tally.unexcused++;
+      absenceTally.set(a.enrollment_id, tally);
+    }
     return (
       <div className="grid gap-6">
         <div>
@@ -107,6 +123,8 @@ export default async function MetricsPage({
             <CardTitle>Per student</CardTitle>
             <CardDescription>
               Verified means a neighbor confirmed they were in the room.
+              Absences are the ones students reported themselves — the full
+              list, with reasons, is on the Check In page.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -121,6 +139,7 @@ export default async function MetricsPage({
                     <TableHead>Student</TableHead>
                     <TableHead className="text-right">Check-ins</TableHead>
                     <TableHead className="text-right">Verified</TableHead>
+                    <TableHead className="text-right">Absences</TableHead>
                     <TableHead className="text-right">Games</TableHead>
                     <TableHead className="text-right">Networking</TableHead>
                   </TableRow>
@@ -131,6 +150,13 @@ export default async function MetricsPage({
                       <TableCell>{s.name}</TableCell>
                       <TableCell className="text-right">{s.checkIns}</TableCell>
                       <TableCell className="text-right">{s.verified}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right">
+                        {absenceTally.get(s.enrollmentId)
+                          ? `${absenceTally.get(s.enrollmentId)!.excused} exc · ${
+                              absenceTally.get(s.enrollmentId)!.unexcused
+                            } unexc`
+                          : "—"}
+                      </TableCell>
                       <TableCell className="text-right">
                         {s.gamesPlayed}
                       </TableCell>
@@ -244,8 +270,15 @@ export default async function MetricsPage({
   const v2 = await getMyMetricsV2(courseId);
   const readiness = v2?.workReadiness ?? (await getStudentWorkReadiness(courseId));
   const extras = v2?.extras ?? null;
+  // Absences I reported, by the verdict that stands. Counted here so a
+  // student with no check-ins yet but a reported absence still sees it.
+  const myAbsences = await listMyAbsences(courseId);
+  const excusedCount = myAbsences.filter((a) => a.verdict === "excused").length;
+  const unexcusedCount = myAbsences.length - excusedCount;
   const noActivity =
-    metrics.sessionsAttended === 0 && metrics.gamesPlayed === 0;
+    metrics.sessionsAttended === 0 &&
+    metrics.gamesPlayed === 0 &&
+    myAbsences.length === 0;
 
   return (
     <div className="grid gap-6">
@@ -264,6 +297,14 @@ export default async function MetricsPage({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Metric label="Classes attended" value={metrics.sessionsAttended} />
           <Metric label="Verified by a neighbor" value={metrics.verifiedAttendances} />
+          <Metric
+            label="Absences reported"
+            value={
+              myAbsences.length === 0
+                ? 0
+                : `${excusedCount} excused · ${unexcusedCount} not`
+            }
+          />
           <Metric label="Seats tried" value={metrics.seatsVisited} />
           <Metric label="People met" value={metrics.peopleMet} />
           <Metric label="Networking score" value={metrics.networkingScore} />
