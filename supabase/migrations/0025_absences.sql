@@ -5,9 +5,11 @@
 -- assessed in memory and never stored — only its kind and an authenticity
 -- score persist.
 --
--- Writes go through server actions on the service role. RLS here is read-only
--- for students (their own rows) plus full control for the professor, so a
--- browser client can neither insert an absence nor edit a verdict.
+-- RLS here is professor-only: they can read and write every absence in their
+-- own courses, and nobody else can touch the table from a browser. Students
+-- have no policy at all — the row carries scores meant for the professor and
+-- RLS can't restrict columns — so student reads and writes go through server
+-- actions that authenticate first and then use the service role.
 
 -- The professor's policy, one jsonb on the course:
 -- { text, excusedCategories[], advanceNoticeHours, docsRequiredFor[], freeUnexcused }

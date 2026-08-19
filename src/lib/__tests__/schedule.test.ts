@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import {
   formatSchedule,
   formatTerm,
@@ -7,6 +7,7 @@ import {
   isWithinTerm,
   meetingStartInstant,
   parseTimeToMinutes,
+  recentMeetingDates,
   sessionDateFor,
   upcomingMeetingDates,
   zonedDateTimeToUtc,
@@ -211,3 +212,40 @@ describe("upcomingMeetingDates", () => {
     expect(upcomingMeetingDates({ ...MWF, days: [] }, mondayMorning)).toEqual([]);
   });
 });
+
+describe("recentMeetingDates", () => {
+  it("offers classes already missed, newest first", () => {
+    // Friday 2026-07-24, 11:00 AM Eastern — after that day's class ended.
+    const fridayAfter = utc("2026-07-24T15:00:00Z");
+    expect(recentMeetingDates(MWF, fridayAfter, 7)).toEqual([
+      "2026-07-24",
+      "2026-07-22",
+      "2026-07-20",
+      "2026-07-17",
+    ]);
+  });
+
+  it("excludes today while class is still ahead — that's 'upcoming', not 'missed'", () => {
+    // Friday 8:00 AM Eastern, class at 9:30.
+    const fridayBefore = utc("2026-07-24T12:00:00Z");
+    const recent = recentMeetingDates(MWF, fridayBefore, 7);
+    expect(recent).not.toContain("2026-07-24");
+    expect(recent[0]).toBe("2026-07-22");
+    // And it IS offered as upcoming, so the day is never unreachable.
+    expect(upcomingMeetingDates(MWF, fridayBefore, 1)).toEqual(["2026-07-24"]);
+  });
+
+  it("stops at the start of term", () => {
+    const bounded = { ...MWF, termStart: "2026-07-22" };
+    expect(recentMeetingDates(bounded, utc("2026-07-24T15:00:00Z"), 14)).toEqual([
+      "2026-07-24",
+      "2026-07-22",
+    ]);
+  });
+
+  it("is empty with no meeting days or a zero window", () => {
+    expect(recentMeetingDates({ ...MWF, days: [] }, utc("2026-07-24T15:00:00Z"))).toEqual([]);
+    expect(recentMeetingDates(MWF, utc("2026-07-24T15:00:00Z"), 0)).toEqual([]);
+  });
+});
+

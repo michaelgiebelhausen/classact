@@ -191,6 +191,35 @@ function addDays(date: string, n: number): string {
  * and by a year when the term has no end — the weekly pattern repeats
  * forever otherwise.
  */
+/**
+ * Class dates in the recent past, newest first — the ones a student might
+ * still be reporting after the fact ("I woke up sick and missed today").
+ * Today counts as past once class has ended.
+ */
+export function recentMeetingDates(
+  schedule: CourseSchedule,
+  now: Date,
+  days = 14
+): string[] {
+  if (schedule.days.length === 0 || days <= 0) return [];
+  const local = zonedParts(now, schedule.timezone);
+  const end = parseTimeToMinutes(schedule.end);
+  const out: string[] = [];
+  for (let i = 0; i <= days; i++) {
+    const date = addDays(local.date, -i);
+    if (schedule.termStart && date < schedule.termStart) break;
+    if (!isWithinTerm(schedule, date)) continue;
+    const [y, m, d] = date.split("-").map(Number);
+    const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    if (!schedule.days.includes(weekday)) continue;
+    // Today belongs here only once class is over — before that it's still
+    // "upcoming" and lives in the other list.
+    if (i === 0 && (end === null || local.minutes < end)) continue;
+    out.push(date);
+  }
+  return out;
+}
+
 export function upcomingMeetingDates(
   schedule: CourseSchedule,
   now: Date,

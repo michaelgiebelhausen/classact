@@ -83,6 +83,17 @@ export function AttendancePolicyTab({
       setSaving(false);
     }
     if (result.ok) {
+      // Show what was actually stored: the server clamps the numbers and
+      // substitutes its default paragraph for empty text, so the form would
+      // otherwise keep displaying a value that isn't in force.
+      const stored = result.data?.policy;
+      if (stored) {
+        setText(stored.text);
+        setExcused(new Set(stored.excusedCategories));
+        setDocsFor(new Set(stored.docsRequiredFor));
+        setNoticeHours(String(stored.advanceNoticeHours));
+        setFreeUnexcused(String(stored.freeUnexcused));
+      }
       toast.success("Attendance policy saved. Absence reports are judged against it from now on.");
       router.refresh();
     } else {

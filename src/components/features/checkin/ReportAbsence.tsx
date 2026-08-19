@@ -26,26 +26,32 @@ import type { AbsenceCategory } from "@/types/db";
 export function ReportAbsence({
   courseId,
   upcomingDates,
+  pastDates,
   mine,
   policyNote,
 }: {
   courseId: string;
   /** Next few class dates, "YYYY-MM-DD", course timezone. */
   upcomingDates: string[];
+  /**
+   * Recent class dates already past. Illness usually gets reported after
+   * the fact, so these have to be offerable — without them the form quietly
+   * files the *next* class instead of the one actually missed.
+   */
+  pastDates: string[];
   mine: MyAbsenceView[];
   policyNote: string | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [date, setDate] = useState(upcomingDates[0] ?? "");
+  const offered = [...upcomingDates, ...pastDates];
+  const [date, setDate] = useState(offered[0] ?? "");
   // The dates refresh as classes pass; if the one we're holding is no longer
   // offered, fall back to the next class rather than submitting a stale day.
-  const [knownDates, setKnownDates] = useState(upcomingDates);
-  if (knownDates !== upcomingDates) {
-    setKnownDates(upcomingDates);
-    if (upcomingDates.length > 0 && !upcomingDates.includes(date)) {
-      setDate(upcomingDates[0]);
-    }
+  const [knownDates, setKnownDates] = useState(offered);
+  if (knownDates.join() !== offered.join()) {
+    setKnownDates(offered);
+    if (offered.length > 0 && !offered.includes(date)) setDate(offered[0]);
   }
   const [category, setCategory] = useState<AbsenceCategory>("illness");
   const [explanation, setExplanation] = useState("");
@@ -66,7 +72,7 @@ export function ReportAbsence({
     setOpen(false);
     setExplanation("");
     setFile(null);
-    setDate(upcomingDates[0] ?? "");
+    setDate(offered[0] ?? "");
     // The <input type="file"> keeps its own value; reset the element too or
     // it still shows the old filename.
     if (fileInput.current) fileInput.current.value = "";
@@ -163,27 +169,49 @@ export function ReportAbsence({
           <div className="grid gap-4 rounded-lg border border-dashed p-4">
             <div className="grid gap-1.5">
               <Label htmlFor="absence-date">Which class?</Label>
-              {upcomingDates.length > 0 ? (
+              {upcomingDates.length + pastDates.length > 0 ? (
                 <select
                   id="absence-date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   className="max-w-xs rounded-md border bg-background px-3 py-2 text-sm"
                 >
-                  {upcomingDates.map((d) => (
-                    <option key={d} value={d}>
-                      {formatDate(d)}
-                    </option>
-                  ))}
+                  {upcomingDates.length > 0 && (
+                    <optgroup label="Coming up">
+                      {upcomingDates.map((d) => (
+                        <option key={d} value={d}>
+                          {formatDate(d)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {pastDates.length > 0 && (
+                    <optgroup label="Already missed">
+                      {pastDates.map((d) => (
+                        <option key={d} value={d}>
+                          {formatDate(d)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               ) : (
                 <input
                   id="absence-date"
                   type="date"
                   value={date}
+                  min={isoOffsetDays(-14)}
+                  max={isoOffsetDays(180)}
                   onChange={(e) => setDate(e.target.value)}
                   className="max-w-xs rounded-md border bg-background px-3 py-2 text-sm"
                 />
+              )}
+              {pastDates.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Missed one already? It&apos;s under &ldquo;Already
+                  missed&rdquo; — reporting late counts against you less than
+                  not reporting at all.
+                </p>
               )}
             </div>
 
@@ -348,6 +376,16 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("read failed"));
     reader.readAsDataURL(file);
   });
+}
+
+/** Today ± n days as "YYYY-MM-DD", for bounding the fallback date input. */
+function isoOffsetDays(n: number): string {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + n)
+  )
+    .toISOString()
+    .slice(0, 10);
 }
 
 /** "2026-08-24" → "Mon, Aug 24" without dragging the date through a timezone. */

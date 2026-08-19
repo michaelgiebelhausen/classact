@@ -34,10 +34,15 @@ import type { AbsenceRow, AbsenceVerdict } from "@/types/db";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
- * Self-reported absences. Every write here goes through the service-role
- * client after this file has checked who's asking — RLS on `absences` is
- * deliberately read-only for students, so the browser can't file an absence
- * or touch a verdict except through these actions.
+ * Self-reported absences.
+ *
+ * RLS on `absences` is PROFESSOR-ONLY — there is no student policy at all,
+ * because the table carries the legitimacy and document-authenticity scores
+ * and RLS can't scope by column. Students therefore never touch the table
+ * directly: they go through these actions, which authenticate the caller
+ * first and then use the service-role client, returning only the fields a
+ * student is meant to see. Don't "simplify" listMyAbsences or submitAbsence
+ * onto the user client — both would silently return or write nothing.
  */
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -142,7 +147,7 @@ async function loadCourse(courseId: string) {
 export async function updateAttendancePolicy(
   courseId: string,
   input: Partial<AttendancePolicy>
-): Promise<ActionResult> {
+): Promise<ActionResult<{ policy: AttendancePolicy }>> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -152,17 +157,26 @@ export async function updateAttendancePolicy(
   // Parse leniently (clamps numbers, drops unknown categories) then persist
   // the clean shape; RLS (courses_update → professor) guards the write.
   const policy = parseAttendancePolicy(input);
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("courses")
     .update({ attendance_policy: policy as unknown as Record<string, unknown> })
-    .eq("id", courseId);
+    .eq("id", courseId)
+    .select("id")
+    .maybeSingle();
   if (error) {
     console.error("[absences] policy update failed:", error.message);
     return { ok: false, error: "Couldn't save the policy. Try again." };
   }
+  // RLS filters rather than errors, so zero rows means "not your course" —
+  // report that instead of a cheerful success for a write that never landed.
+  if (!data) {
+    return { ok: false, error: "That course isn't one you teach." };
+  }
   revalidatePath(`/course/${courseId}/setup`);
   revalidatePath(`/course/${courseId}/checkin`);
-  return { ok: true };
+  // Hand back what was actually stored: the numbers are clamped on the way
+  // in, and the form should show the stored value, not the typed one.
+  return { ok: true, data: { policy } };
 }
 
 /* ---------------- Submit (student) ---------------- */

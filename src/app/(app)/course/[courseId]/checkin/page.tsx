@@ -27,7 +27,7 @@ import {
   type MyAbsenceView,
 } from "@/server/actions/absences";
 import { parseAttendancePolicy } from "@/lib/absences";
-import { upcomingMeetingDates } from "@/lib/schedule";
+import { recentMeetingDates, upcomingMeetingDates } from "@/lib/schedule";
 
 /**
  * Absence assessment posts to this route and waits on a model call (60s
@@ -64,7 +64,7 @@ export default async function CheckInPage({
       hint: courseError.hint,
     });
     throw new Error(
-      `Check-in couldn't load: ${courseError.message}. If that names a missing column, run supabase/catchup_0019_to_0023.sql in the Supabase SQL editor.`
+      `Check-in couldn't load: ${courseError.message}. If that names a missing column, run the migrations that haven't been applied yet in the Supabase SQL editor (supabase/catchup_0019_to_0023.sql, then 0024 and 0025 — attendance_policy comes from 0025).`
     );
   }
   if (!course) notFound();
@@ -258,10 +258,21 @@ export default async function CheckInPage({
     : await listMyAbsences(courseId);
   const upcomingDates =
     !isProfessor && schedule ? upcomingMeetingDates(schedule, new Date(), 8) : [];
+  // Illness is usually reported after the fact, so recent classes have to be
+  // offerable too — bounded by the same 14 days the server accepts.
+  const pastDates =
+    !isProfessor && schedule ? recentMeetingDates(schedule, new Date(), 14) : [];
   const policy = parseAttendancePolicy(course.attendance_policy);
+  // Has the professor actually set a policy, or are we running on defaults?
+  // Only quote expectations to students when they're really the professor's.
+  const policySet =
+    !!course.attendance_policy &&
+    Object.keys(course.attendance_policy as Record<string, unknown>).length > 0;
   const policyNote = isProfessor
     ? null
-    : `Your professor expects ${policy.advanceNoticeHours} hours' notice for planned absences.`;
+    : policySet
+      ? `Your professor expects ${policy.advanceNoticeHours} hours' notice for planned absences.`
+      : "Give as much notice as you can — planned absences reported early are the easiest to excuse.";
 
   return (
     <div className="grid gap-6">
@@ -300,11 +311,12 @@ export default async function CheckInPage({
       {/* Absences: report one instead of emailing (student), or read the
           already-judged list (professor). */}
       {isProfessor ? (
-        <ScheduledAbsences rows={courseAbsences} />
+        <ScheduledAbsences rows={courseAbsences} policySet={policySet} />
       ) : myEnrollmentId ? (
         <ReportAbsence
           courseId={courseId}
           upcomingDates={upcomingDates}
+          pastDates={pastDates}
           mine={myAbsences}
           policyNote={policyNote}
         />

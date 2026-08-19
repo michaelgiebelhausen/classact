@@ -39,7 +39,14 @@ const FLAG_LABELS: Record<string, string> = {
   no_doc_required_doc: "extra documentation",
 };
 
-export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
+export function ScheduledAbsences({
+  rows,
+  policySet,
+}: {
+  rows: CourseAbsenceView[];
+  /** False when the course still runs on ClassAct's default policy. */
+  policySet: boolean;
+}) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -86,7 +93,9 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
           <CardDescription>
             When a student reports an absence, it lands here already judged
             against your attendance policy — no email, nothing to answer.
-            Set the policy under Setup → Attendance.
+            {policySet
+              ? " Your policy is set; adjust it under Setup → Attendance."
+              : " You haven't set a policy yet, so ClassAct's default applies: most reasons excusable, 48 hours' notice for planned absences. Put your own in under Setup → Attendance."}
           </CardDescription>
         </CardHeader>
       </Card>
@@ -106,6 +115,14 @@ export function ScheduledAbsences({ rows }: { rows: CourseAbsenceView[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        {!policySet && (
+          <p className="rounded-lg border border-dashed p-2 text-xs text-muted-foreground">
+            You haven&apos;t set an attendance policy yet, so these verdicts
+            use ClassAct&apos;s default: most reasons excusable, 48 hours&apos;
+            notice for planned absences, no documentation required. Put your
+            own in under <span className="font-medium">Setup → Attendance</span>.
+          </p>
+        )}
         {appeals.length > 0 && (
           <div className="grid gap-2">
             {appeals.map((a) => (
