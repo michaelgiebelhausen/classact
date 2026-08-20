@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { resolveSettings } from "@/lib/tastegrading";
+import { describeQueryFailure } from "@/lib/dberror";
 import {
   docKindFromPath,
   generateDefaultTaste,
@@ -88,11 +89,13 @@ export async function createAssignment(input: {
     return { ok: false, error: "Upload didn't complete — try again." };
   }
 
-  const { data: course } = await supabase
+  const { data: course, error: courseError } = await supabase
     .from("courses")
     .select("id, professor_id, grading_defaults")
     .eq("id", input.courseId)
     .single();
+  const courseFailure = describeQueryFailure("createAssignment", courseError);
+  if (courseFailure) return { ok: false, error: courseFailure };
   if (!course || course.professor_id !== user.id) {
     return { ok: false, error: "Only the course owner can create assignments." };
   }

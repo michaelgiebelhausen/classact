@@ -18,6 +18,7 @@ import {
   type StudentComparison,
   type WeightedAttribute,
 } from "@/lib/participation";
+import { describeQueryFailure } from "@/lib/dberror";
 import { summarizeFocus, type FocusEventInput } from "@/lib/focus";
 import { summarizeParticipation } from "@/lib/participate";
 import { judgingStats, type DecidedComparison } from "@/lib/tastestats";
@@ -569,11 +570,16 @@ async function requireProfessor(courseId: string) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { supabase, user: null, course: null };
-  const { data: course } = await supabase
+  const { data: course, error: courseError } = await supabase
     .from("courses")
     .select("id, professor_id, participation_weights")
     .eq("id", courseId)
     .single();
+  // Callers turn a null course into an empty cockpit, so a broken query here
+  // renders as "no data" rather than as an error. participation_weights is
+  // exactly the column that went missing, so log what happened — there is no
+  // error channel in this return shape to carry it.
+  describeQueryFailure("participationCockpit", courseError);
   if (!course || course.professor_id !== user.id) {
     return { supabase, user, course: null };
   }

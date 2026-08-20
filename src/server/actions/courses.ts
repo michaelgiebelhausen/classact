@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 import { generateJoinCode } from "@/lib/joincode";
+import { describeQueryFailure } from "@/lib/dberror";
 import {
   createCourseSchema,
   icebreakerFieldsSchema,
@@ -129,13 +130,19 @@ export async function duplicateCourse(input: {
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in first." };
 
-  const { data: source } = await supabase
+  const { data: source, error: sourceError } = await supabase
     .from("courses")
     .select(
       "id, professor_id, term, room_id, icebreaker_fields, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, grading_defaults, participation_weights, attendance_policy"
     )
     .eq("id", input.courseId)
     .single();
+  // This select names columns from five different migrations, so it is the
+  // first thing in the app to break when one hasn't run. Reported as an
+  // ownership failure it sent a professor hunting through the database for
+  // a course they already owned.
+  const sourceFailure = describeQueryFailure("duplicateCourse", sourceError);
+  if (sourceFailure) return { ok: false, error: sourceFailure };
   if (!source || source.professor_id !== user.id) {
     return { ok: false, error: "Only the course owner can copy it." };
   }

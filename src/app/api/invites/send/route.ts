@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { sendInviteEmails, type InviteRecipient } from "@/lib/email";
 import { rateLimit } from "@/lib/ratelimit";
+import { describeQueryFailure } from "@/lib/dberror";
 import { env } from "@/lib/env";
 import {
   DEFAULT_INVITE_MESSAGE,
@@ -43,11 +44,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const { data: course } = await supabase
+  const { data: course, error: courseError } = await supabase
     .from("courses")
     .select("id, name, join_code, professor_id, invite_subject, invite_message")
     .eq("id", parsed.data.courseId)
     .single();
+  // invite_subject/invite_message are the newest columns in the schema, so
+  // this select is the one most likely to outrun a database. A 403 would send
+  // the professor looking for a permissions problem that isn't there.
+  const courseFailure = describeQueryFailure("invites.send", courseError);
+  if (courseFailure) {
+    return NextResponse.json({ error: courseFailure }, { status: 500 });
+  }
   if (!course || course.professor_id !== user.id) {
     return NextResponse.json({ error: "Not course owner" }, { status: 403 });
   }

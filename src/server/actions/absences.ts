@@ -28,6 +28,7 @@ import {
 import { resolveCourseAi } from "@/server/aicreds";
 import { assessAbsence } from "@/server/absenceai";
 import { checkedInElsewhere } from "@/server/absences";
+import { describeQueryFailure } from "@/lib/dberror";
 import { rateLimit } from "@/lib/ratelimit";
 import { sendAbsenceAppealNotification } from "@/lib/email";
 import type { AbsenceRow, AbsenceVerdict } from "@/types/db";
@@ -112,13 +113,18 @@ function needsAdmin(): { ok: false; error: string } | null {
 
 async function loadCourse(courseId: string) {
   const admin = createAdminClient();
-  const { data: course } = await admin
+  const { data: course, error: courseError } = await admin
     .from("courses")
     .select(
       "id, name, professor_id, meeting_days, meeting_start, meeting_end, timezone, term_start, term_end, attendance_policy"
     )
     .eq("id", courseId)
     .maybeSingle();
+  // A null return here reads to callers as "no such course", so a select
+  // broken by an unapplied migration would look like a missing course rather
+  // than a missing column. Nothing in this shape can carry a message; the log
+  // is what makes it findable.
+  describeQueryFailure("absences.loadCourse", courseError);
   if (!course) return null;
   const schedule: CourseSchedule | null = isScheduleComplete({
     days: (course.meeting_days as number[]) ?? [],
