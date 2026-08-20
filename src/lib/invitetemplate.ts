@@ -12,7 +12,8 @@
  */
 
 export const INVITE_TOKENS = [
-  { token: "{name}", label: "Student's name", sample: "Jordan Rivera" },
+  { token: "{first}", label: "Student's first name", sample: "Jordan" },
+  { token: "{name}", label: "Student's full name", sample: "Jordan Rivera" },
   { token: "{course}", label: "Course name", sample: "Marketing 301" },
   { token: "{link}", label: "Join link", sample: "https://classact.college/join/ABC123" },
   { token: "{code}", label: "Join code", sample: "ABC123" },
@@ -25,19 +26,46 @@ export type InviteVars = {
   code: string;
 };
 
-export const DEFAULT_INVITE_SUBJECT = "{course} is using ClassAct — activate your seat";
+/**
+ * The first name to greet a student by.
+ *
+ * "Hi Anneliese Patrice Alvarez-Stratton," reads like a form letter, which is
+ * the opposite of what this email is for. Callers don't pass this separately —
+ * it's derived from {name} at render time so the preview and the sent email
+ * can't disagree about it.
+ *
+ * Rosters arrive in both orders. Canvas exports "Alvarez-Stratton, Anneliese"
+ * while a pasted list is usually "Anneliese Alvarez-Stratton", so a comma is
+ * treated as the marker that the surname came first. Anything we can't read is
+ * returned whole — a greeting with too much name beats a greeting with none.
+ */
+export function firstName(full: string): string {
+  const name = full.trim();
+  if (!name) return name;
+  if (name.includes(",")) {
+    const after = name.slice(name.indexOf(",") + 1).trim();
+    if (after) return after.split(/\s+/)[0];
+    return name.slice(0, name.indexOf(",")).trim() || name;
+  }
+  return name.split(/\s+/)[0];
+}
+
+export const DEFAULT_INVITE_SUBJECT = "{course} is using ClassAct — join the class";
 
 export const DEFAULT_INVITE_MESSAGE = [
-  `Hi {name},`,
+  `Hi {first},`,
   ``,
-  `Your class {course} uses ClassAct for seat check-in.`,
+  // One paragraph, one line: a hard-wrapped plain-text email keeps its breaks
+  // on a phone, where they land mid-sentence. Let the mail client wrap it.
+  `We'll be using ClassAct in {course} this semester. It runs during lecture — you'll check in when you arrive, follow the slides on your own screen, take notes, answer questions, and keep up with your group's work, all in one place.`,
+  ``,
   `Join with this link — it takes about two minutes:`,
   ``,
   `{link}`,
   ``,
   `Your join code (if asked): {code}`,
   ``,
-  `Tap your seat, meet the people next to you, and get on with your day.`,
+  `Set it up before our next class so you're ready to go.`,
 ].join("\n");
 
 /** Generous enough for a chatty professor, tight enough to bound the payload. */
@@ -52,9 +80,13 @@ export const INVITE_MESSAGE_MAX = 5000;
  * named "{code} Lab" should stay that, not turn into the join code.
  */
 export function renderInvite(template: string, vars: InviteVars): string {
+  const values: Record<string, string> = {
+    ...vars,
+    first: firstName(vars.name),
+  };
   return template.replace(
-    /\{(name|course|link|code)\}/g,
-    (_match, key: keyof InviteVars) => vars[key]
+    /\{(first|name|course|link|code)\}/g,
+    (_match, key: string) => values[key]
   );
 }
 

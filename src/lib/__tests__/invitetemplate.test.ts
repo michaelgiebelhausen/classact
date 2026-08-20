@@ -4,6 +4,7 @@ import {
   DEFAULT_INVITE_SUBJECT,
   INVITE_MESSAGE_MAX,
   INVITE_SUBJECT_MAX,
+  firstName,
   renderInvite,
   validateInvite,
   type InviteVars,
@@ -41,17 +42,45 @@ describe("renderInvite", () => {
     expect(out).toBe("Welcome to {code} Lab");
   });
 
+  it("greets by first name only", () => {
+    // "Hi Jordan Rivera," is the form-letter register the greeting is meant
+    // to avoid, so {first} is derived rather than left to the caller.
+    expect(renderInvite("Hi {first},", VARS)).toBe("Hi Jordan,");
+  });
+
   it("renders the shipped default with no tokens left behind", () => {
     const out = renderInvite(DEFAULT_INVITE_MESSAGE, VARS);
-    expect(out).toContain("Hi Jordan Rivera,");
+    expect(out).toContain("Hi Jordan,");
     expect(out).toContain("https://classact.college/join/ABC123");
-    expect(out).not.toMatch(/\{(name|course|link|code)\}/);
+    expect(out).not.toMatch(/\{(first|name|course|link|code)\}/);
   });
 
   it("renders the default subject", () => {
     expect(renderInvite(DEFAULT_INVITE_SUBJECT, VARS)).toBe(
-      "Marketing 301 is using ClassAct — activate your seat"
+      "Marketing 301 is using ClassAct — join the class"
     );
+  });
+});
+
+describe("firstName", () => {
+  it("takes the first word of a plain name", () => {
+    expect(firstName("Jordan Rivera")).toBe("Jordan");
+    expect(firstName("Anneliese Patrice Alvarez-Stratton")).toBe("Anneliese");
+  });
+
+  it("reads Canvas's surname-first export", () => {
+    expect(firstName("Alvarez-Stratton, Anneliese Patrice")).toBe("Anneliese");
+    expect(firstName("Le, Aeris")).toBe("Aeris");
+  });
+
+  it("returns a one-word name whole", () => {
+    expect(firstName("Prince")).toBe("Prince");
+  });
+
+  it("falls back to the whole name rather than greeting nobody", () => {
+    expect(firstName("Rivera,")).toBe("Rivera");
+    expect(firstName("  Jordan  ")).toBe("Jordan");
+    expect(firstName("")).toBe("");
   });
 });
 
