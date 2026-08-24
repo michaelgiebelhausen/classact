@@ -90,7 +90,8 @@ async function build(
   const { data: enrollments, error } = await admin
     .from("enrollments")
     .select("id, roster_name, profile_id, roster_photo_path")
-    .eq("course_id", courseId);
+    .eq("course_id", courseId)
+    .neq("status", "dropped");
 
   // supabase-js reports query failures as a value, not a throw. Reading only
   // `data` would turn a transient database error into an empty directory —

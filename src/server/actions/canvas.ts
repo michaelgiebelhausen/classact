@@ -8,9 +8,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { PHOTO_BUCKET } from "@/lib/storage";
 import { isConfigured } from "@/lib/env";
 import { resolveCanvasCreds, type CanvasCreds } from "@/server/canvascreds";
+import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import { phoneticsForNames } from "@/server/phonetics";
 import type { ActionResult } from "@/server/actions/auth";
-import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 
 interface CanvasUser {
   id: number;
@@ -299,7 +299,6 @@ export async function syncCanvasRoster(input: {
       }))
     );
     if (error) return { ok: false, error: "Import failed — try again." };
-    invalidateCourseDirectory(course.id);
   }
 
   // A dropped student who's back in Canvas re-added the class: reactivate
@@ -316,6 +315,9 @@ export async function syncCanvasRoster(input: {
         dropped_at: null,
       })
       .eq("id", e.id);
+  }
+  if (fresh.length > 0 || returning.length > 0) {
+    invalidateCourseDirectory(course.id);
   }
 
   // Roster rows Canvas no longer lists — surfaced for the professor to
@@ -443,6 +445,7 @@ export async function markDropped(input: {
     return { ok: false, error: "Couldn't update the roster — try again." };
   }
 
+  invalidateCourseDirectory(course.id);
   revalidatePath(`/course/${course.id}/setup`);
   return { ok: true, data: { dropped: (updated ?? []).length } };
 }
