@@ -93,6 +93,53 @@ export async function sendInviteEmails(
   return results;
 }
 
+/** One student's set-a-password rescue, before the copy is rendered. */
+export type RecoveryRecipient = {
+  enrollmentId: string;
+  to: string;
+  /** Greeting name; the same first-name rule as invites is applied by caller. */
+  firstName: string;
+  courseName: string;
+  /** A /auth/callback?token_hash=… link — works on any device. */
+  link: string;
+};
+
+/**
+ * Email set-a-password links to students who are locked out.
+ *
+ * Deliberately routed through Resend rather than Supabase's built-in mailer.
+ * Supabase's default SMTP is throttled hard enough that a class-sized rescue
+ * would be silently dropped, and the link it generates is a PKCE link — the
+ * exact thing that stranded these students in the first place. The caller
+ * builds a `token_hash` link instead, which carries no device affinity.
+ *
+ * Shares the batch sender with invites, so it inherits the same per-student
+ * receipt and the same rate-limit behaviour.
+ */
+export async function sendRecoveryEmails(
+  recipients: RecoveryRecipient[],
+  courseName: string
+): Promise<InviteSendResult[]> {
+  return sendInviteEmails(
+    recipients.map((r) => ({
+      enrollmentId: r.enrollmentId,
+      to: r.to,
+      subject: `Finish setting up ClassAct for ${courseName}`,
+      text: [
+        `Hi ${r.firstName},`,
+        ``,
+        `It looks like your ClassAct sign-in never finished for ${r.courseName}. That's on us, not you — the confirmation link only worked if you opened it on the same device you signed up on.`,
+        ``,
+        `This link works anywhere. Open it and pick a password:`,
+        ``,
+        r.link,
+        ``,
+        `That's the whole thing — you'll land in the class.`,
+      ].join("\n"),
+    }))
+  );
+}
+
 /**
  * Notify founders that new feedback landed. Best-effort — never throws;
  * the feedback row is already stored before this is called.
