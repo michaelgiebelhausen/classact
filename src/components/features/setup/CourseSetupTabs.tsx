@@ -328,6 +328,31 @@ function ScheduleTab({
 
 /* ---------------- Roster (TASK-022) ---------------- */
 
+/**
+ * Headcount that matches how a professor counts: dropped students are listed
+ * below for the record, but they are not "in the class" — the total is
+ * active + invited only.
+ */
+function RosterCounts({ enrollments }: { enrollments: EnrollmentItem[] }) {
+  const active = enrollments.filter((e) => e.status === "active").length;
+  const invited = enrollments.filter((e) => e.status === "invited").length;
+  const dropped = enrollments.length - active - invited;
+  return (
+    <p className="text-sm text-muted-foreground">
+      <span className="font-medium text-foreground">{active + invited}</span>{" "}
+      {active + invited === 1 ? "student" : "students"} in this class —{" "}
+      {active} active, {invited} invited
+      {dropped > 0 && (
+        <>
+          {" "}
+          · {dropped} dropped ({dropped === 1 ? "isn't" : "aren't"} counted in
+          the total)
+        </>
+      )}
+    </p>
+  );
+}
+
 function RosterTab({
   courseId,
   initial,
@@ -409,6 +434,9 @@ function RosterTab({
             pre-made spot to activate.
           </p>
         ) : (
+          <RosterCounts enrollments={initial} />
+        )}
+        {initial.length > 0 && (
           <Table>
             <TableHeader>
               <TableRow>
