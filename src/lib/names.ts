@@ -180,13 +180,27 @@ export function sortByLastName<T>(people: T[], nameOf: (p: T) => string): T[] {
  * app/auth/join/route.ts), and the check-in directory is serialized into every
  * course member's browser — so the raw value would hand the class a
  * deliverable address for anyone who joined by code without a profile name.
- * The local part still identifies them on the seat map without publishing the
- * address. Anything that isn't an address is returned untouched.
+ *
+ * Such a student is the only case where `profileName` is consulted: they never
+ * had a registrar name to begin with, and the one they entered at onboarding
+ * beats a chopped-up address. A name that came from a roster import stands as
+ * the registrar wrote it, so the professor sees the same name on the seat map
+ * as in their gradebook. Failing both, the local part still identifies someone
+ * without publishing the address.
  */
-export function rosterDisplayName(rosterName: string): string {
-  const at = rosterName.indexOf("@");
-  if (at <= 0) return rosterName;
-  return /^\S+@\S+\.\S+$/.test(rosterName.trim())
-    ? rosterName.slice(0, at)
-    : rosterName;
+export function rosterDisplayName(
+  rosterName: string,
+  profileName?: string | null
+): string {
+  if (!isEmailAddress(rosterName)) return rosterName;
+  return profileName?.trim() || rosterName.slice(0, rosterName.indexOf("@"));
+}
+
+/**
+ * Whether a roster name is really an email address — which is how a student
+ * who joined by course code lands on the roster, having never been imported
+ * with a registrar name.
+ */
+export function isEmailAddress(value: string): boolean {
+  return value.indexOf("@") > 0 && /^\S+@\S+\.\S+$/.test(value.trim());
 }

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { compareByLastName, initialsOf, lastNameOf, rosterDisplayName, sortByLastName } from "@/lib/names";
+import {
+  compareByLastName,
+  initialsOf,
+  isEmailAddress,
+  lastNameOf,
+  rosterDisplayName,
+  sortByLastName,
+} from "@/lib/names";
 
 describe("lastNameOf", () => {
   it("takes the last token, not the second", () => {
@@ -171,5 +178,52 @@ describe("rosterDisplayName", () => {
   it("handles empty and whitespace input without throwing", () => {
     expect(rosterDisplayName("")).toBe("");
     expect(rosterDisplayName("   ")).toBe("   ");
+  });
+
+  it("prefers the name an off-roster joiner gave at onboarding", () => {
+    // Without this they read as "jsmith" to the whole class forever, however
+    // carefully they filled in their profile.
+    expect(rosterDisplayName("jsmith@clemson.edu", "Jordan Smith")).toBe(
+      "Jordan Smith"
+    );
+    expect(rosterDisplayName("jsmith@clemson.edu", "  Jordan Smith  ")).toBe(
+      "Jordan Smith"
+    );
+  });
+
+  it("falls back to the local part when there's no profile name yet", () => {
+    for (const empty of [null, undefined, "", "   "]) {
+      expect(rosterDisplayName("jsmith@clemson.edu", empty)).toBe("jsmith");
+    }
+  });
+
+  it("never lets a profile name override the registrar's", () => {
+    // An imported roster name is what the professor sees in their gradebook;
+    // a student renaming themselves there would be a different feature.
+    expect(rosterDisplayName("Jordan Rivera", "DJ Riv")).toBe("Jordan Rivera");
+    expect(rosterDisplayName("Alvarez-Stratton, Anneliese", "Annie")).toBe(
+      "Alvarez-Stratton, Anneliese"
+    );
+  });
+
+  it("still refuses to publish an address, whatever the profile says", () => {
+    expect(rosterDisplayName("jsmith@clemson.edu", "x@y.com")).not.toBe(
+      "jsmith@clemson.edu"
+    );
+    expect(rosterDisplayName("jsmith@clemson.edu", null)).not.toContain("@");
+  });
+});
+
+describe("isEmailAddress", () => {
+  it("spots the addresses off-roster joins leave in roster_name", () => {
+    expect(isEmailAddress("jsmith@clemson.edu")).toBe(true);
+    expect(isEmailAddress("a.b.c@g.clemson.edu")).toBe(true);
+  });
+
+  it("doesn't mistake ordinary names or stray @ for an address", () => {
+    expect(isEmailAddress("Jordan Rivera")).toBe(false);
+    expect(isEmailAddress("DJ @Nite")).toBe(false);
+    expect(isEmailAddress("@handle")).toBe(false);
+    expect(isEmailAddress("")).toBe(false);
   });
 });

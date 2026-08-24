@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/db";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
-import { rosterDisplayName } from "@/lib/names";
+import { isEmailAddress, rosterDisplayName } from "@/lib/names";
 
 export interface DirectoryEntry {
   name: string;
@@ -100,10 +100,34 @@ async function build(
   if (error) throw new Error(`directory query failed: ${error.message}`);
 
   const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
+
+  // Only students who joined by course code have an email where their name
+  // should be, and only they can be improved by the name they gave at
+  // onboarding. A class imported from a roster asks for nothing extra here.
+  const needName = (enrollments ?? []).filter(
+    (e) => e.profile_id && isEmailAddress(e.roster_name)
+  );
+  const profileNames = new Map<string, string>();
+  if (needName.length > 0) {
+    // Deliberately not fatal, where a failed roster query is: the worst case
+    // is that a handful of people read as `jsmith` for one TTL, and throwing
+    // to avoid that would blank every name and face in the room instead.
+    const { data: profiles } = await admin
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", needName.map((e) => e.profile_id as string));
+    for (const p of profiles ?? []) {
+      if (p.full_name) profileNames.set(p.id, p.full_name);
+    }
+  }
+
   const directory: CourseDirectory = {};
   for (const e of enrollments ?? []) {
     directory[e.id] = {
-      name: rosterDisplayName(e.roster_name),
+      name: rosterDisplayName(
+        e.roster_name,
+        e.profile_id ? profileNames.get(e.profile_id) : null
+      ),
       photoUrl: photoMap.get(e.id)?.[0] ?? null,
     };
   }
