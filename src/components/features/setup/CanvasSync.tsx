@@ -228,6 +228,11 @@ export function CanvasSync({ courseId, connection, link }: Props) {
           result.data.skipped ? `, skipped ${result.data.skipped} already added` : ""
         }.`
       );
+      if (result.data.merged > 0) {
+        toast.message(
+          `Unified ${result.data.merged} student(s) who appeared twice — once from Canvas and once from their university Google sign-in.`
+        );
+      }
       if (result.data.reactivated > 0) {
         toast.message(
           `${result.data.reactivated} previously dropped student(s) re-added the class — welcomed back with their history intact.`

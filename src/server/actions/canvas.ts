@@ -9,6 +9,7 @@ import { PHOTO_BUCKET } from "@/lib/storage";
 import { isConfigured } from "@/lib/env";
 import { resolveCanvasCreds, type CanvasCreds } from "@/server/canvascreds";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
+import { emailAliasOf } from "@/lib/emailalias";
 import { phoneticsForNames } from "@/server/phonetics";
 import type { ActionResult } from "@/server/actions/auth";
 
@@ -220,6 +221,8 @@ export async function syncCanvasRoster(input: {
     photosStored: number;
     total: number;
     reactivated: number;
+    /** Duplicate identities unified via the g.-twin email alias. */
+    merged: number;
     dropCandidates: DropCandidate[];
   }>
 > {
@@ -277,14 +280,67 @@ export async function syncCanvasRoster(input: {
     };
   }
 
-  // Import new roster rows (dupes skipped, same rule as CSV import).
+  // Match Canvas students to roster rows: exactly first, then via the
+  // g.-twin alias (jblind@clemson.edu ↔ jblind@g.clemson.edu). The alias
+  // tier is what keeps a student who signed in with their university Google
+  // account from looking like a second person — and from being offered as a
+  // "drop" while their Canvas-imported twin sits forever un-activated.
   const { data: existing } = await supabase
     .from("enrollments")
-    .select("id, roster_name, roster_email, status, profile_id")
+    .select(
+      "id, roster_name, roster_email, status, profile_id, roster_name_phonetic"
+    )
     .eq("course_id", course.id);
-  const existingEmails = new Set((existing ?? []).map((e) => e.roster_email));
-  const canvasEmails = new Set(roster.students.map((s) => s.email));
-  const fresh = roster.students.filter((s) => !existingEmails.has(s.email));
+  const rows = existing ?? [];
+  const byEmail = new Map(rows.map((e) => [e.roster_email, e]));
+  const matchedIds = new Set<string>();
+  const deletedIds = new Set<string>();
+  const fresh: CanvasStudent[] = [];
+  let merged = 0;
+
+  for (const s of roster.students) {
+    const exact = byEmail.get(s.email);
+    const alias = emailAliasOf(s.email);
+    const twin = alias ? byEmail.get(alias) : undefined;
+    if (exact) matchedIds.add(exact.id);
+    if (twin) matchedIds.add(twin.id);
+
+    if (exact && twin) {
+      // The same student twice: a Canvas import and their Google sign-in.
+      // Keep whichever row a person is attached to; the other must be
+      // unlinked — never activated, so it has no history and its cascading
+      // delete removes nothing but the row itself. Both linked would mean
+      // two real accounts, which isn't ours to guess at — leave them be.
+      const survivor = twin.profile_id && !exact.profile_id ? twin : exact;
+      const loser = survivor === twin ? exact : twin;
+      if (loser.profile_id) continue;
+      const { error: mergeError } = await supabase
+        .from("enrollments")
+        .update({
+          // The official address, which Canvas will keep reporting.
+          roster_email: s.email,
+          roster_name: s.name,
+          roster_name_phonetic:
+            survivor.roster_name_phonetic ?? loser.roster_name_phonetic,
+        })
+        .eq("id", survivor.id);
+      if (mergeError) continue; // keep the pair; next resync retries
+      await supabase.from("enrollments").delete().eq("id", loser.id);
+      deletedIds.add(loser.id);
+      merged++;
+    } else if (twin) {
+      // Only the Google-sign-in row exists (joined by code before any
+      // Canvas import). Adopt the official identity so future syncs match
+      // exactly — and their placeholder email-as-name becomes a real name.
+      await supabase
+        .from("enrollments")
+        .update({ roster_email: s.email, roster_name: s.name })
+        .eq("id", twin.id);
+      merged++;
+    } else if (!exact) {
+      fresh.push(s);
+    }
+  }
 
   if (fresh.length > 0) {
     // Best-effort AI pronunciation defaults (never blocks the sync).
@@ -304,8 +360,9 @@ export async function syncCanvasRoster(input: {
   // A dropped student who's back in Canvas re-added the class: reactivate
   // with history intact. Straight to 'active' if they'd already linked an
   // account; otherwise back to 'invited' like any roster row.
-  const returning = (existing ?? []).filter(
-    (e) => e.status === "dropped" && canvasEmails.has(e.roster_email)
+  const returning = rows.filter(
+    (e) =>
+      e.status === "dropped" && matchedIds.has(e.id) && !deletedIds.has(e.id)
   );
   for (const e of returning) {
     await supabase
@@ -316,15 +373,18 @@ export async function syncCanvasRoster(input: {
       })
       .eq("id", e.id);
   }
-  if (fresh.length > 0 || returning.length > 0) {
+  if (fresh.length > 0 || returning.length > 0 || merged > 0) {
     invalidateCourseDirectory(course.id);
   }
 
   // Roster rows Canvas no longer lists — surfaced for the professor to
   // confirm, never dropped here. CSV-only additions and students in
   // unsynced sections show up too, which is exactly why it's a preview.
-  const dropCandidates: DropCandidate[] = (existing ?? [])
-    .filter((e) => e.status !== "dropped" && !canvasEmails.has(e.roster_email))
+  const dropCandidates: DropCandidate[] = rows
+    .filter(
+      (e) =>
+        e.status !== "dropped" && !matchedIds.has(e.id) && !deletedIds.has(e.id)
+    )
     .map((e) => ({ enrollmentId: e.id, name: e.roster_name, email: e.roster_email }));
 
   // Remember the linkage so the next resync is one click.
@@ -393,6 +453,7 @@ export async function syncCanvasRoster(input: {
       photosStored,
       total: roster.students.length,
       reactivated: returning.length,
+      merged,
       dropCandidates,
     },
   };

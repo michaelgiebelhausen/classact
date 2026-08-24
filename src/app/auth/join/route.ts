@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { env, isConfigured } from "@/lib/env";
 import { normalizeJoinCode } from "@/lib/joincode";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
+import { emailAliasOf } from "@/lib/emailalias";
 
 /**
  * Post-auth landing for students joining by code:
@@ -51,12 +52,20 @@ export async function GET(request: NextRequest) {
 
   const email = user.email.toLowerCase();
 
-  const { data: existing } = await admin
+  // A university Google sign-in can carry the g.-twin of the address Canvas
+  // put on the roster (jblind@g.clemson.edu vs jblind@clemson.edu). Match
+  // either, exact first, so the student lands on their imported roster row
+  // instead of spawning a duplicate the professor later mistakes for a drop.
+  const alias = emailAliasOf(email);
+  const { data: matches } = await admin
     .from("enrollments")
-    .select("id, profile_id, status")
+    .select("id, profile_id, status, roster_email")
     .eq("course_id", course.id)
-    .eq("roster_email", email)
-    .maybeSingle();
+    .in("roster_email", alias ? [email, alias] : [email]);
+  const existing =
+    (matches ?? []).find((m) => m.roster_email === email) ??
+    (matches ?? [])[0] ??
+    null;
 
   if (existing) {
     if (existing.profile_id !== user.id || existing.status !== "active") {
