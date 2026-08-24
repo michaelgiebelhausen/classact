@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { resolveEnrollmentPhotos } from "@/lib/storage";
+import { getCourseDirectory } from "@/lib/coursedirectory";
 import {
   formatSchedule,
   isMeetingWindow,
@@ -231,31 +231,21 @@ export default async function CheckInPage({
 
   // Directory (names + one photo, no emails) via admin — the RLS course
   // check above already proved membership.
-  const directory: Record<string, DirectoryEntry> = {};
-  if (isConfigured.supabaseAdmin) {
-    const admin = createAdminClient();
-    const { data: enrollments } = await admin
-      .from("enrollments")
-      .select("id, roster_name, profile_id, roster_photo_path")
-      .eq("course_id", courseId);
-
-    const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
-    for (const e of enrollments ?? []) {
-      directory[e.id] = {
-        name: e.roster_name,
-        photoUrl: photoMap.get(e.id)?.[0] ?? null,
-      };
-    }
-  }
+  //
+  // Shared per course rather than rebuilt per viewer: the result is identical
+  // for everyone in the room, and it costs two queries plus a storage call
+  // that signs a URL for every photo in the class. Thirty students arriving
+  // at once used to run thirty copies of that inside the same few seconds.
+  const directory: Record<string, DirectoryEntry> = isConfigured.supabaseAdmin
+    ? await getCourseDirectory(createAdminClient(), courseId)
+    : {};
 
   // Absences. The professor gets the whole judged list; a student gets their
   // own reports plus the next few class dates to pick from.
-  const courseAbsences: CourseAbsenceView[] = isProfessor
-    ? await listCourseAbsences(courseId)
-    : [];
-  const myAbsences: MyAbsenceView[] = isProfessor
-    ? []
-    : await listMyAbsences(courseId);
+  const [courseAbsences, myAbsences]: [CourseAbsenceView[], MyAbsenceView[]] =
+    isProfessor
+      ? [await listCourseAbsences(courseId), []]
+      : [[], await listMyAbsences(courseId)];
   const upcomingDates =
     !isProfessor && schedule ? upcomingMeetingDates(schedule, new Date(), 8) : [];
   // Illness is usually reported after the fact, so recent classes have to be

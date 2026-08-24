@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { parseRosterCsv } from "@/lib/csv";
 import { rateLimit } from "@/lib/ratelimit";
 import { phoneticsForNames } from "@/server/phonetics";
+import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 
 const bodySchema = z.object({
   courseId: z.string().uuid(),
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+    invalidateCourseDirectory(course.id);
   }
 
   return NextResponse.json({

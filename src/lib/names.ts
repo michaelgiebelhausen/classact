@@ -172,3 +172,21 @@ export function initialsOf(fullName: string): string {
 export function sortByLastName<T>(people: T[], nameOf: (p: T) => string): T[] {
   return [...people].sort((a, b) => compareByLastName(nameOf(a), nameOf(b)));
 }
+
+/**
+ * A roster name safe to show the whole class.
+ *
+ * Off-roster joiners get `roster_name` defaulted to their email address (see
+ * app/auth/join/route.ts), and the check-in directory is serialized into every
+ * course member's browser — so the raw value would hand the class a
+ * deliverable address for anyone who joined by code without a profile name.
+ * The local part still identifies them on the seat map without publishing the
+ * address. Anything that isn't an address is returned untouched.
+ */
+export function rosterDisplayName(rosterName: string): string {
+  const at = rosterName.indexOf("@");
+  if (at <= 0) return rosterName;
+  return /^\S+@\S+\.\S+$/.test(rosterName.trim())
+    ? rosterName.slice(0, at)
+    : rosterName;
+}

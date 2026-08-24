@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  compareByLastName,
-  initialsOf,
-  lastNameOf,
-  sortByLastName,
-} from "@/lib/names";
+import { compareByLastName, initialsOf, lastNameOf, rosterDisplayName, sortByLastName } from "@/lib/names";
 
 describe("lastNameOf", () => {
   it("takes the last token, not the second", () => {
@@ -146,5 +141,35 @@ describe("sortByLastName", () => {
       "Emma Mabel Roethke",
     ]);
     expect(roster[0].name).toBe("Emma Mabel Roethke");
+  });
+});
+
+describe("rosterDisplayName", () => {
+  it("keeps an ordinary roster name untouched", () => {
+    expect(rosterDisplayName("Jordan Rivera")).toBe("Jordan Rivera");
+    expect(rosterDisplayName("Alvarez-Stratton, Anneliese")).toBe(
+      "Alvarez-Stratton, Anneliese"
+    );
+  });
+
+  it("reduces an email address to its local part", () => {
+    // Off-roster joiners get roster_name = their email (auth/join/route.ts),
+    // and this map is serialized to every classmate's browser.
+    expect(rosterDisplayName("jsmith@clemson.edu")).toBe("jsmith");
+    expect(rosterDisplayName("a.b.c@g.clemson.edu")).toBe("a.b.c");
+  });
+
+  it("never publishes a deliverable address to the class", () => {
+    expect(rosterDisplayName("jsmith@clemson.edu")).not.toContain("@");
+  });
+
+  it("leaves a stray @ that isn't an address alone", () => {
+    expect(rosterDisplayName("DJ @Nite")).toBe("DJ @Nite");
+    expect(rosterDisplayName("@handle")).toBe("@handle");
+  });
+
+  it("handles empty and whitespace input without throwing", () => {
+    expect(rosterDisplayName("")).toBe("");
+    expect(rosterDisplayName("   ")).toBe("   ");
   });
 });

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { env, isConfigured } from "@/lib/env";
 import { normalizeJoinCode } from "@/lib/joincode";
+import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 
 /**
  * Post-auth landing for students joining by code:
@@ -74,6 +75,10 @@ export async function GET(request: NextRequest) {
       status: "invited",
     });
   }
+
+  // The roster just changed — without this a student who joins mid-class
+  // renders nameless on everyone else's seat map until the cache expires.
+  invalidateCourseDirectory(course.id);
 
   return NextResponse.redirect(new URL("/onboarding", env.siteUrl));
 }

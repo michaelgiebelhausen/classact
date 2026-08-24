@@ -10,6 +10,7 @@ import { isConfigured } from "@/lib/env";
 import { resolveCanvasCreds, type CanvasCreds } from "@/server/canvascreds";
 import { phoneticsForNames } from "@/server/phonetics";
 import type { ActionResult } from "@/server/actions/auth";
+import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 
 interface CanvasUser {
   id: number;
@@ -281,6 +282,7 @@ export async function syncCanvasRoster(input: {
       }))
     );
     if (error) return { ok: false, error: "Import failed — try again." };
+    invalidateCourseDirectory(course.id);
   }
 
   // Port Canvas photos: for every synced student who has a Canvas photo but no
