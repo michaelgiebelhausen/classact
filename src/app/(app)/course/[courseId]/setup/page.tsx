@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
 import { CourseNameEditor } from "@/components/features/setup/CourseNameEditor";
 import { getCanvasConnection } from "@/server/actions/canvassettings";
+import { getActivationRoster } from "@/server/actions/activation";
 import { parseAttendancePolicy } from "@/lib/absences";
 import type { DeckListItem } from "@/components/features/follow/DeckManager";
 import type { QuestionItem } from "@/components/features/follow/DeckQuestions";
@@ -46,6 +47,11 @@ export default async function CourseSetupPage({
   if (course.professor_id !== profile.id) redirect(`/course/${courseId}`);
 
   const canvasConnection = await getCanvasConnection();
+  // Activation state needs auth.users, so it comes from a server action rather
+  // than the page's own query. Fetched here rather than in the client so the
+  // panel renders with data instead of fetching after mount.
+  const activationResult = await getActivationRoster(courseId);
+  const activation = activationResult.ok ? activationResult.data?.rows ?? [] : [];
   const [{ count: seatCount }, { data: enrollments }] = await Promise.all([
     supabase
       .from("seats")
@@ -189,6 +195,7 @@ export default async function CourseSetupPage({
           termEnd: course.term_end,
         }}
         enrollments={enrollments ?? []}
+        activation={activation}
         siteUrl={env.siteUrl}
         canvasConnection={canvasConnection}
         decks={decks}

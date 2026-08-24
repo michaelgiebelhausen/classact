@@ -22,7 +22,16 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user || !user.email) {
-    return NextResponse.redirect(new URL("/login?error=expired", env.siteUrl));
+    // No session yet. That isn't an expired link — it's a student who hasn't
+    // signed up. Send them to the join form for this code (which is where the
+    // invite email pointed) rather than to a login page claiming their link
+    // died. Without a code there is nothing to join, so /login is honest.
+    return NextResponse.redirect(
+      new URL(
+        code ? `/join/${encodeURIComponent(code)}` : "/login",
+        env.siteUrl
+      )
+    );
   }
   if (!code || !isConfigured.supabaseAdmin) {
     return NextResponse.redirect(new URL("/dashboard", env.siteUrl));

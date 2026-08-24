@@ -102,6 +102,31 @@ You already created the "Class Act" project at supabase.com. Now:
    - Site URL: `http://localhost:3000` for now (change to your live URL later)
    - Redirect URLs: add `http://localhost:3000/**`
 
+7. **Email templates — REQUIRED, and easy to miss.** Dashboard →
+   Authentication → Email Templates. Edit **Confirm signup** and **Reset
+   password** so the link is:
+
+   ```
+   {{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=signup
+   ```
+
+   (use `type=recovery` in the Reset password template).
+
+   **Why this matters more than it looks.** The stock templates use
+   `{{ .ConfirmationURL }}`, which routes through Supabase's `/auth/v1/verify`
+   and hands back a PKCE `code`. `@supabase/ssr` pins `flowType: "pkce"` and
+   cannot be talked out of it, and PKCE keeps a `code_verifier` **cookie in the
+   browser that started the sign-up**. A student who signs up on a laptop and
+   opens the email on their phone therefore *cannot* complete sign-in — the
+   link is fine, the cookie is simply not there. In the Fall 2026 pilot this
+   stranded 37 students who had confirmed their email and still could not get
+   in.
+
+   A `token_hash` link is verified with `verifyOtp`, which reads no local
+   storage at all, so it opens on any device. `/auth/callback` accepts both
+   shapes, so switching the templates is safe and links already sitting in
+   inboxes keep working.
+
 ## 3. First local run (5 min)
 
 ```

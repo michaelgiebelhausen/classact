@@ -27,6 +27,8 @@ import {
 import { updateIcebreakerFields, updateSchedule } from "@/server/actions/courses";
 import type { CanvasConnectionView } from "@/server/actions/canvassettings";
 import { CanvasSync } from "@/components/features/setup/CanvasSync";
+import { ActivationPanel } from "@/components/features/setup/ActivationPanel";
+import type { ActivationRow } from "@/server/actions/activation";
 import {
   DeckManager,
   type DeckListItem,
@@ -86,6 +88,7 @@ interface Props {
   };
   schedule: ScheduleValue;
   enrollments: EnrollmentItem[];
+  activation: ActivationRow[];
   siteUrl: string;
   canvasConnection: CanvasConnectionView;
   /** Slide decks for this course — same manager the Follow Along page uses. */
@@ -99,6 +102,7 @@ export function CourseSetupTabs({
   roomSetup,
   schedule,
   enrollments,
+  activation,
   siteUrl,
   canvasConnection,
   decks,
@@ -144,7 +148,12 @@ export function CourseSetupTabs({
         <IcebreakerTab courseId={course.id} initialKeys={course.icebreaker_fields} />
       </TabsContent>
       <TabsContent value="invite">
-        <InviteTab course={course} enrollments={enrollments} siteUrl={siteUrl} />
+        <InviteTab
+          course={course}
+          enrollments={enrollments}
+          activation={activation}
+          siteUrl={siteUrl}
+        />
       </TabsContent>
     </Tabs>
   );
@@ -498,10 +507,12 @@ type SendOutcome = {
 function InviteTab({
   course,
   enrollments,
+  activation,
   siteUrl,
 }: {
   course: Props["course"];
   enrollments: EnrollmentItem[];
+  activation: ActivationRow[];
   siteUrl: string;
 }) {
   const router = useRouter();
@@ -688,46 +699,12 @@ function InviteTab({
           )}
         </div>
 
-        <div className="grid gap-2">
-          <Label>Who&apos;s been emailed</Label>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Student</TableHead>
-                <TableHead>Invite</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {enrollments.map((e) => (
-                <TableRow key={e.id}>
-                  <TableCell>
-                    <div>{e.roster_name}</div>
-                    <div className="text-xs text-muted-foreground">{e.roster_email}</div>
-                  </TableCell>
-                  <TableCell>
-                    {e.status === "active" ? (
-                      <Badge>Activated</Badge>
-                    ) : e.invite_error ? (
-                      <div>
-                        <Badge variant="destructive">Failed</Badge>
-                        <div className="text-xs text-muted-foreground">{e.invite_error}</div>
-                      </div>
-                    ) : e.invited_at ? (
-                      <div>
-                        <Badge variant="secondary">Emailed</Badge>
-                        <div className="text-xs text-muted-foreground">
-                          {new Date(e.invited_at).toLocaleString()}
-                        </div>
-                      </div>
-                    ) : (
-                      <Badge variant="outline">Not emailed yet</Badge>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <ActivationPanel
+          courseId={course.id}
+          rows={activation}
+          onReinvite={send}
+          reinviting={sending}
+        />
       </CardContent>
     </Card>
   );

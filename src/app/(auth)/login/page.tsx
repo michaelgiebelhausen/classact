@@ -20,6 +20,7 @@ import {
   signInWithPassword,
   signUpWithPassword,
 } from "@/server/actions/auth";
+import { CALLBACK_MESSAGES, reasonFromQuery } from "@/lib/authreason";
 
 /**
  * Password-first sign-in (magic links stay as the fallback for accounts
@@ -47,7 +48,15 @@ const HEADINGS: Record<Mode, { title: string; blurb: string }> = {
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const urlError = searchParams.get("error");
+  // `reason` is the current vocabulary; `error` is what older emails still
+  // carry. reasonFromQuery translates the legacy values rather than dropping
+  // them, which is how the old `?error=missing` came to render nothing.
+  const callbackReason = reasonFromQuery(
+    searchParams.get("reason"),
+    searchParams.get("error")
+  );
+  // Set when a link died mid-join: keep the student headed for their class.
+  const nextAfterAuth = searchParams.get("next") ?? "/dashboard";
   const [mode, setMode] = useState<Mode>("password");
   const [role, setRole] = useState<"professor" | "student">("professor");
   const [email, setEmail] = useState("");
@@ -68,7 +77,7 @@ function LoginForm() {
       const result = await signInWithPassword({ email, password });
       setBusy(false);
       if (result.ok) {
-        router.push("/dashboard");
+        router.push(nextAfterAuth);
         router.refresh();
       } else {
         toast.error(result.error);
@@ -122,10 +131,15 @@ function LoginForm() {
         <CardDescription>{sent ?? HEADINGS[mode].blurb}</CardDescription>
       </CardHeader>
       <CardContent>
-        {urlError === "expired" && !sent && (
-          <p className="mb-3 text-sm text-destructive">
-            That link expired — request a new one.
-          </p>
+        {callbackReason && !sent && (
+          <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-sm font-medium text-destructive">
+              {CALLBACK_MESSAGES[callbackReason].headline}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {CALLBACK_MESSAGES[callbackReason].help}
+            </p>
+          </div>
         )}
         {sent ? (
           <p className="text-sm text-muted-foreground">
