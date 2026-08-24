@@ -5,6 +5,7 @@ import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { getSignedDeckUrl, resolveEnrollmentPhotos } from "@/lib/storage";
 import { summarizeFocus, summarizeFocusByEnrollment } from "@/lib/focus";
+import { tableFootprint, type RoomLayout, type TableFootprint } from "@/lib/roomlayout";
 import {
   Card,
   CardDescription,
@@ -39,7 +40,7 @@ export default async function FollowAlongPage({
   // RLS membership gate — non-members get null.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, professor_id")
+    .select("id, name, professor_id, room_id")
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -177,6 +178,25 @@ export default async function FollowAlongPage({
         .limit(1)
         .maybeSingle(),
     ]);
+    // Furniture lives in the layout, not on the seat rows — without it the
+    // presenter draws every table as an oval, and a table against a wall
+    // drifts off it.
+    const tableShapes = new Map<string, "rect" | "oval" | "ushape">();
+    const tableFootprints = new Map<string, TableFootprint>();
+    if (course.room_id) {
+      const { data: room } = await supabase
+        .from("rooms")
+        .select("layout")
+        .eq("id", course.room_id)
+        .maybeSingle();
+      const layout = room?.layout as unknown as RoomLayout | null;
+      for (const section of layout?.sections ?? []) {
+        if (section.kind !== "table") continue;
+        tableShapes.set(section.id, section.shape);
+        const footprint = tableFootprint(section);
+        if (footprint) tableFootprints.set(section.id, footprint);
+      }
+    }
     const seats = (seatRows ?? []).map((s) => ({
       id: s.id,
       label: s.label,
@@ -184,6 +204,8 @@ export default async function FollowAlongPage({
       y: s.y ?? (s.row_index ?? 0) * 1.25,
       section: s.section ?? "main",
       tableId: s.table_id ?? null,
+      tableShape: s.table_id ? tableShapes.get(s.table_id) : undefined,
+      tableFootprint: s.table_id ? tableFootprints.get(s.table_id) : undefined,
     }));
     const occupants: Record<string, string> = {};
     if (liveSession) {

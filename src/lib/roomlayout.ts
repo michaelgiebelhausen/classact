@@ -13,6 +13,13 @@ import type { SeatRelation } from "@/types/db";
  * rows link radially, and table seats link around the perimeter. The result
  * is persisted on each seat row, so check-in verification is a lookup —
  * no geometry re-derivation at request time.
+ *
+ * Two gaps, two policies. A table edge left empty (`sideSeats`, e.g. the side
+ * pushed against a wall) is furniture, not absence: the seats flanking it sit
+ * around a corner from each other and stay linked, so the ring closes as long
+ * as at most one of the four edges is bare. A seat removed in fine-tune
+ * (`removedSeats`) is a real hole — a broken chair — and its links are pruned
+ * rather than healed over.
  */
 
 export type LayoutType =
@@ -23,6 +30,13 @@ export type LayoutType =
   | "pods";
 
 export type TableShape = "rect" | "oval" | "ushape";
+
+/**
+ * Chairs on each edge of a rect table, clockwise from the front:
+ * `[front, right, back, left]`. A `0` is an edge nobody sits at — the side
+ * shoved against a wall. Sums to the table's seat count.
+ */
+export type SideSeats = [number, number, number, number];
 
 export interface RowsSection {
   id: string;
@@ -59,6 +73,12 @@ export interface TableSection {
    * the perimeter.
    */
   endSeats?: number;
+  /**
+   * Rect tables: chairs per edge, clockwise from the front. Says exactly
+   * which side is against the wall, where `endSeats` can only say how the
+   * ends differ from the sides. Authoritative over `endSeats` when present.
+   */
+  sideSeats?: SideSeats;
   /** Center in seat units. Omitted = auto-placed (single table at origin). */
   cx?: number;
   cy?: number;
@@ -274,13 +294,37 @@ interface TableSeatDraft {
   closed: boolean; // closed perimeter (rect/oval) wraps; a U doesn't
 }
 
+/** Seat offsets centered on an edge of the given length. */
+function spreadAlong(count: number, length: number): number[] {
+  return Array.from({ length: count }, (_, i) => ((i + 0.5) / count - 0.5) * length);
+}
+
+/** How many of a rect table's four edges actually seat someone. */
+function occupiedSides(sideSeats: SideSeats): number {
+  return sideSeats.filter((n) => n > 0).length;
+}
+
 /** Points around a table perimeter, spaced ~1 seat unit, starting at the front. */
 function tablePerimeterPoints(
   shape: TableShape,
   seats: number,
-  endSeats?: number
+  endSeats?: number,
+  sideSeats?: SideSeats
 ): Array<{ x: number; y: number }> {
   const points: Array<{ x: number; y: number }> = [];
+  if (shape === "rect" && sideSeats) {
+    // Each edge seated exactly as told, so a table against a wall keeps its
+    // real shape instead of spreading chairs into the side nobody can reach.
+    const [front, right, back, left] = sideSeats;
+    const w = Math.max(front, back, 1) * TABLE_SEAT_SPACING;
+    const h = Math.max(left, right, 1) * TABLE_SEAT_SPACING;
+    // Clockwise from the front edge, so perimeter neighbor links stay sane.
+    for (const x of spreadAlong(front, w)) points.push({ x, y: -h / 2 });
+    for (const y of spreadAlong(right, h)) points.push({ x: w / 2, y });
+    for (const x of spreadAlong(back, w).reverse()) points.push({ x, y: h / 2 });
+    for (const y of spreadAlong(left, h).reverse()) points.push({ x: -w / 2, y });
+    return points;
+  }
   if (shape === "oval") {
     // Ellipse sized so the perimeter fits `seats` at comfortable spacing.
     const circumference = Math.max(seats, 3) * TABLE_SEAT_SPACING;
@@ -302,13 +346,11 @@ function tablePerimeterPoints(
       const back = sides - front;
       const w = Math.max(front, back, 1) * TABLE_SEAT_SPACING;
       const h = Math.max(endSeats, 1) * TABLE_SEAT_SPACING;
-      const spread = (count: number, length: number) =>
-        Array.from({ length: count }, (_, i) => ((i + 0.5) / count - 0.5) * length);
       // Clockwise from the front edge so perimeter neighbor links stay sane.
-      for (const x of spread(front, w)) points.push({ x, y: -h / 2 });
-      for (const y of spread(endSeats, h)) points.push({ x: w / 2, y });
-      for (const x of spread(back, w).reverse()) points.push({ x, y: h / 2 });
-      for (const y of spread(endSeats, h).reverse()) points.push({ x: -w / 2, y });
+      for (const x of spreadAlong(front, w)) points.push({ x, y: -h / 2 });
+      for (const y of spreadAlong(endSeats, h)) points.push({ x: w / 2, y });
+      for (const x of spreadAlong(back, w).reverse()) points.push({ x, y: h / 2 });
+      for (const y of spreadAlong(endSeats, h).reverse()) points.push({ x: -w / 2, y });
       return points;
     }
     const perimeter = Math.max(seats, 4) * TABLE_SEAT_SPACING;
@@ -361,12 +403,60 @@ function tablePerimeterPoints(
   return points;
 }
 
+/**
+ * Where a table's furniture sits relative to its seats, in seat units.
+ * A renderer can normally infer the table from the ring of chairs around it,
+ * but once an edge is bare the chairs bunch to one side and the guess drifts
+ * off the wall. `dx`/`dy` step from the centroid of the table's seats to the
+ * table's real center; `rx`/`ry` are its half-extents. Null means the seats
+ * describe the table well enough on their own.
+ */
+export interface TableFootprint {
+  dx: number;
+  dy: number;
+  rx: number;
+  ry: number;
+}
+
+export function tableFootprint(section: TableSection): TableFootprint | null {
+  const sideSeats = section.shape === "rect" ? section.sideSeats : undefined;
+  if (!sideSeats) return null;
+  const [front, right, back, left] = sideSeats;
+  const points = tablePerimeterPoints("rect", section.seats, undefined, sideSeats);
+  if (points.length === 0) return null;
+  const meanX = points.reduce((a, p) => a + p.x, 0) / points.length;
+  const meanY = points.reduce((a, p) => a + p.y, 0) / points.length;
+  return {
+    // Points are measured from the table's center, so stepping back by the
+    // seat centroid is exactly the correction a renderer needs.
+    dx: round2(-meanX),
+    dy: round2(-meanY),
+    rx: round2((Math.max(front, back, 1) * TABLE_SEAT_SPACING) / 2),
+    ry: round2((Math.max(left, right, 1) * TABLE_SEAT_SPACING) / 2),
+  };
+}
+
 const SEAT_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 function buildTableSection(section: TableSection): TableSeatDraft[] {
-  const points = tablePerimeterPoints(section.shape, section.seats, section.endSeats);
+  const sideSeats = section.shape === "rect" ? section.sideSeats : undefined;
+  const points = tablePerimeterPoints(
+    section.shape,
+    section.seats,
+    section.endSeats,
+    sideSeats
+  );
   const cx = section.cx ?? 0;
   const cy = section.cy ?? 0;
+  // A U never wraps. A rect with a bare edge still wraps while three sides
+  // are seated — the pair flanking the wall are around a corner from each
+  // other. Strip it to two edges or one and it's a bench, so leave it open.
+  const closed =
+    section.shape === "ushape"
+      ? false
+      : sideSeats
+        ? occupiedSides(sideSeats) >= 3
+        : true;
   return points.map((p, i) => ({
     label: section.labelPrefix
       ? `${section.labelPrefix}${SEAT_LETTERS[i]}`
@@ -375,7 +465,7 @@ function buildTableSection(section: TableSection): TableSeatDraft[] {
     y: p.y + cy,
     tableId: section.id,
     order: i,
-    closed: section.shape !== "ushape",
+    closed,
   }));
 }
 
@@ -524,6 +614,30 @@ function round2(n: number): number {
 export interface BlockSpec {
   front: number;
   back: number;
+  /**
+   * Seats in each row, front row first — for rooms that step rather than
+   * taper (four rows of 8, then four of 9). Authoritative over the
+   * front/back interpolation when present; resized to fit the row count.
+   */
+  rows?: number[];
+}
+
+/**
+ * One pod in a tables room. `n` is the number students read on their seat
+ * labels (`3A`, `3B`…) and survives its neighbors being deleted, so removing
+ * a table never renumbers anyone else's chair.
+ */
+export interface PodSpec {
+  n: number;
+  /** Center in seat units. */
+  x: number;
+  y: number;
+  /** Overrides the room-wide seats-per-table. */
+  seats?: number;
+  /** Overrides the room-wide table shape. */
+  shape?: TableShape;
+  /** Rect pods: chairs per edge — how a table against a wall is described. */
+  sideSeats?: SideSeats;
 }
 
 export type PresetParams =
@@ -562,6 +676,12 @@ export type PresetParams =
       shape?: TableShape;
       /** Per-table centers in seat units; index-aligned with table order. */
       positions?: Array<{ x: number; y: number }>;
+      /**
+       * Per-table placement and overrides, authoritative when present.
+       * Materialized from tables/positions the first time the professor
+       * touches a pod, after which table numbers are stable.
+       */
+      podList?: PodSpec[];
     };
 
 /** Evenly spaced aisle positions across the widest row. */
@@ -653,12 +773,69 @@ export function blocksForParams(params: PresetParams): BlockSpec[] {
   return [];
 }
 
-/** Rows × blocks grid: each block interpolated independently front to back. */
+/**
+ * Stretch or trim an explicit per-row list to a row count, repeating the back
+ * row when the room grows — so adding a row to a stepped block extends the
+ * step instead of throwing the professor's numbers away.
+ */
+export function resizeRowWidths(widths: number[], rows: number): number[] {
+  if (rows <= 0) return [];
+  const last = widths[widths.length - 1] ?? 0;
+  return Array.from({ length: rows }, (_, r) => widths[r] ?? last);
+}
+
+/** What a block seats in each row: its explicit list, or the front→back ramp. */
+export function blockRowWidths(block: BlockSpec, rows: number): number[] {
+  if (block.rows?.length) {
+    return resizeRowWidths(
+      block.rows.map((n) => Math.max(0, Math.round(n))),
+      rows
+    );
+  }
+  return interpolateRows(rows, block.front, block.back);
+}
+
+/** Rows × blocks grid: each block sized independently, row by row. */
 function blocksToRowBlocks(rows: number, blocks: BlockSpec[]): number[][] {
-  const perBlock = blocks.map((b) => interpolateRows(rows, b.front, b.back));
+  const perBlock = blocks.map((b) => blockRowWidths(b, rows));
   return Array.from({ length: rows }, (_, r) =>
     perBlock.map((counts) => Math.max(0, counts[r])).filter((n) => n > 0)
   );
+}
+
+/**
+ * Every pod in a tables room, with stable numbers. Falls back to the legacy
+ * auto-grid when the professor hasn't touched a table yet, so a room saved
+ * before per-pod editing rebuilds to exactly the same seats.
+ */
+export function podsFromParams(params: PresetParams): PodSpec[] {
+  if (params.type !== "pods") return [];
+  if (params.podList?.length) return params.podList;
+  const cell = podCellSize(params.seatsPerTable);
+  const tcols = Math.ceil(Math.sqrt(params.tables));
+  return Array.from({ length: params.tables }, (_, i) => {
+    const placed = params.positions?.[i];
+    return {
+      n: i + 1,
+      x: placed ? placed.x : (i % tcols) * cell,
+      y: placed ? placed.y : Math.floor(i / tcols) * (cell * 0.8),
+    };
+  });
+}
+
+/** A pod's shape and seating once the room-wide defaults have been applied. */
+export function resolvePod(
+  pod: PodSpec,
+  defaults: { seats: number; shape: TableShape }
+): { shape: TableShape; seats: number; sideSeats?: SideSeats } {
+  const shape = pod.shape ?? defaults.shape;
+  // Edge seating only means anything on a rectangle; a round table that once
+  // had it keeps the numbers dormant in case the professor switches back.
+  const sideSeats = shape === "rect" ? pod.sideSeats : undefined;
+  const seats = sideSeats
+    ? sideSeats.reduce((a, b) => a + b, 0)
+    : (pod.seats ?? defaults.seats);
+  return { shape, seats, sideSeats };
 }
 
 export function buildLayout(params: PresetParams): RoomLayout {
@@ -793,7 +970,9 @@ export function buildLayout(params: PresetParams): RoomLayout {
       ];
       if (params.balconyRows > 0) {
         // The balcony repeats the back row's shape, block for block.
-        const balconyRow = blocks.map((b) => b.back).filter((n) => n > 0);
+        const balconyRow = blocks
+          .map((b) => blockRowWidths(b, params.rows)[params.rows - 1] ?? 0)
+          .filter((n) => n > 0);
         const balconyBlocks = Array.from(
           { length: params.balconyRows },
           () => [...balconyRow]
@@ -812,29 +991,50 @@ export function buildLayout(params: PresetParams): RoomLayout {
       return { version: 1, type: "auditorium", sections, params: { ...params } };
     }
     case "pods": {
-      // Auto-arranged on a grid until the professor drags them; then the
-      // saved positions win, table by table.
-      const seats = params.seatsPerTable;
-      const shape = params.shape ?? "oval";
-      const cell = podCellSize(seats);
-      const tcols = Math.ceil(Math.sqrt(params.tables));
-      const sections: LayoutSection[] = Array.from(
-        { length: params.tables },
-        (_, i) => {
-          const placed = params.positions?.[i];
-          return {
-            id: `t${i + 1}`,
-            kind: "table" as const,
-            shape,
-            seats,
-            labelPrefix: `${i + 1}`,
-            cx: placed ? placed.x : (i % tcols) * cell,
-            cy: placed ? placed.y : Math.floor(i / tcols) * (cell * 0.8),
-          };
-        }
-      );
+      // Auto-arranged on a grid until the professor touches a table; then
+      // the pod list wins, table by table, each keeping its own number.
+      const defaults = {
+        seats: params.seatsPerTable,
+        shape: params.shape ?? ("oval" as TableShape),
+      };
+      const sections: LayoutSection[] = podsFromParams(params).map((pod) => {
+        const { shape, seats, sideSeats } = resolvePod(pod, defaults);
+        return {
+          id: `t${pod.n}`,
+          kind: "table" as const,
+          shape,
+          seats,
+          sideSeats,
+          labelPrefix: `${pod.n}`,
+          cx: pod.x,
+          cy: pod.y,
+        };
+      });
       return { version: 1, type: "pods", sections, params: { ...params } };
     }
+  }
+}
+
+/**
+ * The removals that still refer to a real seat after a reshape. Editing one
+ * corner of a room used to wipe every seat the professor had marked broken;
+ * now only the labels that genuinely stopped existing are dropped. If the
+ * layout can't be built at all, nothing is dropped — a half-typed number
+ * shouldn't cost anyone their work.
+ */
+export function surviveRemovals(
+  layout: RoomLayout,
+  removed: Iterable<string>
+): string[] {
+  const wanted = [...new Set(removed)];
+  if (wanted.length === 0) return [];
+  try {
+    const labels = new Set(
+      layoutToSeats({ ...layout, removedSeats: [] }).map((p) => p.label)
+    );
+    return wanted.filter((label) => labels.has(label));
+  } catch {
+    return wanted;
   }
 }
 
@@ -908,6 +1108,23 @@ export function validateLayout(layout: RoomLayout): string | null {
       }
       if (!["rect", "oval", "ushape"].includes(s.shape)) {
         return "Unknown table shape.";
+      }
+      if (s.sideSeats !== undefined) {
+        if (s.shape !== "rect") {
+          return "Only a rectangular table can seat each side separately.";
+        }
+        if (s.endSeats !== undefined) {
+          return "Set a table's seats per side or per end, not both.";
+        }
+        if (!Array.isArray(s.sideSeats) || s.sideSeats.length !== 4) {
+          return "A table has four sides.";
+        }
+        if (s.sideSeats.some((n) => !Number.isInteger(n) || n < 0 || n > 13)) {
+          return "Each side of a table seats 0–13 people.";
+        }
+        if (s.sideSeats.reduce((a, b) => a + b, 0) !== s.seats) {
+          return "The seats on each side don't add up to the table's total.";
+        }
       }
       if (
         s.endSeats !== undefined &&

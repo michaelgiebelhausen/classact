@@ -24,13 +24,22 @@ import {
 } from "@/components/ui/dialog";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
 import {
+  blockRowWidths,
   blocksForParams,
   buildLayout,
   layoutToSeats,
   podCellSize,
+  podsFromParams,
+  resizeRowWidths,
+  resolvePod,
+  surviveRemovals,
+  tableFootprint,
   type BlockSpec,
+  type PodSpec,
   type PresetParams,
   type RoomLayout,
+  type SideSeats,
+  type TableFootprint,
   type TableShape,
 } from "@/lib/roomlayout";
 import {
@@ -133,6 +142,7 @@ export function RoomDesigner({
     () => new Set(initialLayout?.removedSeats ?? [])
   );
   const [editSeats, setEditSeats] = useState(false);
+  const [editingTableId, setEditingTableId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
   const [drafting, setDrafting] = useState(false);
@@ -143,15 +153,20 @@ export function RoomDesigner({
   >(null);
 
   // Full layout (removals shown ghosted, not hidden) drives the preview.
-  const previewSeats = useMemo(() => {
+  const preview = useMemo(() => {
     const source = selectedHit ? selectedHit.layout : buildLayout(params);
-    // Table shape rides along so the map draws real furniture, not always an oval.
+    // Shape and footprint ride along so the map draws real furniture, not
+    // always an oval and not always centered on the chairs.
     const shapeByTable = new Map<string, TableShape>();
+    const footprintByTable = new Map<string, TableFootprint>();
     for (const s of source.sections) {
-      if (s.kind === "table") shapeByTable.set(s.id, s.shape);
+      if (s.kind !== "table") continue;
+      shapeByTable.set(s.id, s.shape);
+      const fp = tableFootprint(s);
+      if (fp) footprintByTable.set(s.id, fp);
     }
     try {
-      return layoutToSeats({ ...source, removedSeats: [] }).map((p, i) => ({
+      const seats = layoutToSeats({ ...source, removedSeats: [] }).map((p, i) => ({
         id: `${p.label}-${i}`,
         label: p.label,
         x: p.x,
@@ -159,22 +174,54 @@ export function RoomDesigner({
         section: p.section,
         tableId: p.tableId,
         tableShape: p.tableId ? shapeByTable.get(p.tableId) : undefined,
+        tableFootprint: p.tableId ? footprintByTable.get(p.tableId) : undefined,
       }));
-    } catch {
-      return [];
+      return { seats, error: null as string | null };
+    } catch (e) {
+      // Say why the preview went blank — an empty row is easy to type and
+      // impossible to see.
+      return {
+        seats: [] as Array<{
+          id: string;
+          label: string;
+          x: number;
+          y: number;
+          section: string;
+          tableId: string | null;
+          tableShape?: TableShape;
+          tableFootprint?: TableFootprint;
+        }>,
+        error: e instanceof Error ? e.message : "That room can't be drawn.",
+      };
     }
   }, [params, selectedHit]);
+  const previewSeats = preview.seats;
 
   const activeSeatCount = selectedHit
     ? selectedHit.capacity
     : previewSeats.filter((s) => !removedSeats.has(s.label)).length;
 
-  function updateParams(patch: Partial<PresetParams>, keepRemovals = false) {
+  function updateParams(patch: Partial<PresetParams>) {
     setSelectedHit(null);
-    // Reshaping the room invalidates seat labels, so removals are dropped —
-    // but sliding a table around keeps every label intact.
-    if (!keepRemovals) setRemovedSeats(new Set());
-    setParams((prev) => ({ ...prev, ...patch }) as PresetParams);
+    const next = { ...params, ...patch } as PresetParams;
+    setParams(next);
+    // Reshaping used to wipe every seat marked broken. Keep the ones whose
+    // seat still exists — only labels the new shape no longer has are lost.
+    if (removedSeats.size === 0) return;
+    let survivors: string[];
+    try {
+      survivors = surviveRemovals(buildLayout(next), removedSeats);
+    } catch {
+      return;
+    }
+    const dropped = removedSeats.size - survivors.length;
+    if (dropped <= 0) return;
+    setRemovedSeats(new Set(survivors));
+    toast.message(
+      dropped === 1
+        ? "1 seat you'd marked out of use isn't in this shape any more."
+        : `${dropped} seats you'd marked out of use aren't in this shape any more.`
+    );
   }
 
   // --- Column blocks: the seats between aisles, each sized on its own ---
@@ -183,15 +230,32 @@ export function RoomDesigner({
     [params, selectedHit]
   );
   const tiered = params.type === "auditorium" || params.type === "horseshoe";
+  const rowCount =
+    params.type === "classroom" ||
+    params.type === "horseshoe" ||
+    params.type === "auditorium"
+      ? params.rows
+      : 0;
 
   function setBlocks(next: BlockSpec[]) {
     const cleaned = next
-      .map((b) => ({
-        front: clampInt(b.front, 0, 40),
-        back: clampInt(tiered ? b.back : b.front, 0, 40),
-      }))
+      .map((b) => {
+        // An explicit per-row list is the truth; front/back mirror its ends
+        // so the simple inputs never contradict what's drawn.
+        const rows = b.rows?.length
+          ? resizeRowWidths(
+              b.rows.map((n) => clampInt(n, 0, 40)),
+              rowCount
+            )
+          : undefined;
+        const front = rows ? rows[0] : clampInt(b.front, 0, 40);
+        const back = rows
+          ? rows[rows.length - 1]
+          : clampInt(tiered ? b.back : b.front, 0, 40);
+        return rows ? { front, back, rows } : { front, back };
+      })
       // A block with no seats in any row isn't a section, it's nothing.
-      .filter((b) => b.front > 0 || b.back > 0);
+      .filter((b) => (b.rows ? b.rows.some((n) => n > 0) : b.front > 0 || b.back > 0));
     if (cleaned.length === 0) return;
     // Horseshoe reads frontSeats/backSeats as well as blocks — keep them in
     // step so its single block stays editable.
@@ -221,60 +285,115 @@ export function RoomDesigner({
     setBlocks(blocks.filter((_, i) => i !== index));
   }
 
-  // --- Pods: drag to place, X to remove ---
-  const podPositions = useMemo(() => {
-    if (params.type !== "pods") return [];
-    const cell = podCellSize(params.seatsPerTable);
-    const cols = Math.ceil(Math.sqrt(params.tables));
-    return Array.from({ length: params.tables }, (_, i) => {
-      const placed = params.positions?.[i];
-      return placed
-        ? { ...placed }
-        : { x: (i % cols) * cell, y: Math.floor(i / cols) * (cell * 0.8) };
-    });
-  }, [params]);
+  // --- Row by row: for rooms that step rather than taper ---
+  function setBlockRow(index: number, row: number, value: number) {
+    const widths = blockRowWidths(blocks[index], rowCount);
+    widths[row] = clampInt(value, 0, 40);
+    editBlock(index, { rows: widths });
+  }
+
+  function toggleBlockRows(index: number, on: boolean) {
+    const widths = blockRowWidths(blocks[index], rowCount);
+    setBlocks(
+      blocks.map((b, i) => {
+        if (i !== index) return b;
+        // Opening starts from whatever is drawn now, so nothing jumps;
+        // closing keeps the ends and lets the ramp fill back in.
+        return on
+          ? { ...b, rows: widths }
+          : { front: widths[0] ?? 0, back: widths[widths.length - 1] ?? 0 };
+      })
+    );
+  }
+
+  // --- Pods: drag to place, pencil to set up, X to remove ---
+  const pods = useMemo(() => podsFromParams(params), [params]);
+  const podDefaults =
+    params.type === "pods"
+      ? { seats: params.seatsPerTable, shape: params.shape ?? ("oval" as TableShape) }
+      : { seats: 0, shape: "oval" as TableShape };
+  const editingPod = pods.find((p) => `t${p.n}` === editingTableId) ?? null;
+
+  /**
+   * Writing the pod list makes table numbers permanent: from here on a table
+   * keeps its number when its neighbors are deleted, so nobody's seat label
+   * changes out from under them. `positions` is index-aligned and can't
+   * express that, so it retires.
+   */
+  function setPods(next: PodSpec[]) {
+    updateParams({
+      podList: next,
+      tables: next.length,
+      positions: undefined,
+    } as Partial<PresetParams>);
+  }
+
+  function podNumber(tableId: string): number | null {
+    const n = Number(tableId.replace(/^t/, ""));
+    return Number.isInteger(n) && pods.some((p) => p.n === n) ? n : null;
+  }
 
   function moveTable(tableId: string, dx: number, dy: number) {
-    if (params.type !== "pods") return;
-    const index = Number(tableId.replace(/^t/, "")) - 1;
-    if (!Number.isInteger(index) || index < 0 || index >= podPositions.length) return;
+    const n = podNumber(tableId);
+    if (n === null) return;
     // One committed delta per drag, so the half-unit snap lands on the final
     // position instead of rounding each mouse increment away to nothing.
-    const next = podPositions.map((p, i) =>
-      i === index
-        ? {
-            x: Math.round(Math.max(0, p.x + dx) * 2) / 2,
-            y: Math.round(Math.max(0, p.y + dy) * 2) / 2,
-          }
-        : p
+    setPods(
+      pods.map((p) =>
+        p.n === n
+          ? {
+              ...p,
+              x: Math.round(Math.max(0, p.x + dx) * 2) / 2,
+              y: Math.round(Math.max(0, p.y + dy) * 2) / 2,
+            }
+          : p
+      )
     );
-    updateParams({ positions: next } as Partial<PresetParams>, true);
   }
 
   function removeTable(tableId: string) {
-    if (params.type !== "pods" || params.tables <= 1) return;
-    const index = Number(tableId.replace(/^t/, "")) - 1;
-    if (!Number.isInteger(index) || index < 0) return;
-    updateParams({
-      tables: params.tables - 1,
-      positions: podPositions.filter((_, i) => i !== index),
-    } as Partial<PresetParams>);
+    const n = podNumber(tableId);
+    if (n === null || pods.length <= 1) return;
+    if (editingTableId === tableId) setEditingTableId(null);
+    setPods(pods.filter((p) => p.n !== n));
   }
 
   function addTable() {
-    if (params.type !== "pods" || params.tables >= 20) return;
+    if (params.type !== "pods" || pods.length >= 20) return;
+    // Lowest number nobody is using — deleting table 3 frees "3" to come back
+    // rather than pushing everyone else up.
+    const used = new Set(pods.map((p) => p.n));
+    let n = 1;
+    while (used.has(n)) n++;
     const cell = podCellSize(params.seatsPerTable);
-    const last = podPositions[podPositions.length - 1] ?? { x: 0, y: 0 };
-    updateParams({
-      tables: params.tables + 1,
-      positions: [...podPositions, { x: last.x + cell, y: last.y }],
-    } as Partial<PresetParams>);
+    const last = pods[pods.length - 1] ?? { x: 0, y: 0 };
+    setPods([...pods, { n, x: last.x + cell, y: last.y }]);
+  }
+
+  function editPod(n: number, patch: Partial<PodSpec>) {
+    setPods(pods.map((p) => (p.n === n ? { ...p, ...patch } : p)));
+  }
+
+  /** Chairs per edge for a pod, defaulting to how it's seated right now. */
+  function podSides(pod: PodSpec): SideSeats {
+    if (pod.sideSeats) return [...pod.sideSeats] as SideSeats;
+    // Spread the table's seats around all four edges, so switching to
+    // per-side seating starts from the table they already have.
+    const total = resolvePod({ ...pod, sideSeats: undefined }, podDefaults).seats;
+    const base = Math.floor(total / 4);
+    const extra = total - base * 4;
+    // Leftovers go to the long sides first — that's where chairs really go.
+    const order = [0, 2, 1, 3];
+    const sides: SideSeats = [base, base, base, base];
+    for (let i = 0; i < extra; i++) sides[order[i]] += 1;
+    return sides;
   }
 
   function switchPreset(type: PresetParams["type"]) {
     setSelectedHit(null);
     setRemovedSeats(new Set());
     setEditSeats(false);
+    setEditingTableId(null);
     setAiDrafted(false);
     setAiNotes("");
     setParams(defaultParams(type));
@@ -304,6 +423,7 @@ export function RoomDesigner({
       setSelectedHit(null);
       setRemovedSeats(new Set());
       setEditSeats(false);
+      setEditingTableId(null);
       setParams(result.data.params);
       setAiDrafted(true);
       setAiNotes(result.data.notes);
@@ -630,13 +750,23 @@ export function RoomDesigner({
                           + Add table
                         </Button>
                         <span className="text-sm text-muted-foreground">
-                          {params.tables} · drag to arrange
+                          {pods.length} · drag to arrange, ✎ to set one up
                         </span>
                       </div>
                     </div>
                   </>
                 )}
               </div>
+
+              {editingPod && (
+                <PodEditor
+                  pod={editingPod}
+                  defaults={podDefaults}
+                  sides={podSides(editingPod)}
+                  onPatch={(patch) => editPod(editingPod.n, patch)}
+                  onDone={() => setEditingTableId(null)}
+                />
+              )}
 
               {/* Blocks sit above the seats they control, in the same order. */}
               {blocks.length > 0 && (
@@ -690,43 +820,67 @@ export function RoomDesigner({
                             </button>
                           )}
                         </div>
-                        <div className="flex gap-2">
-                          <label className="grid gap-1 text-xs text-muted-foreground">
-                            {tiered ? "Front row" : "Seats"}
-                            <Input
-                              type="number"
-                              min={0}
-                              max={40}
-                              value={block.front}
-                              onChange={(e) =>
-                                editBlock(i, {
-                                  front: clampInt(Number(e.target.value), 0, 40),
-                                })
-                              }
-                              className="w-20"
-                            />
-                          </label>
-                          {tiered && (
+                        {block.rows?.length ? (
+                          <RowWidths
+                            widths={blockRowWidths(block, rowCount)}
+                            onChange={(row, value) => setBlockRow(i, row, value)}
+                          />
+                        ) : (
+                          <div className="flex gap-2">
                             <label className="grid gap-1 text-xs text-muted-foreground">
-                              Back row
+                              {tiered ? "Front row" : "Seats"}
                               <Input
                                 type="number"
                                 min={0}
                                 max={40}
-                                value={block.back}
+                                value={block.front}
                                 onChange={(e) =>
                                   editBlock(i, {
-                                    back: clampInt(Number(e.target.value), 0, 40),
+                                    front: clampInt(Number(e.target.value), 0, 40),
                                   })
                                 }
                                 className="w-20"
                               />
                             </label>
-                          )}
-                        </div>
+                            {tiered && (
+                              <label className="grid gap-1 text-xs text-muted-foreground">
+                                Back row
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={40}
+                                  value={block.back}
+                                  onChange={(e) =>
+                                    editBlock(i, {
+                                      back: clampInt(Number(e.target.value), 0, 40),
+                                    })
+                                  }
+                                  className="w-20"
+                                />
+                              </label>
+                            )}
+                          </div>
+                        )}
+                        {rowCount > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleBlockRows(i, !block.rows?.length)}
+                            className="text-left text-[11px] text-muted-foreground underline underline-offset-2 hover:text-primary"
+                          >
+                            {block.rows?.length
+                              ? "Back to front and back row"
+                              : "Set each row separately"}
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
+                  {blocks.some((b) => b.rows?.length) && (
+                    <p className="text-xs text-muted-foreground">
+                      Each row is exactly what you type — for rooms that step
+                      partway back instead of widening a seat at a time.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -763,6 +917,12 @@ export function RoomDesigner({
             </div>
           )}
 
+          {preview.error && !selectedHit && (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              {preview.error}
+            </p>
+          )}
+
           {previewSeats.length > 0 && (
             <div className="overflow-x-auto rounded-lg border bg-muted/20 p-4">
               <RoomMap
@@ -774,10 +934,19 @@ export function RoomDesigner({
                     : undefined
                 }
                 onTableRemove={
-                  params.type === "pods" && !selectedHit && !editSeats && params.tables > 1
+                  params.type === "pods" && !selectedHit && !editSeats && pods.length > 1
                     ? removeTable
                     : undefined
                 }
+                onTableEdit={
+                  params.type === "pods" && !selectedHit && !editSeats
+                    ? (tableId) =>
+                        setEditingTableId((current) =>
+                          current === tableId ? null : tableId
+                        )
+                    : undefined
+                }
+                activeTableId={editingTableId}
                 onSeatTap={(seat) => {
                   if (!editSeats || selectedHit) return;
                   setRemovedSeats((prev) => {
@@ -823,6 +992,219 @@ export function RoomDesigner({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+const SEAT_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/** Seats in every row of one block, for rooms that step rather than taper. */
+function RowWidths({
+  widths,
+  onChange,
+}: {
+  widths: number[];
+  onChange: (row: number, value: number) => void;
+}) {
+  return (
+    <div className="grid max-h-56 gap-1 overflow-y-auto pr-1">
+      {widths.map((width, r) => (
+        <label key={r} className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="w-10 shrink-0 tabular-nums">
+            Row {SEAT_LETTERS[r] ?? r + 1}
+          </span>
+          <Input
+            type="number"
+            min={0}
+            max={40}
+            value={width}
+            onChange={(e) => onChange(r, Number(e.target.value))}
+            className="h-8 w-16"
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One table's own settings. Most rooms never need this — it exists for the
+ * table shoved against a wall, where the chairs only go on three sides and a
+ * room-wide "seats per table" can't describe what's actually there.
+ */
+function PodEditor({
+  pod,
+  defaults,
+  sides,
+  onPatch,
+  onDone,
+}: {
+  pod: PodSpec;
+  defaults: { seats: number; shape: TableShape };
+  sides: SideSeats;
+  onPatch: (patch: Partial<PodSpec>) => void;
+  onDone: () => void;
+}) {
+  const resolved = resolvePod(pod, defaults);
+  const bySide = Boolean(resolved.sideSeats);
+  const customized =
+    pod.seats !== undefined || pod.shape !== undefined || pod.sideSeats !== undefined;
+  const setSide = (index: number, value: number) => {
+    const next = [...sides] as SideSeats;
+    next[index] = clampInt(value, 0, 13);
+    onPatch({ sideSeats: next });
+  };
+  const seated = sides.filter((n) => n > 0).length;
+  const lastLetter = SEAT_LETTERS[Math.max(0, resolved.seats - 1)];
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium">Table {pod.n}</span>
+        <div className="flex items-center gap-2">
+          {customized && (
+            <button
+              type="button"
+              onClick={() =>
+                onPatch({ seats: undefined, shape: undefined, sideSeats: undefined })
+              }
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-primary"
+            >
+              Match the other tables
+            </button>
+          )}
+          <Button type="button" size="sm" variant="outline" onClick={onDone}>
+            Done
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="grid gap-2">
+          <Label>Shape</Label>
+          <div className="flex gap-1">
+            {(["oval", "rect"] as TableShape[]).map((shape) => (
+              <Button
+                key={shape}
+                type="button"
+                size="sm"
+                variant={resolved.shape === shape ? "default" : "outline"}
+                onClick={() => onPatch({ shape })}
+              >
+                {shape === "oval" ? "Round" : "Rectangle"}
+              </Button>
+            ))}
+          </div>
+        </div>
+        {!bySide && (
+          <label className="grid gap-1 text-xs text-muted-foreground">
+            Seats
+            <Input
+              type="number"
+              min={2}
+              max={20}
+              value={resolved.seats}
+              onChange={(e) => onPatch({ seats: clampInt(Number(e.target.value), 2, 20) })}
+              className="w-20"
+            />
+          </label>
+        )}
+        {resolved.shape === "rect" && (
+          <Button
+            type="button"
+            size="sm"
+            variant={bySide ? "secondary" : "outline"}
+            onClick={() =>
+              onPatch({ sideSeats: bySide ? undefined : sides, seats: undefined })
+            }
+          >
+            {bySide ? "Seat it evenly again" : "Seat each side separately"}
+          </Button>
+        )}
+      </div>
+
+      {bySide && (
+        <div className="flex flex-wrap items-center gap-6">
+          <div className="grid gap-2">
+            <span className="text-xs text-muted-foreground">Against a wall</span>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  { label: "Left", value: [2, 2, 2, 0] },
+                  { label: "Right", value: [2, 0, 2, 2] },
+                  { label: "Front", value: [0, 2, 2, 2] },
+                  { label: "Back", value: [2, 2, 0, 2] },
+                ] as Array<{ label: string; value: SideSeats }>
+              ).map((preset) => (
+                <Button
+                  key={preset.label}
+                  type="button"
+                  size="sm"
+                  variant={
+                    sides.every((n, i) => n === preset.value[i]) ? "secondary" : "outline"
+                  }
+                  onClick={() => onPatch({ sideSeats: [...preset.value] as SideSeats })}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 items-center gap-2">
+            <span />
+            <SideInput label="Front" value={sides[0]} onChange={(v) => setSide(0, v)} />
+            <span />
+            <SideInput label="Left" value={sides[3]} onChange={(v) => setSide(3, v)} />
+            <span className="mx-auto h-10 w-12 rounded border border-dashed border-muted-foreground/50 bg-muted/40" />
+            <SideInput label="Right" value={sides[1]} onChange={(v) => setSide(1, v)} />
+            <span />
+            <SideInput label="Back" value={sides[2]} onChange={(v) => setSide(2, v)} />
+            <span />
+          </div>
+          <div className="grid gap-1 text-xs text-muted-foreground">
+            <span>
+              Put a <span className="font-medium">0</span> on the side against the
+              wall — nobody sits there, and nobody looks for a chair that
+              isn&apos;t.
+            </span>
+            <span>
+              Seats {pod.n}A–{pod.n}
+              {lastLetter}, clockwise from the front-left.
+            </span>
+            {seated < 3 && (
+              <span>
+                With {seated === 0 ? "no" : seated} side{seated === 1 ? "" : "s"}{" "}
+                seated this is a bench, so the two end chairs aren&apos;t
+                treated as neighbors.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SideInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="grid justify-items-center gap-1 text-[11px] text-muted-foreground">
+      {label}
+      <Input
+        type="number"
+        min={0}
+        max={13}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-8 w-16 text-center"
+      />
+    </label>
   );
 }
 

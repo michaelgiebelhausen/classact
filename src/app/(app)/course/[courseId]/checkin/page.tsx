@@ -35,7 +35,7 @@ import { recentMeetingDates, upcomingMeetingDates } from "@/lib/schedule";
  * function would be killed before the fetch could give up gracefully.
  */
 export const maxDuration = 90;
-import type { RoomLayout } from "@/lib/roomlayout";
+import { tableFootprint, type RoomLayout, type TableFootprint } from "@/lib/roomlayout";
 
 export default async function CheckInPage({
   params,
@@ -139,9 +139,11 @@ export default async function CheckInPage({
     .from("seats")
     .select("id, label, row_index, col_index, x, y, section, table_id, neighbors")
     .eq("course_id", courseId);
-  // Table shape lives in the room's layout, not on the seat rows — without
-  // it every table draws as an oval however it was designed.
+  // Table furniture lives in the room's layout, not on the seat rows —
+  // without it every table draws as an oval however it was designed, and a
+  // table against a wall draws centered on its chairs instead of on the wall.
   const tableShapes = new Map<string, "rect" | "oval" | "ushape">();
+  const tableFootprints = new Map<string, TableFootprint>();
   if (course.room_id) {
     const { data: room } = await supabase
       .from("rooms")
@@ -150,7 +152,10 @@ export default async function CheckInPage({
       .maybeSingle();
     const layout = room?.layout as unknown as RoomLayout | null;
     for (const section of layout?.sections ?? []) {
-      if (section.kind === "table") tableShapes.set(section.id, section.shape);
+      if (section.kind !== "table") continue;
+      tableShapes.set(section.id, section.shape);
+      const footprint = tableFootprint(section);
+      if (footprint) tableFootprints.set(section.id, footprint);
     }
   }
 
@@ -162,6 +167,7 @@ export default async function CheckInPage({
     section: s.section ?? "main",
     tableId: s.table_id ?? null,
     tableShape: s.table_id ? tableShapes.get(s.table_id) : undefined,
+    tableFootprint: s.table_id ? tableFootprints.get(s.table_id) : undefined,
     neighbors: s.neighbors ?? {},
   }));
 

@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  blockRowWidths,
   blocksForParams,
   buildLayout,
   gridLayout,
   layoutToSeats,
+  podsFromParams,
+  resizeRowWidths,
+  resolvePod,
+  surviveRemovals,
   validateLayout,
+  type PodSpec,
   type RoomLayout,
+  type SideSeats,
 } from "@/lib/roomlayout";
 
 function byLabel(layout: RoomLayout) {
@@ -375,6 +382,298 @@ describe("layoutToSeats — tables", () => {
       for (const b of t2)
         minCross = Math.min(minCross, Math.hypot(a.x - b.x, a.y - b.y));
     expect(minCross).toBeGreaterThan(1.2);
+  });
+});
+
+describe("wall tables — a rect pushed against the wall", () => {
+  // Three sides of two, one side bare: the arrangement that started this.
+  const wallPod = (sideSeats: SideSeats): RoomLayout =>
+    buildLayout({
+      type: "pods",
+      tables: 1,
+      seatsPerTable: 6,
+      shape: "rect",
+      podList: [{ n: 1, x: 0, y: 0, shape: "rect", sideSeats }],
+    });
+
+  it("seats exactly the number told on each occupied edge, none on the bare one", () => {
+    const seats = layoutToSeats(wallPod([2, 2, 2, 0]));
+    expect(seats).toHaveLength(6);
+    expect(seats.map((s) => s.label)).toEqual(["1A", "1B", "1C", "1D", "1E", "1F"]);
+    const minX = Math.min(...seats.map((s) => s.x));
+    const maxX = Math.max(...seats.map((s) => s.x));
+    const minY = Math.min(...seats.map((s) => s.y));
+    const maxY = Math.max(...seats.map((s) => s.y));
+    const on = (pick: (s: (typeof seats)[number]) => number, value: number) =>
+      seats.filter((s) => Math.abs(pick(s) - value) < 0.01);
+    expect(on((s) => s.y, minY)).toHaveLength(2); // front edge
+    expect(on((s) => s.x, maxX)).toHaveLength(2); // right edge
+    expect(on((s) => s.y, maxY)).toHaveLength(2); // back edge
+    // The left edge is the wall: nobody sits flush against it. The two seats
+    // at minX are the outermost front and back chairs, not a seated edge.
+    const onWall = on((s) => s.x, minX);
+    expect(onWall.every((s) => Math.abs(s.y - minY) < 0.01 || Math.abs(s.y - maxY) < 0.01)).toBe(
+      true
+    );
+  });
+
+  it("the ring closes around the bare edge — the flanking pair are neighbors", () => {
+    const seats = byLabel(wallPod([2, 2, 2, 0]));
+    // Walk the whole ring: every seat links both ways, 1F back round to 1A.
+    expect(seats.get("1A")!.neighbors.right).toBe("1B");
+    expect(seats.get("1C")!.neighbors.right).toBe("1D");
+    expect(seats.get("1E")!.neighbors.right).toBe("1F");
+    expect(seats.get("1F")!.neighbors.right).toBe("1A");
+    expect(seats.get("1A")!.neighbors.left).toBe("1F");
+    // Perimeter tables never claim front/back.
+    expect(seats.get("1A")!.neighbors.front).toBeUndefined();
+  });
+
+  it("strip it to two edges and it stops wrapping — that's a bench, not a ring", () => {
+    const corner = byLabel(wallPod([2, 2, 0, 0]));
+    expect(corner.get("1A")!.neighbors.left).toBeUndefined();
+    expect(corner.get("1D")!.neighbors.right).toBeUndefined();
+    expect(corner.get("1B")!.neighbors.right).toBe("1C");
+    const bench = byLabel(wallPod([4, 0, 0, 0]));
+    expect(bench.get("1A")!.neighbors.left).toBeUndefined();
+    expect(bench.get("1D")!.neighbors.right).toBeUndefined();
+  });
+
+  it("mixed rooms: wall tables and round tables side by side", () => {
+    const layout = buildLayout({
+      type: "pods",
+      tables: 2,
+      seatsPerTable: 5,
+      podList: [
+        { n: 1, x: 0, y: 0, shape: "rect", sideSeats: [2, 2, 2, 0] },
+        { n: 2, x: 12, y: 0 },
+      ],
+    });
+    const seats = layoutToSeats(layout);
+    expect(seats.filter((s) => s.tableId === "t1")).toHaveLength(6);
+    expect(seats.filter((s) => s.tableId === "t2")).toHaveLength(5);
+    expect(validateLayout(layout)).toBeNull();
+  });
+
+  it("rejects edge counts that contradict the table", () => {
+    const layout = buildLayout({ type: "seminar", shape: "rect", seats: 6 });
+    const section = layout.sections[0];
+    if (section.kind !== "table") throw new Error("expected a table section");
+    const withSides = (patch: Record<string, unknown>) =>
+      validateLayout({ ...layout, sections: [{ ...section, ...patch }] });
+    expect(withSides({ sideSeats: [2, 2, 2, 2] })).toMatch(/add up/i);
+    expect(withSides({ sideSeats: [2, 2, 2] })).toMatch(/four sides/i);
+    expect(withSides({ sideSeats: [3, 3, 0, 0], endSeats: 1 })).toMatch(/not both/i);
+    expect(withSides({ shape: "oval", sideSeats: [2, 2, 2, 0] })).toMatch(/rectangular/i);
+    expect(withSides({ sideSeats: [2, 2, 2, 0] })).toBeNull();
+  });
+});
+
+describe("pods keep their numbers", () => {
+  it("deleting a middle table leaves every other label untouched", () => {
+    const pods: PodSpec[] = [1, 2, 3, 4].map((n) => ({ n, x: n * 8, y: 0 }));
+    const before = layoutToSeats(
+      buildLayout({ type: "pods", tables: 4, seatsPerTable: 4, podList: pods })
+    );
+    const after = layoutToSeats(
+      buildLayout({
+        type: "pods",
+        tables: 3,
+        seatsPerTable: 4,
+        podList: pods.filter((p) => p.n !== 3),
+      })
+    );
+    // Table 4 is still table 4 — the student in 4A is still in 4A.
+    expect(after.map((s) => s.label)).toContain("4A");
+    expect(after.map((s) => s.label)).not.toContain("3A");
+    const stillThere = new Set(after.map((s) => s.label));
+    for (const seat of before) {
+      if (seat.tableId === "t3") continue;
+      expect(stillThere.has(seat.label)).toBe(true);
+    }
+  });
+
+  it("per-pod overrides beat the room default; untouched pods follow it", () => {
+    const seats = layoutToSeats(
+      buildLayout({
+        type: "pods",
+        tables: 2,
+        seatsPerTable: 4,
+        podList: [
+          { n: 1, x: 0, y: 0, seats: 8 },
+          { n: 2, x: 14, y: 0 },
+        ],
+      })
+    );
+    expect(seats.filter((s) => s.tableId === "t1")).toHaveLength(8);
+    expect(seats.filter((s) => s.tableId === "t2")).toHaveLength(4);
+  });
+
+  it("edge seating is dormant, not lost, while a pod is round", () => {
+    const pod: PodSpec = { n: 1, x: 0, y: 0, shape: "oval", sideSeats: [2, 2, 2, 0] };
+    const round = resolvePod(pod, { seats: 5, shape: "oval" });
+    expect(round.sideSeats).toBeUndefined();
+    expect(round.seats).toBe(5);
+    const rect = resolvePod({ ...pod, shape: "rect" }, { seats: 5, shape: "oval" });
+    expect(rect.sideSeats).toEqual([2, 2, 2, 0]);
+    expect(rect.seats).toBe(6);
+  });
+});
+
+describe("stepped rows — eight across, then nine", () => {
+  const stepped = {
+    type: "auditorium" as const,
+    rows: 8,
+    frontSeats: 8,
+    backSeats: 9,
+    aisleCount: 0,
+    curve: 0,
+    balconyRows: 0,
+    blocks: [{ front: 8, back: 9, rows: [8, 8, 8, 8, 9, 9, 9, 9] }],
+  };
+
+  const rowSeatsOf = (layout: RoomLayout) => {
+    const section = layout.sections[0];
+    if (section.kind !== "rows") throw new Error("expected a rows section");
+    return section.rowSeats;
+  };
+
+  it("draws the step exactly", () => {
+    const layout = buildLayout(stepped);
+    expect(rowSeatsOf(layout)).toEqual([8, 8, 8, 8, 9, 9, 9, 9]);
+    expect(validateLayout(layout)).toBeNull();
+  });
+
+  it("holds steps the front/back ramp can't reach", () => {
+    // A +1 spread evenly over 8 rows happens to break where this room does,
+    // so interpolation gets Mike's room right by luck. Move the step and the
+    // ramp can't follow — which is the whole point of saying it outright.
+    expect(rowSeatsOf(buildLayout({ ...stepped, blocks: [{ front: 8, back: 9 }] }))).toEqual(
+      [8, 8, 8, 8, 9, 9, 9, 9]
+    );
+    const lateStep = { front: 8, back: 9, rows: [8, 8, 8, 8, 8, 8, 9, 9] };
+    expect(rowSeatsOf(buildLayout({ ...stepped, blocks: [lateStep] }))).toEqual(
+      [8, 8, 8, 8, 8, 8, 9, 9]
+    );
+    const bigJump = { front: 6, back: 14, rows: [6, 6, 6, 14, 14, 14, 14, 14] };
+    expect(rowSeatsOf(buildLayout({ ...stepped, blocks: [bigJump] }))).toEqual(
+      [6, 6, 6, 14, 14, 14, 14, 14]
+    );
+    expect(
+      rowSeatsOf(buildLayout({ ...stepped, blocks: [{ front: 6, back: 14 }] }))
+    ).toEqual([6, 7, 8, 9, 11, 12, 13, 14]);
+  });
+
+  it("steps survive per block when a room has aisles", () => {
+    const layout = buildLayout({
+      ...stepped,
+      blocks: [
+        { front: 4, back: 4, rows: [4, 4, 4, 4, 4, 4, 4, 4] },
+        { front: 4, back: 5, rows: [4, 4, 4, 4, 5, 5, 5, 5] },
+      ],
+    });
+    const section = layout.sections[0];
+    if (section.kind !== "rows") throw new Error("expected a rows section");
+    expect(section.rowBlocks).toEqual([
+      [4, 4],
+      [4, 4],
+      [4, 4],
+      [4, 4],
+      [4, 5],
+      [4, 5],
+      [4, 5],
+      [4, 5],
+    ]);
+  });
+
+  it("the balcony repeats the real back row, not the ramp's endpoint", () => {
+    const layout = buildLayout({ ...stepped, balconyRows: 1 });
+    const balcony = layout.sections.find((s) => s.id === "balcony");
+    if (!balcony || balcony.kind !== "rows") throw new Error("expected a balcony");
+    expect(balcony.rowSeats).toEqual([9]);
+  });
+
+  it("changing the row count stretches the step instead of dropping it", () => {
+    expect(resizeRowWidths([8, 8, 9, 9], 6)).toEqual([8, 8, 9, 9, 9, 9]);
+    expect(resizeRowWidths([8, 8, 9, 9], 3)).toEqual([8, 8, 9]);
+    expect(blockRowWidths({ front: 8, back: 9, rows: [8, 8, 9, 9] }, 6)).toEqual([
+      8, 8, 9, 9, 9, 9,
+    ]);
+    // No explicit list: still the front→back ramp.
+    expect(blockRowWidths({ front: 2, back: 6 }, 3)).toEqual([2, 4, 6]);
+  });
+});
+
+describe("removals survive reshaping", () => {
+  it("keeps the removals whose seats still exist and drops only the rest", () => {
+    const layout = buildLayout({ type: "classroom", rows: 2, cols: 6, aisleCount: 0 });
+    // B6 exists here; shrink to 4 columns and it doesn't.
+    expect(surviveRemovals(layout, ["A2", "B6"]).sort()).toEqual(["A2", "B6"]);
+    const smaller = buildLayout({ type: "classroom", rows: 2, cols: 4, aisleCount: 0 });
+    expect(surviveRemovals(smaller, ["A2", "B6"])).toEqual(["A2"]);
+  });
+
+  it("holds on to everything when the layout can't be built at all", () => {
+    const broken: RoomLayout = { version: 1, type: "classroom", sections: [] };
+    expect(surviveRemovals(broken, ["A1"])).toEqual(["A1"]);
+  });
+
+  it("a wall table's removals outlive dragging it across the room", () => {
+    const pod = (x: number): RoomLayout =>
+      buildLayout({
+        type: "pods",
+        tables: 1,
+        seatsPerTable: 6,
+        podList: [{ n: 1, x, y: 0, shape: "rect", sideSeats: [2, 2, 2, 0] }],
+      });
+    expect(surviveRemovals(pod(0), ["1C"])).toEqual(["1C"]);
+    expect(surviveRemovals(pod(20), ["1C"])).toEqual(["1C"]);
+  });
+});
+
+describe("legacy pod rooms rebuild byte-for-byte", () => {
+  // These rooms' neighbors are what check-in verifies. Reopening one must not
+  // move a single chair.
+  const legacy = [
+    { type: "pods" as const, tables: 6, seatsPerTable: 5 },
+    { type: "pods" as const, tables: 4, seatsPerTable: 8, shape: "rect" as const },
+    {
+      type: "pods" as const,
+      tables: 3,
+      seatsPerTable: 6,
+      positions: [
+        { x: 0, y: 0 },
+        { x: 9, y: 2 },
+        { x: 18, y: 4 },
+      ],
+    },
+  ];
+
+  it("auto-grid, shapes, and dragged positions all land where they used to", () => {
+    for (const params of legacy) {
+      const pods = podsFromParams(params);
+      expect(pods.map((p) => p.n)).toEqual(
+        Array.from({ length: params.tables }, (_, i) => i + 1)
+      );
+      // No podList means no per-pod overrides — every table takes the default.
+      expect(pods.every((p) => p.seats === undefined && p.shape === undefined)).toBe(true);
+      const seats = layoutToSeats(buildLayout(params));
+      expect(seats).toHaveLength(params.tables * params.seatsPerTable);
+      expect(seats.every((s) => s.neighbors.front === undefined)).toBe(true);
+      // Reopening from stored params rebuilds the identical room.
+      const layout = buildLayout(params);
+      const reopened = layoutToSeats(
+        buildLayout(layout.params as unknown as typeof params)
+      );
+      expect(reopened).toEqual(seats);
+    }
+  });
+
+  it("dragged positions still win, table by table", () => {
+    const seats = layoutToSeats(buildLayout(legacy[2]));
+    const t3 = seats.filter((s) => s.tableId === "t3");
+    expect(t3).toHaveLength(6);
+    expect(Math.max(...seats.map((s) => s.x))).toBeGreaterThan(16);
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import { checkIn, verifyNeighbor } from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
+import type { TableFootprint } from "@/lib/roomlayout";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
 import Link from "next/link";
 
@@ -29,6 +30,8 @@ export interface SeatInfo {
   tableId: string | null;
   /** Furniture drawn under a table's seats; carried from the room layout. */
   tableShape?: "rect" | "oval" | "ushape";
+  /** Where the table really sits when its chairs only ring three sides. */
+  tableFootprint?: TableFootprint;
   neighbors: SeatNeighbors;
 }
 

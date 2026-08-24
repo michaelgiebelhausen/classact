@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import type { TableFootprint } from "@/lib/roomlayout";
 
 /**
  * The one seat-map renderer: professor preview, designer, and student
@@ -24,6 +25,11 @@ export interface RoomMapSeat {
   tableId: string | null;
   /** Furniture drawn under a table's seats. Defaults to an oval. */
   tableShape?: "rect" | "oval" | "ushape";
+  /**
+   * Where the table really sits, for tables the seats alone don't describe —
+   * one shoved against a wall, with all its chairs on the other three sides.
+   */
+  tableFootprint?: TableFootprint;
 }
 
 export interface RoomMapSeatState {
@@ -52,6 +58,10 @@ interface Props {
   onTableMove?: (tableId: string, dx: number, dy: number) => void;
   /** Adds an X on each table when set (designer only). */
   onTableRemove?: (tableId: string) => void;
+  /** Adds a pencil on each table when set — opens that table's settings. */
+  onTableEdit?: (tableId: string) => void;
+  /** Table currently being edited, ringed so it's obvious which one. */
+  activeTableId?: string | null;
   frontLabel?: string;
   ariaLabel?: string;
   /** Widen the seat pitch to make room for name captions under seats. */
@@ -83,6 +93,8 @@ export function RoomMap({
   onSeatTap,
   onTableMove,
   onTableRemove,
+  onTableEdit,
+  activeTableId = null,
   frontLabel = "Front of room",
   ariaLabel = "Classroom seat map",
   captions = false,
@@ -129,11 +141,21 @@ export function RoomMap({
     for (const [id, members] of byTable) {
       const xs = members.map((m) => px(m.x));
       const ys = members.map((m) => py(m.y));
-      const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-      const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
+      const footprint = members[0].tableFootprint;
       // Inset so seats ring the table edge instead of sitting on it.
-      const rx = Math.max((Math.max(...xs) - Math.min(...xs)) / 2 - SEAT * 0.35, UNIT * 0.45);
-      const ry = Math.max((Math.max(...ys) - Math.min(...ys)) / 2 - SEAT * 0.35, UNIT * 0.35);
+      const inset = SEAT * 0.35;
+      // A bare edge pulls every chair to one side, so the ring of seats no
+      // longer straddles the table — when the layout says where the table
+      // really is, believe it over the seats.
+      const cx = footprint ? mean(xs) + footprint.dx * hu : (Math.min(...xs) + Math.max(...xs)) / 2;
+      const cy = footprint ? mean(ys) + footprint.dy * vu : (Math.min(...ys) + Math.max(...ys)) / 2;
+      const rx = footprint
+        ? Math.max(footprint.rx * hu - inset, UNIT * 0.3)
+        : Math.max((Math.max(...xs) - Math.min(...xs)) / 2 - inset, UNIT * 0.45);
+      const ry = footprint
+        ? Math.max(footprint.ry * vu - inset, UNIT * 0.3)
+        : Math.max((Math.max(...ys) - Math.min(...ys)) / 2 - inset, UNIT * 0.35);
       tables.push({ id, shape: members[0].tableShape ?? "oval", cx, cy, rx, ry });
     }
 
@@ -214,11 +236,12 @@ export function RoomMap({
 
         {geo.tables.map((t) => {
           const off = dragOffset(t.id);
+          const active = t.id === activeTableId;
           const surface = {
             fill: "var(--muted-foreground)",
-            opacity: 0.1,
-            stroke: "var(--border)",
-            strokeWidth: 1.5,
+            opacity: active ? 0.16 : 0.1,
+            stroke: active ? "var(--primary)" : "var(--border)",
+            strokeWidth: active ? 2.5 : 1.5,
             ...(off
               ? { transform: `translate(${off.dx}px, ${off.dy}px)` }
               : {}),
@@ -407,8 +430,8 @@ export function RoomMap({
         );
       })}
 
-      {/* Designer-only: drag a table to reposition it, X to remove it. */}
-      {(onTableMove || onTableRemove) &&
+      {/* Designer-only: drag to reposition, pencil to set up, X to remove. */}
+      {(onTableMove || onTableRemove || onTableEdit) &&
         geo.tables.map((t) => (
           <div
             key={`handle-${t.id}`}
@@ -474,6 +497,22 @@ export function RoomMap({
                 className="cursor-grab touch-none rounded-full border bg-background/90 px-2 py-1 text-[10px] font-medium shadow-sm backdrop-blur active:cursor-grabbing"
               >
                 ✥ drag
+              </button>
+            )}
+            {onTableEdit && (
+              <button
+                type="button"
+                aria-label={`Set up table ${t.id}`}
+                aria-pressed={t.id === activeTableId}
+                onClick={() => onTableEdit(t.id)}
+                className={[
+                  "rounded-full border px-1.5 py-1 text-[10px] font-medium shadow-sm backdrop-blur",
+                  t.id === activeTableId
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "bg-background/90 hover:border-primary hover:text-primary",
+                ].join(" ")}
+              >
+                ✎
               </button>
             )}
             {onTableRemove && (
