@@ -25,7 +25,7 @@ export default async function CourseSetupPage({
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy, invite_subject, invite_message"
+      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy, invite_subject, invite_message, canvas_course_id, canvas_section_ids, canvas_synced_at"
     )
     .eq("id", courseId)
     .single();
@@ -40,7 +40,7 @@ export default async function CourseSetupPage({
       hint: courseError.hint,
     });
     throw new Error(
-      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run the migrations that haven't been applied yet in the Supabase SQL editor (supabase/catchup_0019_to_0023.sql, then 0024, 0025 and 0026).`
+      `Course setup couldn't load: ${courseError.message}. If that names a missing column, run the migrations that haven't been applied yet in the Supabase SQL editor (supabase/catchup_0019_to_0023.sql, then 0024, 0025, 0026 and 0027).`
     );
   }
   if (!course) notFound();
@@ -198,6 +198,15 @@ export default async function CourseSetupPage({
         activation={activation}
         siteUrl={env.siteUrl}
         canvasConnection={canvasConnection}
+        canvasLink={
+          course.canvas_course_id
+            ? {
+                canvasCourseId: course.canvas_course_id,
+                sectionIds: course.canvas_section_ids,
+                syncedAt: course.canvas_synced_at,
+              }
+            : null
+        }
         decks={decks}
         attendancePolicy={parseAttendancePolicy(course.attendance_policy)}
       />

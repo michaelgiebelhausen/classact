@@ -14,7 +14,11 @@ import { normalizeCanvasBaseUrl } from "@/lib/canvasurl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { syncCanvasRoster } from "@/server/actions/canvas";
+import {
+  markDropped,
+  syncCanvasRoster,
+  type DropCandidate,
+} from "@/server/actions/canvas";
 import {
   disconnectCanvas,
   listCanvasCourses,
@@ -31,12 +35,21 @@ import type { CanvasSection, CanvasTeacherCourse } from "@/server/canvascreds";
  * course ID in a URL (manual ID entry stays as a fallback).
  */
 
+/** The Canvas course this roster was last synced from (courses 0027). */
+export interface CanvasCourseLink {
+  canvasCourseId: string;
+  sectionIds: string[] | null;
+  syncedAt: string | null;
+}
+
 interface Props {
   courseId: string;
   connection: CanvasConnectionView;
+  /** Null until the first successful sync stores the linkage. */
+  link: CanvasCourseLink | null;
 }
 
-export function CanvasSync({ courseId, connection }: Props) {
+export function CanvasSync({ courseId, connection, link }: Props) {
   const router = useRouter();
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
@@ -84,6 +97,14 @@ export function CanvasSync({ courseId, connection }: Props) {
     selected: Set<string>;
   } | null>(null);
   const [checkingId, setCheckingId] = useState<string | null>(null);
+  // Likely drops from the last sync, awaiting the professor's say-so.
+  // All start checked; unchecking protects e.g. a CSV-added student who was
+  // never in Canvas to begin with.
+  const [drops, setDrops] = useState<{
+    candidates: DropCandidate[];
+    selected: Set<string>;
+  } | null>(null);
+  const [dropping, setDropping] = useState(false);
 
   async function connect() {
     if (!token.trim()) {
@@ -192,11 +213,26 @@ export function CanvasSync({ courseId, connection }: Props) {
     }
     if (result.ok && result.data) {
       setPicker(null);
+      setDrops(
+        result.data.dropCandidates.length > 0
+          ? {
+              candidates: result.data.dropCandidates,
+              selected: new Set(
+                result.data.dropCandidates.map((c) => c.enrollmentId)
+              ),
+            }
+          : null
+      );
       toast.success(
         `Synced ${result.data.imported} student(s) from Canvas${
           result.data.skipped ? `, skipped ${result.data.skipped} already added` : ""
         }.`
       );
+      if (result.data.reactivated > 0) {
+        toast.message(
+          `${result.data.reactivated} previously dropped student(s) re-added the class — welcomed back with their history intact.`
+        );
+      }
       if (result.data.photosStored > 0) {
         toast.message(
           `Ported ${result.data.photosStored} Canvas photo(s) — faces show in the name games, directory, and seat map now.`
@@ -232,6 +268,29 @@ export function CanvasSync({ courseId, connection }: Props) {
       router.refresh();
     } else {
       toast.error(result.error);
+    }
+  }
+
+  async function confirmDrops(enrollmentIds: string[]) {
+    if (dropping || enrollmentIds.length === 0) return;
+    setDropping(true);
+    let result: Awaited<ReturnType<typeof markDropped>>;
+    try {
+      result = await markDropped({ courseId, enrollmentIds });
+    } catch {
+      toast.error("Couldn't reach the server — try again.");
+      return;
+    } finally {
+      setDropping(false);
+    }
+    if (result.ok && result.data) {
+      setDrops(null);
+      toast.success(
+        `Marked ${result.data.dropped} student(s) as dropped. Their attendance and participation history is kept — they'll come right back if they re-add.`
+      );
+      router.refresh();
+    } else {
+      toast.error(result.ok ? "Couldn't update the roster." : result.error);
     }
   }
 
@@ -468,6 +527,120 @@ export function CanvasSync({ courseId, connection }: Props) {
           )}
         </div>
       </div>
+
+      {link && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">
+              Roster linked to Canvas course {link.canvasCourseId}
+              {link.sectionIds && link.sectionIds.length > 0
+                ? ` (${link.sectionIds.length} ${
+                    link.sectionIds.length === 1 ? "section" : "sections"
+                  })`
+                : ""}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {link.syncedAt
+                ? `Last synced ${new Date(link.syncedAt).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })} at ${new Date(link.syncedAt).toLocaleTimeString(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}`
+                : "Not synced yet"}
+              {" · resync during add/drop to pick up changes."}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() =>
+              void sync(
+                link.canvasCourseId,
+                link.sectionIds && link.sectionIds.length > 0
+                  ? link.sectionIds
+                  : undefined
+              )
+            }
+            disabled={syncingId !== null || checkingId !== null || dropping}
+          >
+            {syncingId === link.canvasCourseId ? (
+              <>
+                <Loader2 className="mr-2 size-4 animate-spin" /> Resyncing…
+              </>
+            ) : (
+              <>
+                <RefreshCw className="mr-2 size-4" /> Resync from Canvas
+              </>
+            )}
+          </Button>
+        </div>
+      )}
+
+      {drops && (
+        <div className="grid gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
+          <div>
+            <p className="text-sm font-medium">
+              {drops.candidates.length} student
+              {drops.candidates.length === 1 ? "" : "s"} on your roster{" "}
+              {drops.candidates.length === 1 ? "isn't" : "aren't"} in Canvas
+              anymore — likely dropped.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Marking them dropped hides them from check-in, the seat map, and
+              games, but keeps all their history — re-adding brings them right
+              back. Uncheck anyone who belongs anyway (added by CSV, or in a
+              section you didn&apos;t sync).
+            </p>
+          </div>
+          <div className="grid gap-1.5">
+            {drops.candidates.map((d) => (
+              <label
+                key={d.enrollmentId}
+                className="flex cursor-pointer items-center gap-2 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  checked={drops.selected.has(d.enrollmentId)}
+                  onChange={(e) => {
+                    setDrops((prev) => {
+                      if (!prev) return prev;
+                      const selected = new Set(prev.selected);
+                      if (e.target.checked) selected.add(d.enrollmentId);
+                      else selected.delete(d.enrollmentId);
+                      return { ...prev, selected };
+                    });
+                  }}
+                />
+                <span className="min-w-0 truncate font-medium">{d.name}</span>
+                <span className="min-w-0 truncate text-muted-foreground">
+                  {d.email}
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => void confirmDrops([...drops.selected])}
+              disabled={dropping || drops.selected.size === 0}
+            >
+              {dropping
+                ? "Updating…"
+                : `Mark ${drops.selected.size} as dropped`}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={() => setDrops(null)}
+              disabled={dropping}
+            >
+              Keep everyone
+            </Button>
+          </div>
+        </div>
+      )}
 
       {effective.source === "env" && (
         <p className="rounded-lg border border-dashed p-2 text-xs text-muted-foreground">

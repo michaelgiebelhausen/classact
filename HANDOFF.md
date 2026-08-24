@@ -53,11 +53,13 @@ You already created the "Class Act" project at supabase.com. Now:
    sign-up role). It ends with a five-row verification query; every `ok`
    must come back true. Skipping it 404s Setup and Check-In, because the
    app selects columns those migrations add.
-   **Then run `0024_protect_billing_columns.sql`, `0025_absences.sql`, and
-   `0026_invite_message.sql`, in that order.** (0025 adds self-reported
-   absences; 0026 adds the editable invite email plus the per-student record
-   of which invites actually went out. Setup throws a "missing column" error
-   until 0026 has run.)
+   **Then run `0024_protect_billing_columns.sql`, `0025_absences.sql`,
+   `0026_invite_message.sql`, and `0027_canvas_resync.sql`, in that
+   order.** (0025 adds self-reported absences; 0026 adds the editable
+   invite email plus the per-student record of which invites actually went
+   out; 0027 adds the remembered Canvas linkage + the 'dropped' enrollment
+   status that powers add/drop resync. Setup throws a "missing column"
+   error until 0027 has run.)
    *(0011 adds seat geometry + the shared room database; 0012 adds the
    class schedule that auto-opens check-in; 0013 adds Tasty Grading; 0014
    adds shout-outs + the professor's participation cockpit; 0015 adds the

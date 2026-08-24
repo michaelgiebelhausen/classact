@@ -7,7 +7,7 @@
  */
 
 export type Role = "student" | "professor"
-export type EnrollmentStatus = "invited" | "active"
+export type EnrollmentStatus = "invited" | "active" | "dropped"
 export type PhotoKind = "candid" | "professional" | "adventure"
 export type SeatRelation = "front" | "back" | "left" | "right"
 export type GameType = "memory_tiles" | "flash_cards" | "matching"
@@ -109,6 +109,12 @@ export type CourseRow = {
    * left unrendered. Null = send the shipped default (0026). */
   invite_subject: string | null
   invite_message: string | null
+  /** Canvas linkage from the last roster sync (0027): which Canvas course
+   * (and which sections of a cross-listed shell) this roster came from, so
+   * resync is one click. Null = never synced from Canvas. */
+  canvas_course_id: string | null
+  canvas_section_ids: string[] | null
+  canvas_synced_at: string | null
   created_at: string
 }
 
@@ -365,6 +371,9 @@ export type EnrollmentRow = {
    * mail provider, or why it wasn't. Never both. */
   invited_at: string | null
   invite_error: string | null
+  /** When the professor confirmed this student dropped (0027). Cleared on
+   * reactivation (re-added in Canvas, or rejoined with the course code). */
+  dropped_at: string | null
   created_at: string
 }
 

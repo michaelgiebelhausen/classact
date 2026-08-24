@@ -26,7 +26,10 @@ import {
 } from "@/components/ui/table";
 import { updateIcebreakerFields, updateSchedule } from "@/server/actions/courses";
 import type { CanvasConnectionView } from "@/server/actions/canvassettings";
-import { CanvasSync } from "@/components/features/setup/CanvasSync";
+import {
+  CanvasSync,
+  type CanvasCourseLink,
+} from "@/components/features/setup/CanvasSync";
 import { ActivationPanel } from "@/components/features/setup/ActivationPanel";
 import type { ActivationRow } from "@/server/actions/activation";
 import {
@@ -64,7 +67,7 @@ interface EnrollmentItem {
   id: string;
   roster_name: string;
   roster_email: string;
-  status: "invited" | "active";
+  status: "invited" | "active" | "dropped";
   /** Last invite attempt: when it was accepted, or why it wasn't (0026). */
   invited_at?: string | null;
   invite_error?: string | null;
@@ -91,6 +94,8 @@ interface Props {
   activation: ActivationRow[];
   siteUrl: string;
   canvasConnection: CanvasConnectionView;
+  /** Stored Canvas linkage; null until the first sync (0027). */
+  canvasLink: CanvasCourseLink | null;
   /** Slide decks for this course — same manager the Follow Along page uses. */
   decks: DeckListItem[];
   /** Parsed attendance policy the AI applies to self-reported absences. */
@@ -105,6 +110,7 @@ export function CourseSetupTabs({
   activation,
   siteUrl,
   canvasConnection,
+  canvasLink,
   decks,
   attendancePolicy,
 }: Props) {
@@ -139,6 +145,7 @@ export function CourseSetupTabs({
           courseId={course.id}
           initial={enrollments}
           canvasConnection={canvasConnection}
+          canvasLink={canvasLink}
         />
       </TabsContent>
       <TabsContent value="slides">
@@ -325,10 +332,12 @@ function RosterTab({
   courseId,
   initial,
   canvasConnection,
+  canvasLink,
 }: {
   courseId: string;
   initial: EnrollmentItem[];
   canvasConnection: CanvasConnectionView;
+  canvasLink: CanvasCourseLink | null;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -367,7 +376,11 @@ function RosterTab({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <CanvasSync courseId={courseId} connection={canvasConnection} />
+        <CanvasSync
+          courseId={courseId}
+          connection={canvasConnection}
+          link={canvasLink}
+        />
 
         <div>
           <input
@@ -412,8 +425,20 @@ function RosterTab({
                     {e.roster_email}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={e.status === "active" ? "default" : "secondary"}>
-                      {e.status === "active" ? "Active" : "Invited"}
+                    <Badge
+                      variant={
+                        e.status === "active"
+                          ? "default"
+                          : e.status === "dropped"
+                            ? "outline"
+                            : "secondary"
+                      }
+                    >
+                      {e.status === "active"
+                        ? "Active"
+                        : e.status === "dropped"
+                          ? "Dropped"
+                          : "Invited"}
                     </Badge>
                   </TableCell>
                 </TableRow>

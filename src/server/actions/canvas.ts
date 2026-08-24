@@ -191,7 +191,21 @@ const inputSchema = z.object({
   sectionIds: z.array(z.string().regex(/^\d+$/)).max(50).optional(),
 });
 
-/** Sync a ClassAct course's roster from a Canvas course (FR-003 alternative). */
+/** A roster row that's here but no longer in Canvas — a likely drop. */
+export interface DropCandidate {
+  enrollmentId: string;
+  name: string;
+  email: string;
+}
+
+/**
+ * Sync a ClassAct course's roster from a Canvas course (FR-003 alternative).
+ * Idempotent, so it doubles as add/drop-season resync: new Canvas students
+ * are imported, previously-dropped students who re-added are reactivated,
+ * and roster rows missing from Canvas come back as `dropCandidates` — never
+ * dropped automatically (a token hiccup or section change must not silently
+ * bench real students). The professor confirms via `markDropped`.
+ */
 export async function syncCanvasRoster(input: {
   courseId: string;
   canvasCourseId: string;
@@ -205,6 +219,8 @@ export async function syncCanvasRoster(input: {
     withPhoto: number;
     photosStored: number;
     total: number;
+    reactivated: number;
+    dropCandidates: DropCandidate[];
   }>
 > {
   const parsed = inputSchema.safeParse(input);
@@ -264,9 +280,10 @@ export async function syncCanvasRoster(input: {
   // Import new roster rows (dupes skipped, same rule as CSV import).
   const { data: existing } = await supabase
     .from("enrollments")
-    .select("roster_email")
+    .select("id, roster_name, roster_email, status, profile_id")
     .eq("course_id", course.id);
   const existingEmails = new Set((existing ?? []).map((e) => e.roster_email));
+  const canvasEmails = new Set(roster.students.map((s) => s.email));
   const fresh = roster.students.filter((s) => !existingEmails.has(s.email));
 
   if (fresh.length > 0) {
@@ -284,6 +301,39 @@ export async function syncCanvasRoster(input: {
     if (error) return { ok: false, error: "Import failed — try again." };
     invalidateCourseDirectory(course.id);
   }
+
+  // A dropped student who's back in Canvas re-added the class: reactivate
+  // with history intact. Straight to 'active' if they'd already linked an
+  // account; otherwise back to 'invited' like any roster row.
+  const returning = (existing ?? []).filter(
+    (e) => e.status === "dropped" && canvasEmails.has(e.roster_email)
+  );
+  for (const e of returning) {
+    await supabase
+      .from("enrollments")
+      .update({
+        status: e.profile_id ? ("active" as const) : ("invited" as const),
+        dropped_at: null,
+      })
+      .eq("id", e.id);
+  }
+
+  // Roster rows Canvas no longer lists — surfaced for the professor to
+  // confirm, never dropped here. CSV-only additions and students in
+  // unsynced sections show up too, which is exactly why it's a preview.
+  const dropCandidates: DropCandidate[] = (existing ?? [])
+    .filter((e) => e.status !== "dropped" && !canvasEmails.has(e.roster_email))
+    .map((e) => ({ enrollmentId: e.id, name: e.roster_name, email: e.roster_email }));
+
+  // Remember the linkage so the next resync is one click.
+  await supabase
+    .from("courses")
+    .update({
+      canvas_course_id: parsed.data.canvasCourseId,
+      canvas_section_ids: parsed.data.sectionIds ?? null,
+      canvas_synced_at: new Date().toISOString(),
+    })
+    .eq("id", course.id);
 
   // Port Canvas photos: for every synced student who has a Canvas photo but no
   // stored roster photo yet, download it and stash it in Supabase storage.
@@ -340,6 +390,59 @@ export async function syncCanvasRoster(input: {
       withPhoto: roster.withPhoto,
       photosStored,
       total: roster.students.length,
+      reactivated: returning.length,
+      dropCandidates,
     },
   };
+}
+
+const markDroppedSchema = z.object({
+  courseId: z.string().uuid(),
+  enrollmentIds: z.array(z.string().uuid()).min(1).max(500),
+});
+
+/**
+ * Confirm drops surfaced by a resync: mark the enrollments 'dropped'. A
+ * status change, never a delete — attendance, participation, and seat
+ * history survive, and check-in/seat-map/games queries already filter to
+ * status = 'active', so dropped students simply stop appearing. Rejoining
+ * (via Canvas re-add + resync, or the course join code) reactivates them.
+ */
+export async function markDropped(input: {
+  courseId: string;
+  enrollmentIds: string[];
+}): Promise<ActionResult<{ dropped: number }>> {
+  const parsed = markDroppedSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Invalid drop request." };
+  }
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  // Ownership check (RLS also enforces).
+  const { data: course } = await supabase
+    .from("courses")
+    .select("id, professor_id")
+    .eq("id", parsed.data.courseId)
+    .single();
+  if (!course || course.professor_id !== user.id) {
+    return { ok: false, error: "Only the course owner can update the roster." };
+  }
+
+  const { data: updated, error } = await supabase
+    .from("enrollments")
+    .update({ status: "dropped", dropped_at: new Date().toISOString() })
+    .eq("course_id", course.id)
+    .in("id", parsed.data.enrollmentIds)
+    .neq("status", "dropped")
+    .select("id");
+  if (error) {
+    return { ok: false, error: "Couldn't update the roster — try again." };
+  }
+
+  revalidatePath(`/course/${course.id}/setup`);
+  return { ok: true, data: { dropped: (updated ?? []).length } };
 }

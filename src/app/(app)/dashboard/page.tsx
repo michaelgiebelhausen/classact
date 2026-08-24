@@ -77,7 +77,8 @@ export default async function DashboardPage() {
   const { data: enrollments } = await supabase
     .from("enrollments")
     .select("id, status, course_id, courses(id, name, term)")
-    .eq("profile_id", profile.id);
+    .eq("profile_id", profile.id)
+    .neq("status", "dropped");
 
   return (
     <div className="grid gap-6">

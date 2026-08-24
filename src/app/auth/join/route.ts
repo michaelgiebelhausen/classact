@@ -60,9 +60,12 @@ export async function GET(request: NextRequest) {
 
   if (existing) {
     if (existing.profile_id !== user.id || existing.status !== "active") {
+      // Covers 'dropped' too: a dropped student using the course code is
+      // re-adding themselves, same as re-appearing in a Canvas resync —
+      // reactivate with history intact.
       await admin
         .from("enrollments")
-        .update({ profile_id: user.id, status: "active" })
+        .update({ profile_id: user.id, status: "active", dropped_at: null })
         .eq("id", existing.id);
     }
   } else {

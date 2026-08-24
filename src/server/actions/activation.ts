@@ -73,6 +73,7 @@ export async function getActivationRoster(
     .from("enrollments")
     .select("id, roster_name, roster_email, status, profile_id, invited_at, invite_error")
     .eq("course_id", courseId)
+    .neq("status", "dropped")
     .order("roster_name");
 
   if (error) return { ok: false, error: "Couldn't load the roster." };
@@ -147,6 +148,7 @@ export async function sendSetPasswordLinks(input: {
     .from("enrollments")
     .select("id, roster_name, roster_email")
     .eq("course_id", parsed.data.courseId)
+    .neq("status", "dropped")
     .in("id", parsed.data.enrollmentIds);
 
   if (!targets || targets.length === 0) {
