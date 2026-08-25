@@ -1,8 +1,14 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getProfile } from "@/lib/auth";
-import { env } from "@/lib/env";
-import { CourseSetupTabs } from "@/components/features/setup/CourseSetupTabs";
+import { env, isConfigured } from "@/lib/env";
+import { getSignedPhotoUrls } from "@/lib/storage";
+import {
+  CourseSetupTabs,
+  type RosterPhotoSet,
+} from "@/components/features/setup/CourseSetupTabs";
+import type { PhotoKind } from "@/types/db";
 import { CourseNameEditor } from "@/components/features/setup/CourseNameEditor";
 import { getCanvasConnection } from "@/server/actions/canvassettings";
 import { getActivationRoster } from "@/server/actions/activation";
@@ -59,10 +65,59 @@ export default async function CourseSetupPage({
       .eq("course_id", courseId),
     supabase
       .from("enrollments")
-      .select("id, roster_name, roster_email, status, invited_at, invite_error")
+      .select(
+        "id, roster_name, roster_email, status, invited_at, invite_error, profile_id, roster_photo_path"
+      )
       .eq("course_id", courseId)
       .order("roster_name"),
   ]);
+
+  // Per-student photos by kind, for the roster's photo tabs: each student's
+  // own uploads (professional / candid / adventure) plus the seeded roster
+  // photo (e.g. from Canvas) as its own entry. Signed through the admin
+  // client like every other photo surface; absent config = no photos, and
+  // the roster degrades to initials.
+  const rosterPhotos: Record<string, RosterPhotoSet> = {};
+  if (isConfigured.supabaseAdmin && (enrollments ?? []).length > 0) {
+    const admin = createAdminClient();
+    const profileIds = (enrollments ?? [])
+      .map((e) => e.profile_id)
+      .filter((id): id is string => Boolean(id));
+    const { data: uploaded } =
+      profileIds.length > 0
+        ? await admin
+            .from("profile_photos")
+            .select("profile_id, kind, storage_path")
+            .in("profile_id", profileIds)
+        : { data: [] as { profile_id: string; kind: PhotoKind; storage_path: string }[] };
+    const allPaths = [
+      ...(uploaded ?? []).map((p) => p.storage_path),
+      ...(enrollments ?? [])
+        .map((e) => e.roster_photo_path)
+        .filter((p): p is string => Boolean(p)),
+    ];
+    const urlMap = await getSignedPhotoUrls(admin, allPaths);
+    const byProfile = new Map<string, Partial<Record<PhotoKind, string>>>();
+    for (const p of uploaded ?? []) {
+      const url = urlMap[p.storage_path];
+      if (!url) continue;
+      const set = byProfile.get(p.profile_id) ?? {};
+      set[p.kind] = url;
+      byProfile.set(p.profile_id, set);
+    }
+    for (const e of enrollments ?? []) {
+      const own = e.profile_id ? byProfile.get(e.profile_id) ?? {} : {};
+      rosterPhotos[e.id] = {
+        professional: own.professional ?? null,
+        candid: own.candid ?? null,
+        adventure: own.adventure ?? null,
+        roster:
+          e.roster_photo_path && urlMap[e.roster_photo_path]
+            ? urlMap[e.roster_photo_path]
+            : null,
+      };
+    }
+  }
 
   // The course's room (layout + campus location) for re-editing.
   let initialLayout: RoomLayout | null = null;
@@ -195,6 +250,7 @@ export default async function CourseSetupPage({
           termEnd: course.term_end,
         }}
         enrollments={enrollments ?? []}
+        rosterPhotos={rosterPhotos}
         activation={activation}
         siteUrl={env.siteUrl}
         canvasConnection={canvasConnection}

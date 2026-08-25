@@ -63,6 +63,15 @@ export interface ScheduleValue {
   termEnd: string | null;
 }
 
+/** Signed photo URLs for one enrollment, by kind (null = none uploaded). */
+export interface RosterPhotoSet {
+  professional: string | null;
+  candid: string | null;
+  adventure: string | null;
+  /** The seeded roster photo, e.g. ported from Canvas. */
+  roster: string | null;
+}
+
 interface EnrollmentItem {
   id: string;
   roster_name: string;
@@ -91,6 +100,8 @@ interface Props {
   };
   schedule: ScheduleValue;
   enrollments: EnrollmentItem[];
+  /** Signed photo URLs per enrollment id, for the roster's photo tabs. */
+  rosterPhotos: Record<string, RosterPhotoSet>;
   activation: ActivationRow[];
   siteUrl: string;
   canvasConnection: CanvasConnectionView;
@@ -107,6 +118,7 @@ export function CourseSetupTabs({
   roomSetup,
   schedule,
   enrollments,
+  rosterPhotos,
   activation,
   siteUrl,
   canvasConnection,
@@ -144,6 +156,7 @@ export function CourseSetupTabs({
         <RosterTab
           courseId={course.id}
           initial={enrollments}
+          photos={rosterPhotos}
           canvasConnection={canvasConnection}
           canvasLink={canvasLink}
         />
@@ -353,20 +366,66 @@ function RosterCounts({ enrollments }: { enrollments: EnrollmentItem[] }) {
   );
 }
 
+/** Which face the roster shows: the seeded roster photo or an upload kind. */
+type RosterPhotoView = "roster" | "professional" | "candid" | "adventure";
+
+const PHOTO_VIEWS: Array<{ key: RosterPhotoView; label: string }> = [
+  { key: "roster", label: "Roster photo" },
+  { key: "professional", label: "Professional" },
+  { key: "candid", label: "Candid" },
+  { key: "adventure", label: "Adventure" },
+];
+
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "?"
+  );
+}
+
+function RosterAvatar({ url, name }: { url: string | null; name: string }) {
+  if (url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL, next/image can't cache it
+      <img
+        src={url}
+        alt={name}
+        className="size-10 rounded-full border object-cover"
+      />
+    );
+  }
+  return (
+    <span className="flex size-10 items-center justify-center rounded-full border border-dashed text-xs text-muted-foreground">
+      {initialsOf(name)}
+    </span>
+  );
+}
+
 function RosterTab({
   courseId,
   initial,
+  photos,
   canvasConnection,
   canvasLink,
 }: {
   courseId: string;
   initial: EnrollmentItem[];
+  photos: Record<string, RosterPhotoSet>;
   canvasConnection: CanvasConnectionView;
   canvasLink: CanvasCourseLink | null;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [photoView, setPhotoView] = useState<RosterPhotoView>("roster");
+
+  // "3 of 40 have one" per view, so the tabs double as coverage stats.
+  const withPhoto = (view: RosterPhotoView) =>
+    initial.filter((e) => photos[e.id]?.[view]).length;
 
   async function handleFile(file: File) {
     setImporting(true);
@@ -437,9 +496,28 @@ function RosterTab({
           <RosterCounts enrollments={initial} />
         )}
         {initial.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {PHOTO_VIEWS.map((view) => (
+              <Button
+                key={view.key}
+                size="sm"
+                variant={photoView === view.key ? "secondary" : "ghost"}
+                className="text-xs"
+                onClick={() => setPhotoView(view.key)}
+              >
+                {view.label}
+                <span className="ml-1.5 text-muted-foreground">
+                  {withPhoto(view.key)}/{initial.length}
+                </span>
+              </Button>
+            ))}
+          </div>
+        )}
+        {initial.length > 0 && (
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-14">Photo</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Status</TableHead>
@@ -448,6 +526,12 @@ function RosterTab({
             <TableBody>
               {initial.map((e) => (
                 <TableRow key={e.id}>
+                  <TableCell>
+                    <RosterAvatar
+                      url={photos[e.id]?.[photoView] ?? null}
+                      name={e.roster_name}
+                    />
+                  </TableCell>
                   <TableCell>{e.roster_name}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {e.roster_email}
