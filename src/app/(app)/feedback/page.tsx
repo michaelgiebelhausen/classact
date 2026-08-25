@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
@@ -89,9 +90,19 @@ export default async function FeedbackPage() {
 
       {items.length > 0 && (
         <div className="grid gap-3">
-          <h2 className="text-lg font-semibold">
-            {isFounder ? "All reports" : "Your reports"}
-          </h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-semibold">
+              {isFounder ? "All reports" : "Your reports"}
+            </h2>
+            {isFounder && (
+              <Link
+                href="/developer"
+                className="text-sm text-muted-foreground underline"
+              >
+                Open the developer queue →
+              </Link>
+            )}
+          </div>
           {items.map((item) => (
             <div key={item.id} className="grid gap-2 rounded-lg border p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
