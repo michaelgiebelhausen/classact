@@ -314,7 +314,18 @@ export async function syncCanvasRoster(input: {
       const survivor = twin.profile_id && !exact.profile_id ? twin : exact;
       const loser = survivor === twin ? exact : twin;
       if (loser.profile_id) continue;
-      const { error: mergeError } = await supabase
+      // Delete FIRST: enrollments are unique on (course_id, roster_email),
+      // so the survivor can't take the official address while the loser
+      // still holds it. If the follow-up update fails, the pair is already
+      // down to one row and the next resync's twin-only branch finishes
+      // the adoption.
+      const { error: deleteError } = await supabase
+        .from("enrollments")
+        .delete()
+        .eq("id", loser.id);
+      if (deleteError) continue; // keep the pair; next resync retries
+      deletedIds.add(loser.id);
+      await supabase
         .from("enrollments")
         .update({
           // The official address, which Canvas will keep reporting.
@@ -324,9 +335,6 @@ export async function syncCanvasRoster(input: {
             survivor.roster_name_phonetic ?? loser.roster_name_phonetic,
         })
         .eq("id", survivor.id);
-      if (mergeError) continue; // keep the pair; next resync retries
-      await supabase.from("enrollments").delete().eq("id", loser.id);
-      deletedIds.add(loser.id);
       merged++;
     } else if (twin) {
       // Only the Google-sign-in row exists (joined by code before any
