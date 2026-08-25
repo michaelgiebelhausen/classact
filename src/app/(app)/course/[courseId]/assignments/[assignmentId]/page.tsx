@@ -20,6 +20,10 @@ import {
   type CockpitStudent,
 } from "@/components/features/assignments/GradingCockpit";
 import { StudentReport } from "@/components/features/assignments/StudentReport";
+import {
+  SubmissionRoster,
+  type SubmissionRosterRow,
+} from "@/components/features/assignments/SubmissionRoster";
 import type { TasteCriterion, ThemeScore } from "@/types/db";
 
 /**
@@ -130,17 +134,65 @@ export default async function AssignmentPage({
   // ---------- Professor ----------
   if (isProfessor) {
     if (assignment.state === "open") {
-      const [{ count: submitted }, { count: tastes }] = await Promise.all([
-        supabase
-          .from("submissions")
-          .select("id", { count: "exact", head: true })
-          .eq("assignment_id", assignmentId),
-        supabase
-          .from("taste_files")
-          .select("id", { count: "exact", head: true })
-          .eq("assignment_id", assignmentId)
-          .not("enrollment_id", "is", null),
-      ]);
+      const [{ data: subRows }, { data: tasteRows }, { data: activeRoster }] =
+        await Promise.all([
+          supabase
+            .from("submissions")
+            .select("enrollment_id, submitted_at, last_edit_at")
+            .eq("assignment_id", assignmentId),
+          supabase
+            .from("taste_files")
+            .select(
+              "enrollment_id, criteria, is_default_untouched, last_edit_at"
+            )
+            .eq("assignment_id", assignmentId)
+            .not("enrollment_id", "is", null),
+          supabase
+            .from("enrollments")
+            .select("id, roster_name, profile_id, roster_photo_path")
+            .eq("course_id", courseId)
+            .eq("status", "active")
+            .order("roster_name"),
+        ]);
+      const submitted = (subRows ?? []).length;
+      const tastes = (tasteRows ?? []).length;
+
+      // Who's-turned-in-what roster: faces via the same resolver every other
+      // photo surface uses; a missing admin config just means initials.
+      const subByEnrollment = new Map(
+        (subRows ?? []).map((s) => [s.enrollment_id, s])
+      );
+      const tasteByEnrollment = new Map(
+        (tasteRows ?? []).map((t) => [t.enrollment_id as string, t])
+      );
+      const photoMap = isConfigured.supabaseAdmin
+        ? await resolveEnrollmentPhotos(createAdminClient(), activeRoster ?? [])
+        : new Map<string, string[]>();
+      const rosterRows: SubmissionRosterRow[] = (activeRoster ?? []).map((e) => {
+        const sub = subByEnrollment.get(e.id);
+        const taste = tasteByEnrollment.get(e.id);
+        // "Edited" only when the last edit is meaningfully after submission —
+        // the two timestamps are written moments apart on a normal submit.
+        const edited =
+          sub &&
+          new Date(sub.last_edit_at).getTime() -
+            new Date(sub.submitted_at).getTime() >
+            60_000;
+        return {
+          enrollmentId: e.id,
+          name: e.roster_name,
+          photoUrl: photoMap.get(e.id)?.[0] ?? null,
+          submittedAt: sub?.submitted_at ?? null,
+          editedAt: edited ? sub.last_edit_at : null,
+          taste: taste
+            ? {
+                criteriaCount: ((taste.criteria ?? []) as unknown[]).length,
+                untouchedDefault: taste.is_default_untouched,
+                editedAt: taste.last_edit_at,
+              }
+            : null,
+        };
+      });
       // BYOK preflight surface: key status + a rough scoring-cost preview.
       const creds = await resolveCourseAi(courseId, "scoring");
       const pricing = await scoringPricing(courseId);
@@ -192,6 +244,7 @@ export default async function AssignmentPage({
               )}
             </CardContent>
           </Card>
+          <SubmissionRoster rows={rosterRows} />
         </div>
       );
     }
