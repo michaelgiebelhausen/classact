@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 import { generateJoinCode } from "@/lib/joincode";
@@ -407,6 +408,44 @@ export async function renameCourse(
   revalidatePath(`/course/${courseId}`);
   revalidatePath(`/course/${courseId}/setup`);
   return { ok: true, data: { name: parsed.data } };
+}
+
+/**
+ * Persist the professor's dashboard course order (0028): takes the full list
+ * of course ids in display order and writes each index as its position.
+ */
+export async function reorderCourses(
+  courseIds: string[]
+): Promise<ActionResult> {
+  if (courseIds.length === 0) return { ok: true };
+  if (
+    courseIds.length > 200 ||
+    courseIds.some((id) => !z.string().uuid().safeParse(id).success)
+  ) {
+    return { ok: false, error: "Couldn't save the new order." };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  // Scoped to the professor's own rows; RLS enforces the same.
+  const results = await Promise.all(
+    courseIds.map((id, index) =>
+      supabase
+        .from("courses")
+        .update({ position: index })
+        .eq("id", id)
+        .eq("professor_id", user.id)
+    )
+  );
+  if (results.some((r) => r.error)) {
+    return { ok: false, error: "Couldn't save the new order." };
+  }
+  revalidatePath("/dashboard");
+  return { ok: true };
 }
 
 /** Toggle which icebreaker fields students answer (FR-004). */

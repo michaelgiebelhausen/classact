@@ -12,7 +12,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { BecomeProfessorButton } from "@/components/features/profile/BecomeProfessorButton";
-import { CopyCourseButton } from "@/components/features/CopyCourseButton";
+import { CourseList } from "@/components/features/dashboard/CourseList";
+import { formatSchedule } from "@/lib/schedule";
 
 export default async function DashboardPage() {
   const profile = await getProfile();
@@ -22,8 +23,11 @@ export default async function DashboardPage() {
   if (profile.role === "professor") {
     const { data: courses } = await supabase
       .from("courses")
-      .select("id, name, term, join_code")
+      .select(
+        "id, name, term, join_code, meeting_days, meeting_start, meeting_end, timezone"
+      )
       .eq("professor_id", profile.id)
+      .order("position", { ascending: true })
       .order("created_at", { ascending: false });
 
     return (
@@ -42,32 +46,25 @@ export default async function DashboardPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {courses.map((c) => (
-              <Card key={c.id}>
-                <CardHeader>
-                  <CardTitle className="text-lg">{c.name}</CardTitle>
-                  <CardDescription>
-                    {c.term ?? "No term set"} · Join code{" "}
-                    <span className="font-mono">{c.join_code}</span>
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-wrap gap-2">
-                  <Button asChild size="sm">
-                    <Link href={`/course/${c.id}`}>Open</Link>
-                  </Button>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/course/${c.id}/setup`}>Setup</Link>
-                  </Button>
-                  <CopyCourseButton
-                    courseId={c.id}
-                    courseName={c.name}
-                    term={c.term}
-                  />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <CourseList
+            courses={courses.map((c) => ({
+              id: c.id,
+              name: c.name,
+              term: c.term,
+              joinCode: c.join_code,
+              scheduleLabel:
+                (c.meeting_days as number[])?.length &&
+                c.meeting_start &&
+                c.meeting_end
+                  ? formatSchedule({
+                      days: c.meeting_days as number[],
+                      start: c.meeting_start,
+                      end: c.meeting_end,
+                      timezone: c.timezone ?? "UTC",
+                    })
+                  : "",
+            }))}
+          />
         )}
       </div>
     );

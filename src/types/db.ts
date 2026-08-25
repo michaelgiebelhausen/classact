@@ -115,6 +115,8 @@ export type CourseRow = {
   canvas_course_id: string | null
   canvas_section_ids: string[] | null
   canvas_synced_at: string | null
+  /** Professor's dashboard sort order (0028); ties fall back to created_at. */
+  position: number
   created_at: string
 }
 
