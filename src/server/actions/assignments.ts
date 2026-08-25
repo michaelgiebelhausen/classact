@@ -13,7 +13,7 @@ import {
 } from "@/server/tastyai";
 import { resolveCourseAi } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
-import type { TasteCriterion } from "@/types/db";
+import type { AssignmentRow, TasteCriterion } from "@/types/db";
 
 /**
  * Tasty Grading — assignment lifecycle actions (professor create, student
@@ -319,6 +319,106 @@ export async function submitWork(
 }
 
 /** Professor: adjust assignment settings (pair mix, weights, cut points…). */
+/**
+ * Professor: edit an assignment after creating it. What's editable depends
+ * on where the lifecycle stands — the title always; the deadline only while
+ * submissions are open (extending it past "now" reopens an assignment whose
+ * deadline lapsed before analysis ran); the peer-grading close while open or
+ * during peer review (moving it into the past is the "close peer grading
+ * now" lever). Nothing else moves mid-flight: a deadline change during
+ * analysis or after publication would pull the rug out from under scores.
+ */
+export async function updateAssignment(input: {
+  assignmentId: string;
+  title?: string;
+  /** ISO datetime. */
+  deadline?: string;
+  /** ISO datetime. */
+  peerCloseAt?: string;
+}): Promise<ActionResult> {
+  const { supabase, user } = await requireUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: assignment } = await supabase
+    .from("assignments")
+    .select("id, course_id, state, deadline, peer_close_at, courses!inner(professor_id)")
+    .eq("id", input.assignmentId)
+    .single();
+  if (
+    !assignment ||
+    (assignment.courses as unknown as { professor_id: string }).professor_id !==
+      user.id
+  ) {
+    return { ok: false, error: "Only the course owner can edit an assignment." };
+  }
+
+  const patch: Partial<Pick<AssignmentRow, "title" | "deadline" | "peer_close_at">> =
+    {};
+
+  if (input.title !== undefined) {
+    const title = input.title.trim().slice(0, 200);
+    if (!title) return { ok: false, error: "Give the assignment a title." };
+    patch.title = title;
+  }
+
+  let deadline = new Date(assignment.deadline);
+  if (input.deadline !== undefined) {
+    if (assignment.state !== "open") {
+      return {
+        ok: false,
+        error:
+          "The deadline can't change once grading has started — it's baked into the analysis.",
+      };
+    }
+    const next = new Date(input.deadline);
+    if (Number.isNaN(next.getTime()) || next.getTime() < Date.now()) {
+      return { ok: false, error: "Pick a deadline in the future." };
+    }
+    deadline = next;
+    patch.deadline = next.toISOString();
+  }
+
+  if (input.peerCloseAt !== undefined) {
+    if (assignment.state !== "open" && assignment.state !== "peer_review") {
+      return {
+        ok: false,
+        error: "Peer grading has already closed — its end can't move now.",
+      };
+    }
+    const next = new Date(input.peerCloseAt);
+    if (Number.isNaN(next.getTime()) || next <= deadline) {
+      return {
+        ok: false,
+        error: "Peer grading must close after the submission deadline.",
+      };
+    }
+    patch.peer_close_at = next.toISOString();
+  } else if (
+    patch.deadline &&
+    new Date(assignment.peer_close_at) <= deadline
+  ) {
+    // The deadline moved past the peer window: keep the invariant rather
+    // than erroring on a field the professor didn't touch.
+    return {
+      ok: false,
+      error:
+        "That deadline is after peer grading closes — move the peer grading close too.",
+    };
+  }
+
+  if (Object.keys(patch).length === 0) return { ok: true };
+
+  const { error } = await supabase
+    .from("assignments")
+    .update(patch)
+    .eq("id", assignment.id);
+  if (error) return { ok: false, error: "Couldn't save the changes." };
+
+  revalidatePath(`/course/${assignment.course_id}/assignments/${assignment.id}`);
+  revalidatePath(`/course/${assignment.course_id}/assignments`);
+  return { ok: true };
+}
+
 export async function updateAssignmentSettings(
   assignmentId: string,
   patch: Record<string, unknown>

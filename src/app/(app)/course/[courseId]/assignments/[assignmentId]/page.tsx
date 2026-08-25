@@ -24,6 +24,7 @@ import {
   SubmissionRoster,
   type SubmissionRosterRow,
 } from "@/components/features/assignments/SubmissionRoster";
+import { AssignmentEdit } from "@/components/features/assignments/AssignmentEdit";
 import type { TasteCriterion, ThemeScore } from "@/types/db";
 
 /**
@@ -205,6 +206,13 @@ export default async function AssignmentPage({
       return (
         <div className="grid gap-6">
           {header}
+          <AssignmentEdit
+            assignmentId={assignmentId}
+            state={assignment.state}
+            title={assignment.title}
+            deadline={assignment.deadline}
+            peerCloseAt={assignment.peer_close_at}
+          />
           {!creds && (
             <Card className="border-primary/50">
               <CardContent className="grid gap-1 py-6 text-center">
@@ -333,6 +341,13 @@ export default async function AssignmentPage({
     return (
       <div className="grid gap-6">
         {header}
+        <AssignmentEdit
+          assignmentId={assignmentId}
+          state={assignment.state}
+          title={assignment.title}
+          deadline={assignment.deadline}
+          peerCloseAt={assignment.peer_close_at}
+        />
         <GradingCockpit
           assignmentId={assignmentId}
           state={
