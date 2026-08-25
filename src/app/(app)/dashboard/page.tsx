@@ -21,7 +21,7 @@ export default async function DashboardPage() {
   const supabase = await createClient();
 
   if (profile.role === "professor") {
-    const { data: courses } = await supabase
+    const { data: courses, error: coursesError } = await supabase
       .from("courses")
       .select(
         "id, name, term, join_code, meeting_days, meeting_start, meeting_end, timezone"
@@ -29,6 +29,19 @@ export default async function DashboardPage() {
       .eq("professor_id", profile.id)
       .order("position", { ascending: true })
       .order("created_at", { ascending: false });
+
+    // A failed query must never render as "no courses yet" — most likely a
+    // migration hasn't run (42703, undefined column) and the professor would
+    // read it as their courses being gone.
+    if (coursesError) {
+      console.error("[dashboard] courses query failed:", {
+        code: coursesError.code,
+        message: coursesError.message,
+      });
+      throw new Error(
+        `Your courses couldn't load: ${coursesError.message}. If that names a missing column, run the latest migrations in the Supabase SQL editor (see HANDOFF.md — currently through 0028_course_order.sql).`
+      );
+    }
 
     return (
       <div className="grid gap-6">
