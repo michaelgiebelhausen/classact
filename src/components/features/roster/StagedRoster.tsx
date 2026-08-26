@@ -59,6 +59,7 @@ export function StagedRoster({
   sectionIds,
   syncedAt,
   joinCode,
+  founder,
 }: {
   groups: Record<RosterStage, StagedPerson[]>;
   total: number;
@@ -67,6 +68,8 @@ export function StagedRoster({
   sectionIds: string[] | null;
   syncedAt: string | null;
   joinCode: string | null;
+  /** Founder accounts see the tools that delete rather than re-arrange. */
+  founder: boolean;
 }) {
   const present = ROSTER_STAGE_ORDER.filter((s) => groups[s].length > 0);
 
@@ -109,6 +112,7 @@ export function StagedRoster({
                     courseId={courseId}
                     joinCode={joinCode}
                     people={people}
+                    founder={founder}
                   />
                 )}
               </section>

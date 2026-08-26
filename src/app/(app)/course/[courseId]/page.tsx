@@ -15,6 +15,7 @@ import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
 import { stageRoster } from "@/server/stageroster";
+import { isFounder } from "@/server/founder";
 import { StagedRoster } from "@/components/features/roster/StagedRoster";
 
 function initials(name: string): string {
@@ -77,6 +78,10 @@ export default async function CourseHomePage({
       ? await stageRoster(createAdminClient(), enrollments ?? [], photoMap)
       : null;
 
+  // Account-destroying tools are hidden from ordinary professors, not merely
+  // refused — a button that exists and says no is worse than no button.
+  const founder = staged ? await isFounder() : false;
+
   return (
     <div className="grid gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -124,6 +129,7 @@ export default async function CourseHomePage({
           sectionIds={course.canvas_section_ids}
           syncedAt={course.canvas_synced_at}
           joinCode={course.join_code}
+          founder={founder}
         />
       ) : (
       <Card>

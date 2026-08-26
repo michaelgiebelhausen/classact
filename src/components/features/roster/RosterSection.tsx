@@ -44,11 +44,13 @@ export function RosterSection({
   courseId,
   joinCode,
   people,
+  founder,
 }: {
   stage: RosterStage;
   courseId: string;
   joinCode: string | null;
   people: StagedPerson[];
+  founder: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -167,7 +169,7 @@ export function RosterSection({
 
   return (
     <div className="grid gap-3">
-      {stage === "needs_password" && joinCode && (
+      {stage === "needs_password" && founder && joinCode && (
         <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
           With the student in front of you, <span className="font-medium text-foreground">Reset</span>{" "}
           is fastest — then they sign up at{" "}
@@ -237,14 +239,14 @@ export function RosterSection({
             {busy === "bulk" ? "Approving…" : `Approve all ${people.length}`}
           </Button>
         )}
-        {stage === "self_joined" && people.some((p) => p.candidates) && (
+        {stage === "self_joined" && founder && people.some((p) => p.candidates) && (
           <span className="text-xs text-muted-foreground">
             Click the Canvas student underneath someone to say they&apos;re the
             same person. They keep signing in with their own address; their
             attendance comes with them, and Canvas recognises them from then on.
           </span>
         )}
-        {stage === "duplicate" && (
+        {stage === "duplicate" && founder && (
           <span className="text-xs text-muted-foreground">
             Removing a duplicate deletes this spare row and the unused login
             behind it. Their real row — name, photo, attendance — is untouched,
@@ -281,7 +283,7 @@ export function RosterSection({
               </Button>
             )}
 
-            {stage === "self_joined" && p.candidates && (
+            {stage === "self_joined" && founder && p.candidates && (
               <div className="mt-1 grid gap-1 rounded-md border bg-muted/30 p-2">
                 <span className="text-[10px] leading-tight text-muted-foreground">
                   On the Canvas roster as?
@@ -315,7 +317,7 @@ export function RosterSection({
               </div>
             )}
 
-            {stage === "duplicate" &&
+            {stage === "duplicate" && founder &&
               (confirming === p.id ? (
                 <span className="flex flex-col items-center gap-1">
                   <Button
@@ -347,7 +349,7 @@ export function RosterSection({
                 </Button>
               ))}
 
-            {stage === "needs_password" &&
+            {stage === "needs_password" && founder &&
               (confirming === p.id ? (
                 <span className="flex flex-col items-center gap-1">
                   <Button

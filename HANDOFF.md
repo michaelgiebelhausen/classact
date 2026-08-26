@@ -257,6 +257,33 @@ identity claim.
 Claiming an address is still matched against the row it is claimed for, so a
 claim can never hand anyone somebody else's roster place.
 
+## Founder-only tools
+
+Three controls destroy things rather than re-arranging a roster, and they are
+gated on `profiles.founder`: **Remove duplicate**, **Reset** (a stuck
+student's login), and **Match to Canvas row**.
+
+They exist because the developer is currently also the professor, fixing live
+data by hand during an intense trial. They are not things an ordinary
+professor should be able to do: a professor manages a roster — drop, block,
+invite, approve — and every one of those is reversible. Deleting a student's
+account is not, and nobody should hold that over a student because they
+happen to teach them.
+
+The server check is the real gate; the buttons are also hidden, because a
+control that exists and refuses is worse than no control. The code is kept
+rather than removed, so the decision to drop it outright can be made when the
+developer is no longer the only user.
+
+**Set the flag on any account that needs them:**
+
+```sql
+update profiles set founder = true
+ where id = (select id from auth.users where email = 'you@university.edu');
+```
+
+Note this flag also routes course AI onto the system OpenRouter key (step 2).
+
 ## Resolving a duplicate student
 
 A student who signs in with their university Google account gets a second auth

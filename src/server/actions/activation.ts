@@ -16,6 +16,7 @@ import { canResetAccount } from "@/lib/accountreset";
 import { canApproveJoiner } from "@/lib/approvejoiner";
 import { canResolveDuplicate } from "@/lib/duplicateresolve";
 import { planCanvasMatch } from "@/lib/matchplan";
+import { isFounder, FOUNDER_ONLY } from "@/server/founder";
 import { emailAliasOf } from "@/lib/emailalias";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
@@ -235,6 +236,9 @@ export async function resetStuckAccount(input: {
   if (!isConfigured.supabaseAdmin) {
     return { ok: false, error: "The server isn't configured to reset accounts." };
   }
+  // Destroys an account or an enrolment row: founder-only while the developer
+  // is also the professor. See server/founder.ts.
+  if (!(await isFounder())) return { ok: false, error: FOUNDER_ONLY };
 
   const supabase = await createClient();
   const { data: enrollment } = await supabase
@@ -382,6 +386,9 @@ export async function resolveDuplicate(input: {
   if (!isConfigured.supabaseAdmin) {
     return { ok: false, error: "The server isn't configured for this." };
   }
+  // Destroys an account or an enrolment row: founder-only while the developer
+  // is also the professor. See server/founder.ts.
+  if (!(await isFounder())) return { ok: false, error: FOUNDER_ONLY };
 
   const supabase = await createClient();
   const { data: shadow } = await supabase
@@ -481,6 +488,8 @@ export async function matchToCanvasRow(input: {
 
   const owned = await ownedCourse(parsed.data.courseId);
   if (!owned.ok) return { ok: false, error: owned.error };
+  // Removes an enrolment row and can delete a stale login: founder-only.
+  if (!(await isFounder())) return { ok: false, error: FOUNDER_ONLY };
 
   const supabase = await createClient();
   const { data: rows } = await supabase
