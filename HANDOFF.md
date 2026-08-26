@@ -208,6 +208,25 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## Canvas sync on the roster (CA-8) — needs 0030 AND 0031, both BEFORE deploying
+
+Neither is safe to defer: the sync selects `canvas_missing_since` (0030) and
+`canvas_seen_at` (0031). If either column is absent the query fails, the sync
+reads the existing roster as empty, and tries to re-import every student —
+which collides on the unique email constraint and reports "Import failed".
+
+**0031 is what makes the departures section mean anything.** 0030 inferred
+"no longer on Canvas" from absence alone, which cannot tell "was on the Canvas
+roster and left" from "was never on it" — so students who joined with a course
+code on a personal Gmail were listed as drop candidates forever. `canvas_seen_at`
+records that a sync actually matched or imported the student, and only rows
+carrying it can ever be flagged. It also backfills once, using the rule that a
+roster row whose *name* is an email address was created by `/auth/join` rather
+than by an import (the same rule `isEmailAddress` in lib/names.ts documents).
+That backfill is a heuristic: it can wrongly include a CSV-imported student,
+who then appears as a drop candidate and simply isn't ticked. It cannot wrongly
+include a join-code student, which was the bug.
+
 ## Canvas sync on the roster (CA-8) — needs migration 0030 FIRST
 
 **Run `supabase/migrations/0030_canvas_missing.sql` BEFORE deploying this

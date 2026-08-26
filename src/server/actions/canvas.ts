@@ -291,7 +291,7 @@ export async function syncCanvasRoster(input: {
   const { data: existing } = await supabase
     .from("enrollments")
     .select(
-      "id, roster_name, roster_email, status, profile_id, roster_name_phonetic, canvas_missing_since"
+      "id, roster_name, roster_email, status, profile_id, roster_name_phonetic, canvas_missing_since, canvas_seen_at"
     )
     .eq("course_id", course.id);
   const rows = existing ?? [];
@@ -363,6 +363,10 @@ export async function syncCanvasRoster(input: {
         roster_email: s.email,
         status: "invited" as const,
         roster_name_phonetic: phonetics.get(s.name.trim()) ?? null,
+        // Canvas-origin by definition — this row exists because Canvas
+        // listed them, which is what makes them eligible to be a departure
+        // later on.
+        canvas_seen_at: new Date().toISOString(),
       }))
     );
     if (error) return { ok: false, error: "Import failed — try again." };
@@ -419,11 +423,30 @@ export async function syncCanvasRoster(input: {
   // this is the ordinary path rather than an edge case. The marker is
   // persisted so the roster carries a standing "no longer on Canvas" section
   // instead of a panel that vanishes when the professor closes the tab.
+  const nowIso = new Date().toISOString();
+
+  // Stamp everyone Canvas just listed. This is the record that makes a later
+  // absence meaningful, and it is why the bulk update runs on every sync
+  // rather than only on first import.
+  const seenIds = [...matchedIds].filter((id) => !deletedIds.has(id));
+  if (seenIds.length > 0) {
+    await supabase
+      .from("enrollments")
+      .update({ canvas_seen_at: nowIso })
+      .in("id", seenIds);
+  }
+
+  // Only students Canvas has actually held can go missing from it. Someone
+  // who joined with a course code and no Canvas relationship at all was
+  // never there to leave, and listing them as a drop candidate buries the
+  // real drops among people who never went anywhere.
   const missing = rows.filter(
     (e) =>
-      e.status !== "dropped" && !matchedIds.has(e.id) && !deletedIds.has(e.id)
+      e.status !== "dropped" &&
+      e.canvas_seen_at &&
+      !matchedIds.has(e.id) &&
+      !deletedIds.has(e.id)
   );
-  const nowIso = new Date().toISOString();
   for (const e of missing) {
     if (e.canvas_missing_since) continue; // keep the ORIGINAL date they vanished
     await supabase

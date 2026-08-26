@@ -379,6 +379,10 @@ export type EnrollmentRow = {
   /** When a Canvas sync first stopped finding them (0030). Cleared the moment
    * Canvas lists them again, so a bad token doesn't leave a false accusation. */
   canvas_missing_since: string | null
+  /** Last time a Canvas sync matched or imported them (0031). Null means
+   * Canvas never listed them — joined by code, or added by CSV — so they can
+   * never be a Canvas departure. */
+  canvas_seen_at: string | null
   created_at: string
 }
 

@@ -115,7 +115,7 @@ export const ROSTER_STAGE_META: Record<
   no_longer_on_canvas: {
     title: "No longer on Canvas",
     blurb:
-      "The last sync didn't find them in Canvas. Usually a drop — but a student added by CSV, or one in a section you don't sync, looks identical from here.",
+      "Canvas listed these students once and the last sync didn't find them — usually a drop. Students who joined with the course code and were never in Canvas are not shown here. Someone in a section you don't sync can still appear, so check before dropping.",
     tone: "outline",
   },
 };
