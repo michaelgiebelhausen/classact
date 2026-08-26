@@ -8,6 +8,7 @@ const canvasRow = {
   accountEmail: null,
   activation: "emailed_no_account" as const,
   canvasMissingSince: null,
+  canvasSeenAt: null,
 };
 
 describe("rosterStage", () => {
@@ -29,6 +30,7 @@ describe("rosterStage", () => {
         status: "active",
         accountEmail: "jdoe@clemson.edu",
         activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
       })
     ).toBe("canvas_confirmed");
   });
@@ -42,6 +44,7 @@ describe("rosterStage", () => {
         rosterEmail: "JDoe@Clemson.edu",
         accountEmail: "jdoe@clemson.edu",
         activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
       })
     ).toBe("canvas_confirmed");
   });
@@ -73,6 +76,7 @@ describe("rosterStage", () => {
         accountEmail: "someone@clemson.edu",
         activation: "signed_in_not_joined",
         canvasMissingSince: null,
+        canvasSeenAt: null,
       })
     ).toBe("self_joined");
   });
@@ -115,6 +119,7 @@ describe("rosterStage", () => {
         status: "active",
         accountEmail: "jdoe@clemson.edu",
         activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
         canvasMissingSince: "2026-08-26T12:00:00Z",
       })
     ).toBe("no_longer_on_canvas");
@@ -131,5 +136,38 @@ describe("rosterStage", () => {
         canvasMissingSince: "2026-08-26T12:00:00Z",
       })
     ).toBe("no_longer_on_canvas");
+  });
+
+  test("a course-code joiner is never 'confirmed from Canvas', however active", () => {
+    // wgt567654@gmail.com was filed under Confirmed from Canvas on the live
+    // page. A Gmail address was never on a Clemson Canvas roster; the row
+    // just happened to be active and to match its own login address.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "wgt567654@gmail.com",
+        accountEmail: "wgt567654@gmail.com",
+        activation: "active",
+        canvasSeenAt: null,
+      })
+    ).toBe("self_joined");
+  });
+
+  test("a g-twin address Canvas really does hold stays confirmed", () => {
+    // dwreede@g.clemson.edu was matched by an actual sync, so Canvas holds
+    // that spelling. Provenance is recorded, not guessed.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "dwreede@g.clemson.edu",
+        accountEmail: "dwreede@g.clemson.edu",
+        activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+      })
+    ).toBe("canvas_confirmed");
   });
 });

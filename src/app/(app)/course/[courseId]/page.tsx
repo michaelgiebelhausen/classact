@@ -61,7 +61,7 @@ export default async function CourseHomePage({
   const { data: enrollments } = await directory
     .from("enrollments")
     .select(
-      "id, roster_name, roster_email, profile_id, status, roster_photo_path, invited_at, invite_error, canvas_missing_since"
+      "id, roster_name, roster_email, profile_id, status, roster_photo_path, invited_at, invite_error, canvas_missing_since, canvas_seen_at"
     )
     .eq("course_id", courseId)
     .neq("status", "dropped")

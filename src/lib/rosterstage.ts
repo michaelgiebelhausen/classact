@@ -3,9 +3,9 @@
  *
  * A flat grid of faces answered "who is on the roster" but not the question a
  * professor opening a class actually has, which is "who still needs something
- * from me". This groups the roster into four stages, ordered so that problems
- * are at the top and the large passive block of unclaimed Canvas rows sits at
- * the bottom.
+ * from me". This groups the roster into five stages, ordered so that problems
+ * are at the top, the large passive block of unclaimed Canvas rows sits low,
+ * and people who have left the course sit lower still.
  *
  * Orthogonal to `activationState` rather than a replacement for it. That
  * machine answers *what is blocking this student*; this one answers *how did
@@ -13,10 +13,13 @@
  * but never got a session" is a blocking reason, "arrived from Canvas" is a
  * provenance, and the sections need one of each.
  *
- * There is no per-enrollment Canvas flag in the schema — the `canvas_*`
- * columns live on `courses` — so provenance is inferred from two facts that
- * are recorded: whether a profile has claimed the row, and whether the address
- * they signed in with is the address Canvas put on it.
+ * Provenance is READ, not inferred. `enrollments.canvas_seen_at` (0031) is
+ * stamped whenever a sync matches or imports someone, and both Canvas-facing
+ * verdicts — confirmed, and departed — require it. Two rounds of bugs came
+ * from guessing instead: course-code joiners were offered as Canvas drops
+ * because they were absent from Canvas, and then filed as confirmed imports
+ * because their row happened to be active. Neither absence nor status says
+ * anything about where a student came from.
  */
 import type { ActivationState } from "@/lib/activation";
 
@@ -41,6 +44,9 @@ export interface RosterStageFacts {
   activation: ActivationState;
   /** Set when a sync stopped finding them in Canvas; cleared when it does. */
   canvasMissingSince: string | null;
+  /** Set when a Canvas sync has actually matched or imported them. Null means
+   *  Canvas has never listed this person, however settled the row looks. */
+  canvasSeenAt: string | null;
 }
 
 /**
@@ -82,6 +88,14 @@ export function rosterStage(facts: RosterStageFacts): RosterStage {
   // Claimed and still pending: no Canvas row existed, so /auth/join created
   // one for them. Waiting on the professor, not lost.
   if (facts.status !== "active") return "self_joined";
+
+  // Being active is not evidence of having come from Canvas. A course-code
+  // joiner whose login happens to equal their roster address looks identical
+  // to a confirmed import from every angle except this one — which is why
+  // `wgt567654@gmail.com`, a Gmail address that was never on a Clemson Canvas
+  // roster, was filed under "Confirmed from Canvas" on the live page.
+  // Provenance is recorded now, so stop inferring it.
+  if (!facts.canvasSeenAt) return "self_joined";
 
   return "canvas_confirmed";
 }
