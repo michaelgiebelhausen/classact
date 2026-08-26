@@ -26,8 +26,6 @@ export interface StagedPerson {
   /** What would actually help this person — the stuck section holds two
    *  different problems whose remedies are opposites. */
   remedy?: Remedy;
-  /** Joined with the course code and still pending, so check-in refuses them. */
-  pendingApproval?: boolean;
 }
 
 /**

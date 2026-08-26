@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   sendSetPasswordLinks,
@@ -106,6 +105,17 @@ export function RosterSection({
       router.refresh();
     });
 
+  const approveOne = (person: StagedPerson) =>
+    run(person.id, async () => {
+      const result = await approveJoiners({
+        courseId,
+        enrollmentIds: [person.id],
+      });
+      if (!result.ok) return toast.error(result.error, { duration: 8000 });
+      toast.success(`${person.name} can check in now.`);
+      router.refresh();
+    });
+
   const resetOne = (person: StagedPerson) =>
     run(person.id, async () => {
       const result = await resetStuckAccount({
@@ -157,31 +167,27 @@ export function RosterSection({
             </Link>
           </Button>
         )}
-        {stage === "self_joined" && people.some((p) => p.pendingApproval) && (
+        {stage === "awaiting_approval" && people.length > 1 && (
           <Button
             size="sm"
+            variant="outline"
             onClick={() =>
               run("bulk", async () => {
-                const pending = people
-                  .filter((p) => p.pendingApproval)
-                  .map((p) => p.id);
                 const result = await approveJoiners({
                   courseId,
-                  enrollmentIds: pending,
+                  enrollmentIds: ids,
                 });
                 if (!result.ok)
                   return toast.error(result.error, { duration: 8000 });
                 toast.success(
-                  `Approved ${result.data?.approved ?? pending.length}. They can check in now.`
+                  `Approved ${result.data?.approved ?? ids.length}. They can check in now.`
                 );
                 router.refresh();
               })
             }
             disabled={busy !== null}
           >
-            {busy === "bulk"
-              ? "Approving…"
-              : `Let the ${people.filter((p) => p.pendingApproval).length} waiting check in`}
+            {busy === "bulk" ? "Approving…" : `Approve all ${people.length}`}
           </Button>
         )}
         {stage === "duplicate" && (
@@ -210,10 +216,15 @@ export function RosterSection({
               </span>
             )}
 
-            {p.pendingApproval && stage === "self_joined" && (
-              <Badge variant="destructive" className="text-[10px]">
-                can&apos;t check in yet
-              </Badge>
+            {stage === "awaiting_approval" && (
+              <Button
+                size="sm"
+                className="h-6 px-2 text-[10px]"
+                disabled={busy !== null}
+                onClick={() => approveOne(p)}
+              >
+                {busy === p.id ? "Approving…" : "Approve"}
+              </Button>
             )}
 
             {stage === "needs_password" &&

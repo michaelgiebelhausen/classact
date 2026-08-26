@@ -115,7 +115,6 @@ export async function stageRoster(
       photoUrl: photoMap.get(e.id)?.[0] ?? null,
       note: noteFor(stage, e, accountEmail),
       remedy: ACTIVATION_META[activation].remedy,
-      pendingApproval: e.status === "invited" && Boolean(e.profile_id),
     });
   }
 

@@ -25,6 +25,7 @@ import type { ActivationState } from "@/lib/activation";
 import { emailAliasOf } from "@/lib/emailalias";
 
 export const ROSTER_STAGE_ORDER = [
+  "awaiting_approval",
   "needs_password",
   "needs_class",
   "invite_failed",
@@ -104,10 +105,16 @@ export function rosterStage(facts: RosterStageFacts): RosterStage {
     return "canvas_confirmed";
   }
 
-  // Everything else: signed in with an address that isn't the Canvas identity,
-  // or a row Canvas has never listed. `wgt567654@gmail.com` was filed as a
-  // confirmed import purely because its row happened to be active, which is
-  // the inference this replaces.
+  // Joined with the course code and never approved. /auth/join parks them at
+  // 'invited', and checkIn requires 'active', so they are turned away at the
+  // seat map believing they are set up. Its own section, because it is a
+  // one-click fix that is invisible when mixed in with students who are
+  // already through.
+  if (facts.status !== "active") return "awaiting_approval";
+
+  // Everything else: in the class, signed in with an address that isn't the
+  // Canvas identity, or never on the Canvas roster at all — an auditor, or
+  // someone added by hand. Settled: nothing is owed to them.
   return "self_joined";
 }
 
@@ -115,6 +122,12 @@ export const ROSTER_STAGE_META: Record<
   RosterStage,
   { title: string; blurb: string; tone: "destructive" | "secondary" | "default" | "outline" }
 > = {
+  awaiting_approval: {
+    title: "Joined with the code, waiting on you",
+    blurb:
+      "They have working accounts and think they're set — but check-in turns them away until you approve them, and nothing tells them so. One click each.",
+    tone: "destructive",
+  },
   needs_password: {
     title: "Confirmed their email, never got signed in",
     blurb:
@@ -140,9 +153,9 @@ export const ROSTER_STAGE_META: Record<
     tone: "secondary",
   },
   self_joined: {
-    title: "Joined, but not through Canvas",
+    title: "In the class, but not through Canvas",
     blurb:
-      "In the class, signed in with an address Canvas doesn't have — or they joined with the course code and aren't on the Canvas roster at all.",
+      "Approved and able to check in. Either they sign in with an address Canvas doesn't hold, or they were never on the Canvas roster — an auditor, or someone you added by hand. Nothing owed.",
     tone: "secondary",
   },
   canvas_confirmed: {

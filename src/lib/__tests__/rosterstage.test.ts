@@ -84,9 +84,9 @@ describe("rosterStage", () => {
     ).toBe("self_joined");
   });
 
-  test("an off-roster joiner is self-joined, not lost", () => {
+  test("an off-roster joiner is waiting on the professor, not lost", () => {
     // Joined with the course code, no Canvas row: profile set, still pending
-    // the professor's approval. They are not stuck — they are waiting on us.
+    // approval. Not stuck — waiting on us, and one click from checking in.
     expect(
       rosterStage({
         hasProfile: true,
@@ -98,7 +98,7 @@ describe("rosterStage", () => {
         canvasSeenAt: null,
         isDuplicateShadow: false,
       })
-    ).toBe("self_joined");
+    ).toBe("awaiting_approval");
   });
 
   test("confirmed their email but never got a session needs a password", () => {
@@ -141,6 +141,7 @@ describe("rosterStage", () => {
     // The eye lands on what needs attention; the big passive block of
     // unclaimed Canvas rows sits low, and people who have left sit lower.
     expect(ROSTER_STAGE_ORDER).toEqual([
+      "awaiting_approval",
       "needs_password",
       "needs_class",
       "invite_failed",
@@ -240,6 +241,36 @@ describe("rosterStage", () => {
         accountEmail: "jdoe@hotmail.com",
         activation: "active",
         canvasSeenAt: "2026-08-26T09:00:00Z",
+      })
+    ).toBe("self_joined");
+  });
+
+  test("someone who joined with the code and isn't approved yet is its own situation", () => {
+    // They have a working account and believe they're set, but checkIn wants
+    // status 'active' and turns them away at the seat map. Mixing them in with
+    // students who are already approved hides a one-click fix.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "invited",
+        rosterEmail: "someone@gmail.com",
+        accountEmail: "someone@gmail.com",
+        activation: "signed_in_not_joined",
+      })
+    ).toBe("awaiting_approval");
+  });
+
+  test("an approved off-roster student is settled, not a queue item", () => {
+    // An auditor. Never on Canvas, deliberately in the class, nothing owed.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "someone@gmail.com",
+        accountEmail: "someone@gmail.com",
+        activation: "active",
       })
     ).toBe("self_joined");
   });
