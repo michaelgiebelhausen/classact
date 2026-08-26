@@ -7,13 +7,17 @@ import {
   type AccountFacts,
 } from "@/lib/activation";
 import { emailAliasOf } from "@/lib/emailalias";
-import { isEmailAddress } from "@/lib/names";
+import { isEmailAddress, rosterDisplayName } from "@/lib/names";
+import { rankCanvasCandidates } from "@/lib/canvasmatch";
 import {
   rosterStage,
   ROSTER_STAGE_ORDER,
   type RosterStage,
 } from "@/lib/rosterstage";
-import type { StagedPerson } from "@/components/features/roster/StagedRoster";
+import type {
+  StagedPerson,
+  MatchCandidate,
+} from "@/components/features/roster/StagedRoster";
 
 /** The enrollment columns this needs; a superset is fine. */
 export interface StageableEnrollment {
@@ -61,16 +65,18 @@ export async function stageRoster(
 
   // The school address a student claims, which is what identifies them on the
   // Canvas roster when they sign in with something else entirely.
+  const fullNameByProfile = new Map<string, string>();
   const linked = enrollments
     .map((e) => e.profile_id)
     .filter((id): id is string => Boolean(id));
   if (linked.length > 0) {
     const { data: profiles } = await admin
       .from("profiles")
-      .select("id, school_email")
+      .select("id, school_email, full_name")
       .in("id", [...new Set(linked)]);
     for (const p of profiles ?? []) {
       if (p.school_email) schoolEmailByProfile.set(p.id, p.school_email);
+      if (p.full_name) fullNameByProfile.set(p.id, p.full_name);
     }
   }
 
@@ -135,6 +141,48 @@ export async function stageRoster(
       note: noteFor(stage, e, accountEmail),
       remedy: ACTIVATION_META[activation].remedy,
     });
+  }
+
+  // Candidates for the students who still need matching to a Canvas row.
+  // Second pass, because it needs to know which rows ended up unclaimed.
+  const unclaimed: MatchCandidate[] = enrollments
+    .filter((e) => !e.profile_id && e.canvas_seen_at)
+    .map((e) => ({
+      id: e.id,
+      name: e.roster_name,
+      email: e.roster_email,
+      photoUrl: photoMap.get(e.id)?.[0] ?? null,
+      confident: false,
+    }));
+
+  if (unclaimed.length > 0) {
+    for (const person of groups.self_joined) {
+      const enrollment = enrollments.find((e) => e.id === person.id);
+      if (!enrollment || enrollment.canvas_seen_at) continue;
+      // A course-code row is named after its address, so the account's own
+      // name is the only real name signal available.
+      const display = rosterDisplayName(
+        enrollment.roster_name,
+        enrollment.profile_id
+          ? fullNameByProfile.get(enrollment.profile_id) ?? null
+          : null
+      );
+      const ranked = rankCanvasCandidates(
+        { name: display, email: enrollment.roster_email },
+        unclaimed
+      )
+        .filter((r) => r.score >= 40)
+        .slice(0, 3);
+      if (ranked.length > 0) {
+        person.candidates = ranked.map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          photoUrl: unclaimed.find((u) => u.id === r.id)?.photoUrl ?? null,
+          confident: r.confident,
+        }));
+      }
+    }
   }
 
   return { groups, total: enrollments.length };

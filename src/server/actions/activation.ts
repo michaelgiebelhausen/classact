@@ -15,6 +15,7 @@ import {
 import { canResetAccount } from "@/lib/accountreset";
 import { canApproveJoiner } from "@/lib/approvejoiner";
 import { canResolveDuplicate } from "@/lib/duplicateresolve";
+import { planCanvasMatch } from "@/lib/matchplan";
 import { emailAliasOf } from "@/lib/emailalias";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
@@ -443,5 +444,162 @@ export async function resolveDuplicate(input: {
   return {
     ok: true,
     data: { removed: shadow.roster_email, accountDeleted },
+  };
+}
+
+const matchSchema = z.object({
+  courseId: z.string().uuid(),
+  /** The student's own row — the one their account signs in to. */
+  personalEnrollmentId: z.string().uuid(),
+  /** The unclaimed Canvas roster row they should be recognised as. */
+  canvasEnrollmentId: z.string().uuid(),
+});
+
+/**
+ * Match a student's own account to their official Canvas roster row.
+ *
+ * The row holding their attendance survives and takes on the Canvas identity —
+ * address, name, photo, phonetic spelling. Every match made by hand had the
+ * attendance on the personal row, so keeping the tidier Canvas row instead
+ * would have deleted it: twenty-two tables cascade off `enrollments`.
+ *
+ * Their login never changes. `profiles.school_email` records who they are on
+ * the Canvas roster, which is what lets someone signing in as
+ * `meredithmfreeman@icloud.com` read as `mfreem4@clemson.edu` and stay matched
+ * through every future sync.
+ */
+export async function matchToCanvasRow(input: {
+  courseId: string;
+  personalEnrollmentId: string;
+  canvasEnrollmentId: string;
+}): Promise<ActionResult<{ identity: string; keptHistory: boolean }>> {
+  const parsed = matchSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid request." };
+  if (parsed.data.personalEnrollmentId === parsed.data.canvasEnrollmentId) {
+    return { ok: false, error: "That's the same row." };
+  }
+
+  const owned = await ownedCourse(parsed.data.courseId);
+  if (!owned.ok) return { ok: false, error: owned.error };
+
+  const supabase = await createClient();
+  const { data: rows } = await supabase
+    .from("enrollments")
+    .select(
+      "id, roster_name, roster_email, roster_photo_path, roster_name_phonetic, profile_id, status"
+    )
+    .eq("course_id", parsed.data.courseId)
+    .in("id", [parsed.data.personalEnrollmentId, parsed.data.canvasEnrollmentId]);
+
+  const personal = (rows ?? []).find(
+    (r) => r.id === parsed.data.personalEnrollmentId
+  );
+  const canvas = (rows ?? []).find(
+    (r) => r.id === parsed.data.canvasEnrollmentId
+  );
+  if (!personal || !canvas) {
+    return { ok: false, error: "Those rows aren't both on this roster." };
+  }
+  if (!personal.profile_id) {
+    return { ok: false, error: "That student hasn't claimed an account yet." };
+  }
+
+  const countFor = async (id: string) =>
+    (
+      await supabase
+        .from("check_ins")
+        .select("id", { count: "exact", head: true })
+        .eq("enrollment_id", id)
+    ).count ?? 0;
+
+  const plan = planCanvasMatch({
+    personalCheckIns: await countFor(personal.id),
+    canvasCheckIns: await countFor(canvas.id),
+    canvasHasProfile: Boolean(canvas.profile_id),
+  });
+  if (!plan.allowed) return { ok: false, error: plan.reason };
+
+  if (plan.keep === "personal") {
+    // Delete first: enrollments are unique on (course_id, roster_email), so
+    // the survivor can't take the official address while the other holds it.
+    const { error: delErr } = await supabase
+      .from("enrollments")
+      .delete()
+      .eq("id", canvas.id);
+    if (delErr) return { ok: false, error: "Couldn't merge them. Try again." };
+
+    const { error } = await supabase
+      .from("enrollments")
+      .update({
+        roster_email: canvas.roster_email,
+        roster_name: canvas.roster_name,
+        roster_photo_path: canvas.roster_photo_path,
+        roster_name_phonetic: canvas.roster_name_phonetic,
+        canvas_seen_at: new Date().toISOString(),
+        canvas_missing_since: null,
+        status: "active" as const,
+      })
+      .eq("id", personal.id);
+    if (error) {
+      return {
+        ok: false,
+        error:
+          "Half-merged: the Canvas row is gone but their row didn't take the identity. Re-run a Canvas sync.",
+      };
+    }
+  } else {
+    const { error: delErr } = await supabase
+      .from("enrollments")
+      .delete()
+      .eq("id", personal.id);
+    if (delErr) return { ok: false, error: "Couldn't merge them. Try again." };
+
+    const { error } = await supabase
+      .from("enrollments")
+      .update({ profile_id: personal.profile_id, status: "active" as const })
+      .eq("id", canvas.id);
+    if (error) return { ok: false, error: "Couldn't merge them. Try again." };
+  }
+
+  // Who they are on the Canvas roster, so future syncs keep recognising them
+  // however they sign in.
+  await supabase
+    .from("profiles")
+    .update({
+      school_email: canvas.roster_email,
+      school_email_verified_at: new Date().toISOString(),
+    })
+    .eq("id", personal.profile_id);
+
+  // The Canvas-address login, if one exists and was never used, is now a dead
+  // end that would only rebuild the split.
+  if (isConfigured.supabaseAdmin) {
+    const admin = createAdminClient();
+    const { data: list } = await admin.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
+    const stale = (list?.users ?? []).find(
+      (u) =>
+        (u.email ?? "").toLowerCase() === canvas.roster_email.toLowerCase() &&
+        !u.last_sign_in_at
+    );
+    if (stale) {
+      const { data: owns } = await admin
+        .from("enrollments")
+        .select("id")
+        .eq("profile_id", stale.id)
+        .limit(1);
+      if ((owns ?? []).length === 0) {
+        await admin.auth.admin.deleteUser(stale.id);
+      }
+    }
+  }
+
+  invalidateCourseDirectory(parsed.data.courseId);
+  revalidatePath(`/course/${parsed.data.courseId}`);
+  return {
+    ok: true,
+    data: { identity: canvas.roster_email, keptHistory: plan.keep === "personal" },
   };
 }

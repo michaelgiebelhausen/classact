@@ -11,6 +11,7 @@ import {
   resetStuckAccount,
   approveJoiners,
   resolveDuplicate,
+  matchToCanvasRow,
 } from "@/server/actions/activation";
 import type { RosterStage } from "@/lib/rosterstage";
 import type { StagedPerson } from "@/components/features/roster/StagedRoster";
@@ -117,6 +118,23 @@ export function RosterSection({
       router.refresh();
     });
 
+  const matchTo = (person: StagedPerson, candidateId: string, label: string) =>
+    run(person.id, async () => {
+      const result = await matchToCanvasRow({
+        courseId,
+        personalEnrollmentId: person.id,
+        canvasEnrollmentId: candidateId,
+      });
+      if (!result.ok) return toast.error(result.error, { duration: 12_000 });
+      toast.success(
+        `Matched to ${label}. They keep signing in as ${person.email}${
+          result.data?.keptHistory ? " and their attendance came with them" : ""
+        }.`,
+        { duration: 8000 }
+      );
+      router.refresh();
+    });
+
   const resolveOne = (person: StagedPerson) =>
     run(person.id, async () => {
       const result = await resolveDuplicate({
@@ -207,6 +225,13 @@ export function RosterSection({
             {busy === "bulk" ? "Approving…" : `Approve all ${people.length}`}
           </Button>
         )}
+        {stage === "self_joined" && people.some((p) => p.candidates) && (
+          <span className="text-xs text-muted-foreground">
+            Click the Canvas student underneath someone to say they&apos;re the
+            same person. They keep signing in with their own address; their
+            attendance comes with them, and Canvas recognises them from then on.
+          </span>
+        )}
         {stage === "duplicate" && (
           <span className="text-xs text-muted-foreground">
             Removing a duplicate deletes this spare row and the unused login
@@ -242,6 +267,40 @@ export function RosterSection({
               >
                 {busy === p.id ? "Approving…" : "Approve"}
               </Button>
+            )}
+
+            {stage === "self_joined" && p.candidates && (
+              <div className="mt-1 grid gap-1 rounded-md border bg-muted/30 p-2">
+                <span className="text-[10px] leading-tight text-muted-foreground">
+                  On the Canvas roster as?
+                </span>
+                {p.candidates.map((cand) => (
+                  <button
+                    key={cand.id}
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => matchTo(p, cand.id, cand.name)}
+                    className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-background disabled:opacity-50"
+                  >
+                    <Avatar className="h-7 w-7">
+                      {cand.photoUrl && (
+                        <AvatarImage src={cand.photoUrl} alt={cand.name} />
+                      )}
+                      <AvatarFallback className="text-[9px]">
+                        {initials(cand.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="grid">
+                      <span className="text-[10px] font-medium leading-tight">
+                        {busy === p.id ? "Matching…" : cand.name}
+                      </span>
+                      <span className="text-[9px] leading-tight text-muted-foreground">
+                        {cand.email}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
             )}
 
             {stage === "duplicate" &&

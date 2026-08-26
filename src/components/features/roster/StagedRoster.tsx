@@ -26,6 +26,17 @@ export interface StagedPerson {
   /** What would actually help this person — the stuck section holds two
    *  different problems whose remedies are opposites. */
   remedy?: Remedy;
+  /** Unclaimed Canvas rows that might be this same student, best first. */
+  candidates?: MatchCandidate[];
+}
+
+export interface MatchCandidate {
+  id: string;
+  name: string;
+  email: string;
+  photoUrl: string | null;
+  /** Strong enough to accept at a glance. */
+  confident: boolean;
 }
 
 /**
