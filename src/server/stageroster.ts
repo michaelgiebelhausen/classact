@@ -18,6 +18,7 @@ export interface StageableEnrollment {
   status: string;
   invited_at: string | null;
   invite_error: string | null;
+  canvas_missing_since: string | null;
 }
 
 /**
@@ -75,6 +76,7 @@ export async function stageRoster(
       rosterEmail: e.roster_email,
       accountEmail,
       activation,
+      canvasMissingSince: e.canvas_missing_since,
     });
 
     groups[stage].push({

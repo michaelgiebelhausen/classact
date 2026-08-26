@@ -208,6 +208,33 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## Canvas sync on the roster (CA-8) — needs migration 0030 FIRST
+
+**Run `supabase/migrations/0030_canvas_missing.sql` BEFORE deploying this
+code.** Unlike 0029, this one is not safe to defer: the sync selects
+`canvas_missing_since`, and if the column is absent the query fails, the sync
+reads the existing roster as empty, and tries to re-import every student —
+which collides on the unique email constraint and reports "Import failed".
+
+What it adds, on the course page's roster card:
+
+- **Sync with Canvas** button. Adds new students, confirms anyone who joined
+  on their own with their Canvas address, merges g.-twin duplicates, and
+  records who Canvas has stopped listing.
+- A **"No longer on Canvas"** section at the bottom, rendered as a checkable
+  worklist rather than a face grid, with a Drop button. Students are imported
+  in the summer and drop through the first weeks, so this is a recurring
+  chore, not an edge case.
+- An **"Email set-password links"** button on the stuck section.
+
+Drops stay professor-confirmed. Canvas going quiet about a student is not
+proof they left — an expired token, an unsynced section, or a CSV-added
+student all look identical — so nothing is ever dropped automatically, and
+nothing is pre-ticked. Dropping sets a status and keeps their history.
+
+`canvas_missing_since` is cleared the moment Canvas lists someone again, so a
+bad token that briefly hides a section repairs itself on the next good sync.
+
 ## Seat corrections (CA-4) — needs migration 0029
 
 **Run `supabase/migrations/0029_reassign_seat.sql` in the SQL editor.** Until

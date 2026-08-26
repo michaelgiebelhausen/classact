@@ -7,6 +7,7 @@ const canvasRow = {
   rosterEmail: "jdoe@clemson.edu",
   accountEmail: null,
   activation: "emailed_no_account" as const,
+  canvasMissingSince: null,
 };
 
 describe("rosterStage", () => {
@@ -71,6 +72,7 @@ describe("rosterStage", () => {
         rosterEmail: "someone@clemson.edu",
         accountEmail: "someone@clemson.edu",
         activation: "signed_in_not_joined",
+        canvasMissingSince: null,
       })
     ).toBe("self_joined");
   });
@@ -93,14 +95,41 @@ describe("rosterStage", () => {
     ).toBe("limbo");
   });
 
-  test("sections run problems-first, settled-last", () => {
-    // Mike's ordering: the eye lands on what needs attention, and the big
-    // passive block of unclaimed Canvas rows sits at the bottom.
+  test("sections run problems-first, settled-last, departures at the very bottom", () => {
+    // The eye lands on what needs attention; the big passive block of
+    // unclaimed Canvas rows sits low, and people who have left sit lower.
     expect(ROSTER_STAGE_ORDER).toEqual([
       "limbo",
       "self_joined",
       "canvas_confirmed",
       "canvas_pending",
+      "no_longer_on_canvas",
     ]);
+  });
+
+  test("a student Canvas stopped listing moves to the departures section", () => {
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        accountEmail: "jdoe@clemson.edu",
+        activation: "active",
+        canvasMissingSince: "2026-08-26T12:00:00Z",
+      })
+    ).toBe("no_longer_on_canvas");
+  });
+
+  test("departure outranks being stuck — they may be gone, so stop chasing them", () => {
+    // A locked-out student who has also left the class is not a support
+    // problem any more. Leaving them in "needs you" sends the professor after
+    // somebody who dropped the course.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        activation: "stuck_no_session",
+        canvasMissingSince: "2026-08-26T12:00:00Z",
+      })
+    ).toBe("no_longer_on_canvas");
   });
 });

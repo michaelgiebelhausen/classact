@@ -376,6 +376,9 @@ export type EnrollmentRow = {
   /** When the professor confirmed this student dropped (0027). Cleared on
    * reactivation (re-added in Canvas, or rejoined with the course code). */
   dropped_at: string | null
+  /** When a Canvas sync first stopped finding them (0030). Cleared the moment
+   * Canvas lists them again, so a bad token doesn't leave a false accusation. */
+  canvas_missing_since: string | null
   created_at: string
 }
 

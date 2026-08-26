@@ -12,6 +12,9 @@ import {
   ROSTER_STAGE_META,
   type RosterStage,
 } from "@/lib/rosterstage";
+import { DepartureList } from "@/components/features/roster/DepartureList";
+import { StuckActions } from "@/components/features/roster/StuckActions";
+import { SyncCanvasButton } from "@/components/features/roster/SyncCanvasButton";
 
 export interface StagedPerson {
   id: string;
@@ -47,9 +50,17 @@ function initials(name: string): string {
 export function StagedRoster({
   groups,
   total,
+  courseId,
+  canvasCourseId,
+  sectionIds,
+  syncedAt,
 }: {
   groups: Record<RosterStage, StagedPerson[]>;
   total: number;
+  courseId: string;
+  canvasCourseId: string | null;
+  sectionIds: string[] | null;
+  syncedAt: string | null;
 }) {
   const present = ROSTER_STAGE_ORDER.filter((s) => groups[s].length > 0);
 
@@ -80,31 +91,53 @@ export function StagedRoster({
                 <p className="max-w-prose text-xs text-muted-foreground">
                   {meta.blurb}
                 </p>
-                <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
-                  {people.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex flex-col items-center gap-1 text-center"
-                    >
-                      <Avatar className="h-14 w-14">
-                        {p.photoUrl && (
-                          <AvatarImage src={p.photoUrl} alt={p.name} />
-                        )}
-                        <AvatarFallback>{initials(p.name)}</AvatarFallback>
-                      </Avatar>
-                      <span className="text-xs leading-tight">{p.name}</span>
-                      {p.note && (
-                        <span className="text-[10px] leading-tight text-muted-foreground">
-                          {p.note}
-                        </span>
-                      )}
+
+                {/* The departures section is a worklist rather than a
+                    gallery: it is the one section that asks the professor to
+                    decide something. */}
+                {stage === "no_longer_on_canvas" ? (
+                  <DepartureList courseId={courseId} people={people} />
+                ) : (
+                  <>
+                    {stage === "limbo" && (
+                      <StuckActions courseId={courseId} people={people} />
+                    )}
+                    <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
+                      {people.map((p) => (
+                        <div
+                          key={p.id}
+                          className="flex flex-col items-center gap-1 text-center"
+                        >
+                          <Avatar className="h-14 w-14">
+                            {p.photoUrl && (
+                              <AvatarImage src={p.photoUrl} alt={p.name} />
+                            )}
+                            <AvatarFallback>{initials(p.name)}</AvatarFallback>
+                          </Avatar>
+                          <span className="text-xs leading-tight">{p.name}</span>
+                          {p.note && (
+                            <span className="text-[10px] leading-tight text-muted-foreground">
+                              {p.note}
+                            </span>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </>
+                )}
               </section>
             );
           })
         )}
+
+        <div className="border-t pt-4">
+          <SyncCanvasButton
+            courseId={courseId}
+            canvasCourseId={canvasCourseId}
+            sectionIds={sectionIds}
+            syncedAt={syncedAt}
+          />
+        </div>
       </CardContent>
     </Card>
   );

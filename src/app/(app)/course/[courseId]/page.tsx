@@ -41,7 +41,9 @@ export default async function CourseHomePage({
   // A non-member gets null -> 404, which also gates the directory below.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, term, professor_id")
+    .select(
+      "id, name, term, professor_id, canvas_course_id, canvas_section_ids, canvas_synced_at"
+    )
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -59,7 +61,7 @@ export default async function CourseHomePage({
   const { data: enrollments } = await directory
     .from("enrollments")
     .select(
-      "id, roster_name, roster_email, profile_id, status, roster_photo_path, invited_at, invite_error"
+      "id, roster_name, roster_email, profile_id, status, roster_photo_path, invited_at, invite_error, canvas_missing_since"
     )
     .eq("course_id", courseId)
     .neq("status", "dropped")
@@ -114,7 +116,14 @@ export default async function CourseHomePage({
       </div>
 
       {staged ? (
-        <StagedRoster groups={staged.groups} total={staged.total} />
+        <StagedRoster
+          groups={staged.groups}
+          total={staged.total}
+          courseId={courseId}
+          canvasCourseId={course.canvas_course_id}
+          sectionIds={course.canvas_section_ids}
+          syncedAt={course.canvas_synced_at}
+        />
       ) : (
       <Card>
         <CardHeader>

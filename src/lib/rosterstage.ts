@@ -25,6 +25,7 @@ export const ROSTER_STAGE_ORDER = [
   "self_joined",
   "canvas_confirmed",
   "canvas_pending",
+  "no_longer_on_canvas",
 ] as const;
 
 export type RosterStage = (typeof ROSTER_STAGE_ORDER)[number];
@@ -38,6 +39,8 @@ export interface RosterStageFacts {
   /** The address the linked account actually signs in with, if resolvable. */
   accountEmail: string | null;
   activation: ActivationState;
+  /** Set when a sync stopped finding them in Canvas; cleared when it does. */
+  canvasMissingSince: string | null;
 }
 
 /**
@@ -58,6 +61,13 @@ const sameAddress = (a: string | null, b: string | null): boolean =>
   Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
 
 export function rosterStage(facts: RosterStageFacts): RosterStage {
+  // Checked before everything else. Someone Canvas has stopped listing may
+  // have left the course, and a student who left is not a support queue:
+  // leaving them under "needs you" sends the professor chasing somebody who
+  // dropped. Their real state is preserved on the row, so if Canvas lists
+  // them again the next sync clears this and they return to it.
+  if (facts.canvasMissingSince) return "no_longer_on_canvas";
+
   if (!facts.hasProfile) {
     return BLOCKED.includes(facts.activation) ? "limbo" : "canvas_pending";
   }
@@ -100,6 +110,12 @@ export const ROSTER_STAGE_META: Record<
   canvas_pending: {
     title: "From Canvas, not yet signed in",
     blurb: "On the Canvas roster. They haven't claimed their account yet.",
+    tone: "outline",
+  },
+  no_longer_on_canvas: {
+    title: "No longer on Canvas",
+    blurb:
+      "The last sync didn't find them in Canvas. Usually a drop — but a student added by CSV, or one in a section you don't sync, looks identical from here.",
     tone: "outline",
   },
 };

@@ -9,6 +9,7 @@ import { PHOTO_BUCKET } from "@/lib/storage";
 import { isConfigured } from "@/lib/env";
 import { resolveCanvasCreds, type CanvasCreds } from "@/server/canvascreds";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
+import { shouldConfirmFromCanvas } from "@/lib/canvaspromote";
 import { emailAliasOf } from "@/lib/emailalias";
 import { phoneticsForNames } from "@/server/phonetics";
 import type { ActionResult } from "@/server/actions/auth";
@@ -221,6 +222,8 @@ export async function syncCanvasRoster(input: {
     photosStored: number;
     total: number;
     reactivated: number;
+    /** Self-joined students Canvas now lists — promoted to confirmed. */
+    confirmed: number;
     /** Duplicate identities unified via the g.-twin email alias. */
     merged: number;
     dropCandidates: DropCandidate[];
@@ -288,7 +291,7 @@ export async function syncCanvasRoster(input: {
   const { data: existing } = await supabase
     .from("enrollments")
     .select(
-      "id, roster_name, roster_email, status, profile_id, roster_name_phonetic"
+      "id, roster_name, roster_email, status, profile_id, roster_name_phonetic, canvas_missing_since"
     )
     .eq("course_id", course.id);
   const rows = existing ?? [];
@@ -381,19 +384,73 @@ export async function syncCanvasRoster(input: {
       })
       .eq("id", e.id);
   }
-  if (fresh.length > 0 || returning.length > 0 || merged > 0) {
+  // Students who joined with the course code before the professor imported
+  // anything, using the address Canvas holds. The match above found them, but
+  // nothing promoted them: they kept the `invited` status /auth/join gave
+  // them and read as off-roster joiners forever. Canvas lists them and they
+  // have claimed the row, which is what "confirmed from Canvas" means.
+  const confirming = rows.filter(
+    (e) =>
+      matchedIds.has(e.id) &&
+      !deletedIds.has(e.id) &&
+      shouldConfirmFromCanvas({ status: e.status, profileId: e.profile_id })
+  );
+  for (const e of confirming) {
+    await supabase
+      .from("enrollments")
+      .update({ status: "active" as const })
+      .eq("id", e.id);
+  }
+
+  if (
+    fresh.length > 0 ||
+    returning.length > 0 ||
+    merged > 0 ||
+    confirming.length > 0
+  ) {
     invalidateCourseDirectory(course.id);
   }
 
   // Roster rows Canvas no longer lists — surfaced for the professor to
   // confirm, never dropped here. CSV-only additions and students in
   // unsynced sections show up too, which is exactly why it's a preview.
-  const dropCandidates: DropCandidate[] = rows
-    .filter(
-      (e) =>
-        e.status !== "dropped" && !matchedIds.has(e.id) && !deletedIds.has(e.id)
-    )
-    .map((e) => ({ enrollmentId: e.id, name: e.roster_name, email: e.roster_email }));
+  //
+  // Students are imported in the summer and drop through the first weeks, so
+  // this is the ordinary path rather than an edge case. The marker is
+  // persisted so the roster carries a standing "no longer on Canvas" section
+  // instead of a panel that vanishes when the professor closes the tab.
+  const missing = rows.filter(
+    (e) =>
+      e.status !== "dropped" && !matchedIds.has(e.id) && !deletedIds.has(e.id)
+  );
+  const nowIso = new Date().toISOString();
+  for (const e of missing) {
+    if (e.canvas_missing_since) continue; // keep the ORIGINAL date they vanished
+    await supabase
+      .from("enrollments")
+      .update({ canvas_missing_since: nowIso })
+      .eq("id", e.id);
+  }
+
+  // Cleared for anyone Canvas listed again. A token hiccup or an unsynced
+  // section that briefly hid people repairs itself on the next good sync,
+  // rather than leaving a permanent accusation on the row.
+  const reappeared = rows.filter(
+    (e) =>
+      e.canvas_missing_since && matchedIds.has(e.id) && !deletedIds.has(e.id)
+  );
+  for (const e of reappeared) {
+    await supabase
+      .from("enrollments")
+      .update({ canvas_missing_since: null })
+      .eq("id", e.id);
+  }
+
+  const dropCandidates: DropCandidate[] = missing.map((e) => ({
+    enrollmentId: e.id,
+    name: e.roster_name,
+    email: e.roster_email,
+  }));
 
   // Remember the linkage so the next resync is one click.
   await supabase
@@ -461,6 +518,7 @@ export async function syncCanvasRoster(input: {
       photosStored,
       total: roster.students.length,
       reactivated: returning.length,
+      confirmed: confirming.length,
       merged,
       dropCandidates,
     },
@@ -516,5 +574,8 @@ export async function markDropped(input: {
 
   invalidateCourseDirectory(course.id);
   revalidatePath(`/course/${course.id}/setup`);
+  // The roster card on the course home page groups by registration stage, so
+  // a drop changes what it shows too.
+  revalidatePath(`/course/${course.id}`);
   return { ok: true, data: { dropped: (updated ?? []).length } };
 }
