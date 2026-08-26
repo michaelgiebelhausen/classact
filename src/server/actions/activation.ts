@@ -13,6 +13,7 @@ import {
   type ActivationState,
 } from "@/lib/activation";
 import { canResetAccount } from "@/lib/accountreset";
+import { canApproveJoiner } from "@/lib/approvejoiner";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
 
@@ -279,4 +280,67 @@ export async function resetStuckAccount(input: {
   revalidatePath(`/course/${parsed.data.courseId}`);
   revalidatePath(`/course/${parsed.data.courseId}/setup`);
   return { ok: true, data: { email: enrollment.roster_email } };
+}
+
+const approveSchema = z.object({
+  courseId: z.string().uuid(),
+  enrollmentIds: z.array(z.string().uuid()).min(1).max(500),
+});
+
+/**
+ * Let students who joined with the course code actually attend.
+ *
+ * `/auth/join` parks off-roster joiners in a pending row, and `checkIn`
+ * requires `status = 'active'` — so until now they signed up, joined, and were
+ * turned away at the seat map with "You're not on this course's active roster
+ * yet." They had no idea anything was wrong, which makes it worse than being
+ * plainly locked out.
+ *
+ * Only rows an account actually owns are touched. The filter is applied in the
+ * query as well as the guard, so a stale id from the client can't activate a
+ * roster row nobody has claimed.
+ */
+export async function approveJoiners(input: {
+  courseId: string;
+  enrollmentIds: string[];
+}): Promise<ActionResult<{ approved: number }>> {
+  const parsed = approveSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid request." };
+
+  const owned = await ownedCourse(parsed.data.courseId);
+  if (!owned.ok) return { ok: false, error: owned.error };
+
+  const supabase = await createClient();
+  const { data: targets } = await supabase
+    .from("enrollments")
+    .select("id, status, profile_id")
+    .eq("course_id", parsed.data.courseId)
+    .in("id", parsed.data.enrollmentIds);
+
+  const eligible = (targets ?? [])
+    .filter((e) =>
+      canApproveJoiner({ status: e.status, hasProfile: Boolean(e.profile_id) })
+    )
+    .map((e) => e.id);
+
+  if (eligible.length === 0) {
+    return { ok: false, error: "Nobody there needs approving." };
+  }
+
+  const { data: updated, error } = await supabase
+    .from("enrollments")
+    .update({ status: "active" as const })
+    .eq("course_id", parsed.data.courseId)
+    .in("id", eligible)
+    .eq("status", "invited")
+    .not("profile_id", "is", null)
+    .select("id");
+  if (error) {
+    return { ok: false, error: "Couldn't approve them — try again." };
+  }
+
+  invalidateCourseDirectory(parsed.data.courseId);
+  revalidatePath(`/course/${parsed.data.courseId}`);
+  revalidatePath(`/course/${parsed.data.courseId}/setup`);
+  return { ok: true, data: { approved: (updated ?? []).length } };
 }

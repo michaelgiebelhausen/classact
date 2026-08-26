@@ -15,6 +15,7 @@ import {
 } from "@/lib/rosterstage";
 import { DepartureList } from "@/components/features/roster/DepartureList";
 import { StuckList } from "@/components/features/roster/StuckList";
+import { PendingJoiners } from "@/components/features/roster/PendingJoiners";
 import { SyncCanvasButton } from "@/components/features/roster/SyncCanvasButton";
 
 export interface StagedPerson {
@@ -27,6 +28,8 @@ export interface StagedPerson {
   /** What would actually help this person — the stuck section holds two
    *  different problems whose remedies are opposites. */
   remedy?: Remedy;
+  /** Joined with the course code and still pending, so check-in refuses them. */
+  pendingApproval?: boolean;
 }
 
 function initials(name: string): string {
@@ -113,6 +116,12 @@ export function StagedRoster({
                   />
                 ) : (
                   <>
+                    {stage === "self_joined" && (
+                      <PendingJoiners
+                        courseId={courseId}
+                        people={people.filter((p) => p.pendingApproval)}
+                      />
+                    )}
                     <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
                       {people.map((p) => (
                         <div

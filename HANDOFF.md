@@ -235,6 +235,24 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## Students who joined but can't check in (approve them)
+
+`/auth/join` parks anyone not on the imported roster in a **pending** row —
+profile linked, `status = 'invited'` — for the professor to approve. Nothing
+surfaced that, and `checkIn` requires `status = 'active'`, so those students
+signed up, joined, and were turned away at the seat map with "You're not on
+this course's active roster yet". They had no idea anything was wrong, which
+is worse than being plainly locked out.
+
+They now appear in a red panel at the top of **Joined, but not through
+Canvas**, with Approve per student and Approve all. Clear it before class.
+
+Where they came from: students locked out of their university address by the
+PKCE trap signed up with a personal one instead and joined by code. The
+workaround left them half-enrolled — a dead Canvas row plus a working personal
+account. Approving lets them attend; merging the two rows is the proper fix
+and is still outstanding.
+
 ## At the front of the room — unsticking a student in under a minute
 
 No migration needed. Open the class page and work the **Stuck — needs you**
