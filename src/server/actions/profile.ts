@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { normalizeLinkedInUrl } from "@/lib/linkedin";
+import { canLeaveProfessorRole } from "@/lib/rolechange";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -76,6 +77,78 @@ export async function becomeProfessor(): Promise<ActionResult> {
   const { error } = await supabase
     .from("profiles")
     .update({ role: "professor", onboarding_complete: true })
+    .eq("id", user.id);
+  if (error) {
+    return { ok: false, error: "Couldn't switch your account over." };
+  }
+  revalidatePath("/dashboard");
+  revalidatePath("/profile");
+  return { ok: true };
+}
+
+/**
+ * Switch your own account back to a student account.
+ *
+ * The inverse of `becomeProfessor`, which was a one-way door until now. A
+ * student who taps "professor" at sign-up has no join-a-class path at all —
+ * every sign-in drops them on the course builder, and clearing cookies doesn't
+ * help because the role is on the profile row. Three students sat in that
+ * state during the Fall 2026 pilot, all three already enrolled in the class
+ * they couldn't see.
+ *
+ * Deliberately leaves `onboarding_complete` untouched. Whatever they had
+ * stands: this is a routing fix, not a re-registration, and the account —
+ * login, email, enrollments — is the same one it was a second ago.
+ */
+export async function becomeStudent(): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  // Count what they'd be walking away from. Read through RLS on purpose:
+  // courses are scoped to `professor_id = auth.uid()`, so this sees exactly
+  // the courses they own and nothing else.
+  const { data: courses, error: coursesError } = await supabase
+    .from("courses")
+    .select("id")
+    .eq("professor_id", user.id);
+  if (coursesError) {
+    // Never demote on an unread course list — that is precisely how a class
+    // gets stranded by a transient query failure.
+    return {
+      ok: false,
+      error: "Couldn't check your courses just now. Try again in a moment.",
+    };
+  }
+
+  const courseIds = (courses ?? []).map((c) => c.id);
+  let studentsEnrolled = 0;
+  if (courseIds.length > 0) {
+    const { count, error: enrollError } = await supabase
+      .from("enrollments")
+      .select("id", { count: "exact", head: true })
+      .in("course_id", courseIds)
+      .neq("status", "dropped");
+    if (enrollError) {
+      return {
+        ok: false,
+        error: "Couldn't check your rosters just now. Try again in a moment.",
+      };
+    }
+    studentsEnrolled = count ?? 0;
+  }
+
+  const verdict = canLeaveProfessorRole({
+    coursesTaught: courseIds.length,
+    studentsEnrolled,
+  });
+  if (!verdict.allowed) return { ok: false, error: verdict.reason };
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ role: "student" })
     .eq("id", user.id);
   if (error) {
     return { ok: false, error: "Couldn't switch your account over." };

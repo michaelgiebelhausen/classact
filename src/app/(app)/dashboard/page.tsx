@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { BecomeProfessorButton } from "@/components/features/profile/BecomeProfessorButton";
+import { BecomeStudentButton } from "@/components/features/profile/BecomeStudentButton";
 import { CourseList } from "@/components/features/dashboard/CourseList";
 import { formatSchedule } from "@/lib/schedule";
 
@@ -53,9 +54,24 @@ export default async function DashboardPage() {
         </div>
         {!courses || courses.length === 0 ? (
           <Card>
-            <CardContent className="py-10 text-center text-muted-foreground">
-              No courses yet. Create one and you&apos;ll have a room set up in
-              about five minutes.
+            <CardContent className="grid justify-items-center gap-4 py-10 text-center text-muted-foreground">
+              <p>
+                No courses yet. Create one and you&apos;ll have a room set up in
+                about five minutes.
+              </p>
+              {/* Someone staring at an empty course list is at least as
+                  likely to be a student who tapped the wrong button at
+                  sign-up as a professor who hasn't started. Until this
+                  existed that student had no way out at all — the role is on
+                  their profile row, so clearing cookies changed nothing and
+                  they ended up emailing their professor for help. */}
+              <div className="grid justify-items-center gap-1">
+                <BecomeStudentButton label="Actually, I'm a student" />
+                <p className="text-xs">
+                  Here to attend a class rather than teach one? This switches
+                  your account over — same login, same email.
+                </p>
+              </div>
             </CardContent>
           </Card>
         ) : (

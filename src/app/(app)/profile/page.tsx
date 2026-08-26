@@ -13,6 +13,7 @@ import { PhotoUploader } from "@/components/features/profile/PhotoUploader";
 import { DeleteDataButton } from "@/components/features/profile/DeleteDataButton";
 import { AboutMeForm } from "@/components/features/profile/AboutMeForm";
 import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
+import { BecomeStudentButton } from "@/components/features/profile/BecomeStudentButton";
 import { icebreakersByKey, DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
 import type { PhotoKind } from "@/types/db";
 
@@ -118,6 +119,22 @@ export default async function ProfilePage() {
           </CardHeader>
           <CardContent>
             <AboutMeForm fields={aboutFields} initial={aboutAnswers} />
+          </CardContent>
+        </Card>
+      )}
+
+      {isProfessor && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Account type</CardTitle>
+            <CardDescription>
+              This is a professor account. If you&apos;re here to attend a
+              class rather than teach one, switch it over — same login, same
+              email, and any class you&apos;ve already joined comes with you.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <BecomeStudentButton />
           </CardContent>
         </Card>
       )}
