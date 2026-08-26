@@ -235,6 +235,28 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## A student's school email vs their login (0032)
+
+**Run `supabase/migrations/0032_school_email.sql` BEFORE deploying** — the
+roster query selects `profiles.school_email`, and without the column the whole
+staged roster fails.
+
+Canvas reports one address per student. Students sign in with whatever they
+like. `school_email` records the first as an attribute of the person rather
+than as their credential, so a student signing in as
+`tpallotta17@gmail.com` is still recognised as `tpallot@clemson.edu` on the
+Canvas roster and reads as confirmed.
+
+`school_email_verified_at` exists and is deliberately **not enforced**: these
+are one professor's own students and matches are made by hand by someone who
+knows them. When that stops being true, requiring a non-null value is the
+entire change — no migration, no backfill. The unique index does apply now:
+one school address cannot be claimed by two people, since that is the whole
+identity claim.
+
+Claiming an address is still matched against the row it is claimed for, so a
+claim can never hand anyone somebody else's roster place.
+
 ## Resolving a duplicate student
 
 A student who signs in with their university Google account gets a second auth

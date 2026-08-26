@@ -10,6 +10,7 @@ const canvasRow = {
   canvasMissingSince: null,
   canvasSeenAt: null,
   isDuplicateShadow: false,
+  schoolEmail: null,
 };
 
 describe("rosterStage", () => {
@@ -97,6 +98,7 @@ describe("rosterStage", () => {
         canvasMissingSince: null,
         canvasSeenAt: null,
         isDuplicateShadow: false,
+        schoolEmail: null,
       })
     ).toBe("awaiting_approval");
   });
@@ -271,6 +273,41 @@ describe("rosterStage", () => {
         rosterEmail: "someone@gmail.com",
         accountEmail: "someone@gmail.com",
         activation: "active",
+      })
+    ).toBe("self_joined");
+  });
+
+  test("a claimed school address counts as the Canvas identity", () => {
+    // Tyler signs in as tpallotta17@gmail.com and is tpallot@clemson.edu on
+    // the Canvas roster. The login is a credential; the school address is who
+    // he is on the roster, and they are allowed to differ.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "tpallot@clemson.edu",
+        accountEmail: "tpallotta17@gmail.com",
+        activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+        schoolEmail: "tpallot@clemson.edu",
+      })
+    ).toBe("canvas_confirmed");
+  });
+
+  test("a claimed school address still has to be the g-twin at worst", () => {
+    // Claiming somebody else's address must not hand you their roster place,
+    // so it is matched against this row's address rather than merely existing.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "tpallot@clemson.edu",
+        accountEmail: "someone@gmail.com",
+        activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+        schoolEmail: "different@clemson.edu",
       })
     ).toBe("self_joined");
   });

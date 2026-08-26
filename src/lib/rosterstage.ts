@@ -55,6 +55,9 @@ export interface RosterStageFacts {
   /** This row is the auto-created shadow of another row for the same human —
    *  the g.clemson twin of a Canvas import, carrying no name and no photo. */
   isDuplicateShadow: boolean;
+  /** The official school address this account claims (0032), which may differ
+   *  from the address it signs in with. */
+  schoolEmail: string | null;
 }
 
 /**
@@ -101,9 +104,16 @@ export function rosterStage(facts: RosterStageFacts): RosterStage {
   // not part of it — a row still sitting at 'invited' means nobody approved
   // it, which is surfaced on its own rather than by calling the student
   // unconfirmed.
-  if (facts.canvasSeenAt && sameAddress(facts.accountEmail, facts.rosterEmail)) {
-    return "canvas_confirmed";
-  }
+  // The login is a credential; the school address is who they are on the
+  // roster. A student signing in as tpallotta17@gmail.com is still
+  // tpallot@clemson.edu to Canvas, and either address proving the identity is
+  // enough — the claimed one is still matched against *this* row, so claiming
+  // an address cannot hand anyone somebody else's place.
+  const identityMatches =
+    sameAddress(facts.accountEmail, facts.rosterEmail) ||
+    sameAddress(facts.schoolEmail, facts.rosterEmail);
+
+  if (facts.canvasSeenAt && identityMatches) return "canvas_confirmed";
 
   // Joined with the course code and never approved. /auth/join parks them at
   // 'invited', and checkIn requires 'active', so they are turned away at the

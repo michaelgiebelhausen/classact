@@ -47,6 +47,7 @@ export async function stageRoster(
 ): Promise<{ groups: Record<RosterStage, StagedPerson[]>; total: number }> {
   const facts = new Map<string, AccountFacts>();
   const emailByProfile = new Map<string, string>();
+  const schoolEmailByProfile = new Map<string, string>();
 
   const { data } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
   for (const u of data?.users ?? []) {
@@ -56,6 +57,21 @@ export async function stageRoster(
       everSignedIn: Boolean(u.last_sign_in_at),
     });
     emailByProfile.set(u.id, u.email);
+  }
+
+  // The school address a student claims, which is what identifies them on the
+  // Canvas roster when they sign in with something else entirely.
+  const linked = enrollments
+    .map((e) => e.profile_id)
+    .filter((id): id is string => Boolean(id));
+  if (linked.length > 0) {
+    const { data: profiles } = await admin
+      .from("profiles")
+      .select("id, school_email")
+      .in("id", [...new Set(linked)]);
+    for (const p of profiles ?? []) {
+      if (p.school_email) schoolEmailByProfile.set(p.id, p.school_email);
+    }
   }
 
   // Shadow rows: the same human twice, because they signed in with their
@@ -106,6 +122,9 @@ export async function stageRoster(
       canvasMissingSince: e.canvas_missing_since,
       canvasSeenAt: e.canvas_seen_at,
       isDuplicateShadow: shadows.has(e.id),
+      schoolEmail: e.profile_id
+        ? schoolEmailByProfile.get(e.profile_id) ?? null
+        : null,
     });
 
     groups[stage].push({

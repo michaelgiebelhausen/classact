@@ -39,6 +39,12 @@ export type ProfileRow = {
   subscription_status: string | null
   /** Self-entered LinkedIn profile, shown to coursemates. */
   linkedin_url: string | null
+  /** Official institutional address as Canvas lists it (0032). May differ from
+   *  the address this account signs in with. */
+  school_email: string | null
+  /** When ownership of school_email was established; null = claimed but
+   *  unproven, which is currently allowed. */
+  school_email_verified_at: string | null
   created_at: string
 }
 
