@@ -14,6 +14,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
+import { stageRoster } from "@/server/stageroster";
+import { StagedRoster } from "@/components/features/roster/StagedRoster";
 
 function initials(name: string): string {
   return name
@@ -51,13 +53,27 @@ export default async function CourseHomePage({
   // RLS-verified membership check above we read the directory via admin.
   const directory = isConfigured.supabaseAdmin ? createAdminClient() : supabase;
 
+  // `dropped` is excluded: this card answers "who's in this class", and a
+  // student the professor already confirmed had left is not. The setup panel
+  // has always filtered them; this card had not.
   const { data: enrollments } = await directory
     .from("enrollments")
-    .select("id, roster_name, profile_id, status, roster_photo_path")
+    .select(
+      "id, roster_name, roster_email, profile_id, status, roster_photo_path, invited_at, invite_error"
+    )
     .eq("course_id", courseId)
+    .neq("status", "dropped")
     .order("roster_name");
 
   const photoMap = await resolveEnrollmentPhotos(directory, enrollments ?? []);
+
+  // Registration stages are for the professor alone. Which classmate hasn't
+  // claimed an account, or signed in with a personal address, is nobody
+  // else's business — and this is a page that gets projected.
+  const staged =
+    isProfessor && isConfigured.supabaseAdmin
+      ? await stageRoster(createAdminClient(), enrollments ?? [], photoMap)
+      : null;
 
   return (
     <div className="grid gap-6">
@@ -97,6 +113,9 @@ export default async function CourseHomePage({
         </div>
       </div>
 
+      {staged ? (
+        <StagedRoster groups={staged.groups} total={staged.total} />
+      ) : (
       <Card>
         <CardHeader>
           <CardTitle>Who&apos;s in this class</CardTitle>
@@ -130,6 +149,7 @@ export default async function CourseHomePage({
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }
