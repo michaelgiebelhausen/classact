@@ -235,6 +235,30 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## At the front of the room — unsticking a student in under a minute
+
+No migration needed. Open the class page and work the **Stuck — needs you**
+list. Each person carries what they actually need:
+
+- **needs a password** — confirmed their email, never got a session. Press
+  **Reset**, then have them go to `classact.college/join/<JOIN-CODE>` and sign
+  up with any password. With email confirmation off they are in immediately.
+  Their attendance and Canvas photo survive; only the dead account goes.
+- **needs an invite** — their account already works, they just aren't enrolled
+  here. Do NOT reset (it would destroy a working login and fix nothing). Give
+  them the join code; the same URL enrols them.
+- **invite bounced** — the address is wrong or rejecting mail. Fix the address
+  in Setup before anything else.
+
+The join URL is printed at the top of that section so it can be read out.
+
+Emailing set-password links is the calmer option **outside** class, and the
+buttons for it are still there. In class it is a round trip through a
+student's inbox while the room waits, which is the friction this replaces.
+
+Reset refuses any account that has ever been signed into — that is the one
+action here with no undo, and a working login is never the problem.
+
 ## Canvas sync on the roster (CA-8) — needs 0030 AND 0031, both BEFORE deploying
 
 Neither is safe to defer: the sync selects `canvas_missing_since` (0030) and

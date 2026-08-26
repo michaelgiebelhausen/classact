@@ -14,7 +14,7 @@ import {
   type RosterStage,
 } from "@/lib/rosterstage";
 import { DepartureList } from "@/components/features/roster/DepartureList";
-import { StuckActions } from "@/components/features/roster/StuckActions";
+import { StuckList } from "@/components/features/roster/StuckList";
 import { SyncCanvasButton } from "@/components/features/roster/SyncCanvasButton";
 
 export interface StagedPerson {
@@ -58,6 +58,7 @@ export function StagedRoster({
   canvasCourseId,
   sectionIds,
   syncedAt,
+  joinCode,
 }: {
   groups: Record<RosterStage, StagedPerson[]>;
   total: number;
@@ -65,6 +66,7 @@ export function StagedRoster({
   canvasCourseId: string | null;
   sectionIds: string[] | null;
   syncedAt: string | null;
+  joinCode: string | null;
 }) {
   const present = ROSTER_STAGE_ORDER.filter((s) => groups[s].length > 0);
 
@@ -101,11 +103,16 @@ export function StagedRoster({
                     decide something. */}
                 {stage === "no_longer_on_canvas" ? (
                   <DepartureList courseId={courseId} people={people} />
+                ) : stage === "limbo" ? (
+                  /* A queue to work through with students standing there —
+                     names, addresses and one button each, not a gallery. */
+                  <StuckList
+                    courseId={courseId}
+                    joinCode={joinCode}
+                    people={people}
+                  />
                 ) : (
                   <>
-                    {stage === "limbo" && (
-                      <StuckActions courseId={courseId} people={people} />
-                    )}
                     <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
                       {people.map((p) => (
                         <div

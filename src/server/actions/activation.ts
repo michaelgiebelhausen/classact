@@ -12,6 +12,8 @@ import {
   type AccountFacts,
   type ActivationState,
 } from "@/lib/activation";
+import { canResetAccount } from "@/lib/accountreset";
+import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
 
 export type ActivationRow = {
@@ -196,4 +198,85 @@ export async function sendSetPasswordLinks(input: {
 
   revalidatePath(`/course/${parsed.data.courseId}/setup`);
   return { ok: true, data: { sent, failed } };
+}
+
+const resetSchema = z.object({
+  courseId: z.string().uuid(),
+  enrollmentId: z.string().uuid(),
+});
+
+/**
+ * Clear a stuck student's dead account so they can register again on the spot.
+ *
+ * The in-room remedy. A set-password link is gentler and is the right call
+ * away from a classroom, but it is an email round trip — useless to a student
+ * standing at the front of the room while the class waits. With email
+ * confirmation off, re-registering takes a password and a join code and is
+ * instant.
+ *
+ * Refuses any account that has ever been signed into: that account works, and
+ * deleting it is the one action here with no undo. Attendance is unaffected
+ * either way — `enrollments.profile_id` is ON DELETE SET NULL, so the roster
+ * row and every check-in on it survive.
+ */
+export async function resetStuckAccount(input: {
+  courseId: string;
+  enrollmentId: string;
+}): Promise<ActionResult<{ email: string }>> {
+  const parsed = resetSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid request." };
+
+  const owned = await ownedCourse(parsed.data.courseId);
+  if (!owned.ok) return { ok: false, error: owned.error };
+  if (!isConfigured.supabaseAdmin) {
+    return { ok: false, error: "The server isn't configured to reset accounts." };
+  }
+
+  const supabase = await createClient();
+  const { data: enrollment } = await supabase
+    .from("enrollments")
+    .select("id, roster_email, roster_name")
+    .eq("course_id", parsed.data.courseId)
+    .eq("id", parsed.data.enrollmentId)
+    .maybeSingle();
+  if (!enrollment) {
+    return { ok: false, error: "That student isn't on this roster." };
+  }
+
+  const admin = createAdminClient();
+  const email = enrollment.roster_email.toLowerCase();
+
+  // Find the auth user by address rather than trusting profile_id: the whole
+  // point is that this account may never have linked itself to the row.
+  const { data: list } = await admin.auth.admin.listUsers({
+    page: 1,
+    perPage: 1000,
+  });
+  const user = (list?.users ?? []).find(
+    (u) => (u.email ?? "").toLowerCase() === email
+  );
+
+  const verdict = canResetAccount({
+    hasAccount: Boolean(user),
+    everSignedIn: Boolean(user?.last_sign_in_at),
+  });
+  if (!verdict.allowed) return { ok: false, error: verdict.reason };
+
+  const { error } = await admin.auth.admin.deleteUser(user!.id);
+  if (error) {
+    return { ok: false, error: "Couldn't reset that account. Try again." };
+  }
+
+  // The cascade nulls profile_id but leaves the status where it was. Put the
+  // row back to 'invited' so it reads as awaiting a student rather than as an
+  // active enrollment with nobody in it.
+  await supabase
+    .from("enrollments")
+    .update({ status: "invited" as const })
+    .eq("id", enrollment.id);
+
+  invalidateCourseDirectory(parsed.data.courseId);
+  revalidatePath(`/course/${parsed.data.courseId}`);
+  revalidatePath(`/course/${parsed.data.courseId}/setup`);
+  return { ok: true, data: { email: enrollment.roster_email } };
 }

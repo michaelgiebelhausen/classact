@@ -42,7 +42,7 @@ export default async function CourseHomePage({
   const { data: course } = await supabase
     .from("courses")
     .select(
-      "id, name, term, professor_id, canvas_course_id, canvas_section_ids, canvas_synced_at"
+      "id, name, term, professor_id, join_code, canvas_course_id, canvas_section_ids, canvas_synced_at"
     )
     .eq("id", courseId)
     .single();
@@ -123,6 +123,7 @@ export default async function CourseHomePage({
           canvasCourseId={course.canvas_course_id}
           sectionIds={course.canvas_section_ids}
           syncedAt={course.canvas_synced_at}
+          joinCode={course.join_code}
         />
       ) : (
       <Card>
