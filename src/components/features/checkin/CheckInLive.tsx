@@ -14,7 +14,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { checkIn, verifyNeighbor } from "@/server/actions/checkin";
+import {
+  checkIn,
+  moveSeat,
+  reassignSeat,
+  verifyNeighbor,
+} from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
 import type { TableFootprint } from "@/lib/roomlayout";
@@ -61,6 +66,8 @@ interface Props {
   mySeatIds?: string[];
   /** Distinct classmates I've verified with, either direction. */
   peopleMet?: number;
+  /** Professor view: tap a student, then tap a seat, to reassign them. */
+  canReassign?: boolean;
 }
 
 function initials(name: string): string {
@@ -85,6 +92,7 @@ export function CheckInLive({
   scheduleHint,
   mySeatIds = [],
   peopleMet = 0,
+  canReassign = false,
 }: Props) {
   const router = useRouter();
   const [occupants, setOccupants] = useState<Map<string, OccupantInfo>>(
@@ -96,6 +104,8 @@ export function CheckInLive({
     () => new Set(verifiedByMe)
   );
   const [live, setLive] = useState(true);
+  // Professor reassignment: the student picked up and awaiting a destination.
+  const [holding, setHolding] = useState<string | null>(null);
   const unknownEnrollment = useRef(false);
 
   const seatByLabel = useMemo(() => {
@@ -140,6 +150,23 @@ export function CheckInLive({
     if (!sessionId) return;
     const supabase = createClient();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    // When this client dropped off realtime, so the report on the way back up
+    // can say how long it spent hammering the fallback.
+    let degradedSince: number | null = null;
+
+    // Fire-and-forget: a failed report must never disturb check-in, and must
+    // never retry — a retry loop during an outage is more of the problem.
+    const report = (
+      state: "down" | "up",
+      extra: { degradedMs?: number; reason?: string }
+    ) => {
+      void fetch("/api/metrics/realtime", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, state, ...extra }),
+        keepalive: true,
+      }).catch(() => {});
+    };
 
     const channel = supabase
       .channel(`session:${sessionId}`)
@@ -175,10 +202,16 @@ export function CheckInLive({
         setLive(ok);
         if (!ok && !pollTimer) {
           pollTimer = setInterval(() => router.refresh(), 5000);
+          degradedSince = Date.now();
+          report("down", { reason: status });
         }
         if (ok && pollTimer) {
           clearInterval(pollTimer);
           pollTimer = null;
+          report("up", {
+            degradedMs: degradedSince ? Date.now() - degradedSince : 0,
+          });
+          degradedSince = null;
         }
       });
 
@@ -188,34 +221,130 @@ export function CheckInLive({
     };
   }, [sessionId, applyChange, directory, router]);
 
-  async function handleSeatTap(seat: { id: string; label: string }) {
-    if (!sessionId || !myEnrollmentId || myCheckIn || pendingSeat) return;
-    if (occupants.has(seat.id)) return;
+  /**
+   * Tap an open seat: check in, or — if already checked in — move there.
+   *
+   * The move case is why a mis-tap used to displace two people. There was no
+   * way to leave a seat, so the student who took the wrong one stayed put and
+   * its rightful occupant had to go elsewhere.
+   */
+  /**
+   * Professor: pick a student up, then put them down.
+   *
+   * Two taps rather than a drag, because this happens on a laptop at the front
+   * of a room while thirty people watch, and a mis-drag is worse than a
+   * mis-tap. Tapping the held student again puts them back down.
+   */
+  async function handleProfessorTap(seat: { id: string; label: string }) {
+    if (!sessionId || pendingSeat) return;
+    const occupant = occupants.get(seat.id);
+
+    if (!holding) {
+      if (!occupant) {
+        toast.info("Tap a student first, then tap where they should sit.");
+        return;
+      }
+      setHolding(occupant.enrollmentId);
+      return;
+    }
+
+    if (occupant?.enrollmentId === holding) {
+      setHolding(null); // put them back down
+      return;
+    }
+
+    const held = holding;
+    const from =
+      Array.from(occupants.values()).find((o) => o.enrollmentId === held) ??
+      null;
+    // Read before the write, so the wording describes what was true when the
+    // professor tapped rather than what is true after.
+    const displaced = occupant ?? null;
 
     setPendingSeat(seat.id);
-    // Optimistic fill, reconciled below.
-    applyChange({ enrollmentId: myEnrollmentId, seatId: seat.id, verified: false });
+    const result = await reassignSeat(sessionId, held, seat.id);
+    setPendingSeat(null);
 
-    const result = await checkIn(sessionId, seat.id);
+    if (!result.ok) {
+      toast.error(result.error, { duration: 8000 });
+      return;
+    }
+
+    // Apply exactly what the database did: the held student takes the seat,
+    // and whoever was there swaps into the seat just vacated. Anything less
+    // precise leaves a ghost on the projected map.
+    setOccupants((prev) => {
+      const next = new Map(prev);
+      next.set(seat.id, {
+        enrollmentId: held,
+        seatId: seat.id,
+        verified: from?.verified ?? false,
+      });
+      if (from) {
+        if (displaced) {
+          next.set(from.seatId, { ...displaced, seatId: from.seatId });
+        } else {
+          next.delete(from.seatId);
+        }
+      }
+      return next;
+    });
+
+    setHolding(null);
+    const name = directory[held]?.name ?? "That student";
+    toast.success(
+      displaced
+        ? `Swapped ${name} into seat ${seat.label}.`
+        : `Moved ${name} to seat ${seat.label}.`
+    );
+  }
+
+  async function handleSeatTap(seat: { id: string; label: string }) {
+    if (canReassign) return handleProfessorTap(seat);
+    if (!sessionId || !myEnrollmentId || pendingSeat) return;
+    if (occupants.has(seat.id)) return;
+
+    const from = myCheckIn?.seatId ?? null;
+    const previous = occupants;
+
+    setPendingSeat(seat.id);
+    // Optimistic: vacate the old seat and fill the new one in one step, so the
+    // map never shows the same person twice. Verification rides along —
+    // correcting a seat must not look like it cost them anything.
+    setOccupants((prev) => {
+      const next = new Map(prev);
+      if (from) next.delete(from);
+      next.set(seat.id, {
+        enrollmentId: myEnrollmentId,
+        seatId: seat.id,
+        verified: myCheckIn?.verified ?? false,
+      });
+      return next;
+    });
+
+    const result = from
+      ? await moveSeat(sessionId, seat.id)
+      : await checkIn(sessionId, seat.id);
     setPendingSeat(null);
 
     if (result.ok && result.data) {
-      capture("checkin_completed", { isNewSeat: result.data.isNewSeat });
-      if (result.data.isNewSeat) {
-        setScore((s) => s + 1);
-        toast.success(`You're checked in, seat ${seat.label}. +1 networking point — new seat.`);
+      if (from) {
+        toast.success(`Moved to seat ${seat.label}. Your attendance is safe.`);
       } else {
-        toast.success(`You're checked in, seat ${seat.label}.`);
+        capture("checkin_completed", { isNewSeat: result.data.isNewSeat });
+        toast.success(
+          result.data.isNewSeat
+            ? `You're checked in, seat ${seat.label}. +1 networking point — new seat.`
+            : `You're checked in, seat ${seat.label}.`
+        );
       }
+      // The move can flip whether the seat they ended on was new to them, in
+      // either direction, so take the server's word rather than incrementing.
+      if (from) router.refresh();
+      else if (result.data.isNewSeat) setScore((s) => s + 1);
     } else {
-      // Roll back the optimistic fill.
-      setOccupants((prev) => {
-        const next = new Map(prev);
-        const current = next.get(seat.id);
-        if (current?.enrollmentId === myEnrollmentId) next.delete(seat.id);
-        return next;
-      });
-      toast.error(result.ok ? "Check-in failed." : result.error);
+      setOccupants(previous); // whole-map rollback: a move touches two seats
+      toast.error(result.ok ? "That didn't work." : result.error);
       if (!result.ok && result.code === "already_checked_in") router.refresh();
     }
   }
@@ -322,6 +451,38 @@ export function CheckInLive({
         </p>
       )}
 
+      {canReassign && (
+        <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          {holding ? (
+            <>
+              <span className="font-medium text-foreground">
+                Holding {directory[holding]?.name ?? "a student"}.
+              </span>{" "}
+              Tap where they should sit. If someone&apos;s already there, the
+              two swap seats — nobody loses their attendance. Tap them again to
+              cancel.
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-foreground">
+                Someone in the wrong seat?
+              </span>{" "}
+              Tap the student, then tap the seat they belong in.
+            </>
+          )}
+        </p>
+      )}
+
+      {mySeat && (
+        <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">
+            In the wrong seat?
+          </span>{" "}
+          Tap any open seat to move there. Your attendance for today stays
+          exactly as it is.
+        </p>
+      )}
+
       <div className="overflow-x-auto rounded-lg border p-4">
         <RoomMap
           seats={seats}
@@ -341,13 +502,18 @@ export function CheckInLive({
               name: entry?.name ?? (occupant ? "A classmate" : null),
               photoUrl: entry?.photoUrl ?? null,
               pending: pendingSeat === seat.id,
-              tappable:
-                !occupant && !myCheckIn && pendingSeat === null && Boolean(myEnrollmentId),
-              highlight:
-                !occupant &&
-                !myCheckIn &&
-                Boolean(myEnrollmentId) &&
-                !mySeatSet.has(seat.id),
+              // Professors can tap anything — occupied seats to pick a student
+              // up, any seat to set them down. Students can tap open seats,
+              // which is a check-in first and a move afterwards.
+              tappable: canReassign
+                ? pendingSeat === null
+                : !occupant && pendingSeat === null && Boolean(myEnrollmentId),
+              highlight: canReassign
+                ? occupant?.enrollmentId === holding
+                : !occupant &&
+                  !myCheckIn &&
+                  Boolean(myEnrollmentId) &&
+                  !mySeatSet.has(seat.id),
             };
           }}
         />

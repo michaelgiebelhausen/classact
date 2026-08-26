@@ -4,6 +4,12 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/server/actions/auth";
 import { flagAbsencesElsewhere } from "@/server/absences";
+import { timed } from "@/server/loadmetrics";
+import {
+  seatMoveOutcome,
+  SEAT_MOVE_MESSAGES,
+  type SeatMoveError,
+} from "@/lib/seatmove";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
 
 /** Today's date in the server's local calendar, YYYY-MM-DD. */
@@ -97,6 +103,35 @@ export async function checkIn(
     code?: CheckInError;
   }
 > {
+  // Measured because this is the one path a whole room hits inside the same
+  // sixty seconds. `dbCode` carries the raw SQLSTATE out of the closure so
+  // contention (40P01 deadlock, 55P03 lock unavailable, 53300 connections
+  // exhausted) is counted as itself rather than as a generic failure.
+  let dbCode: string | undefined;
+
+  return timed(
+    "checkin",
+    { sessionId },
+    () =>
+      runCheckIn(sessionId, seatId, (code) => {
+        dbCode = code;
+      }),
+    (result) => ({
+      ok: result.ok,
+      code: dbCode ?? (result.ok ? undefined : result.code),
+    })
+  );
+}
+
+async function runCheckIn(
+  sessionId: string,
+  seatId: string,
+  onDbError: (code: string) => void
+): Promise<
+  ActionResult<{ checkInId: string; isNewSeat: boolean }> & {
+    code?: CheckInError;
+  }
+> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -151,6 +186,7 @@ export async function checkIn(
     .single();
 
   if (error) {
+    onDbError(error.code ?? "unknown");
     if (error.code === "23505") {
       const detail = `${error.message} ${error.details ?? ""}`;
       if (detail.includes("enrollment")) {
@@ -243,5 +279,169 @@ export async function verifyNeighbor(
   if (error && error.code !== "23505") {
     return { ok: false, error: "Couldn't confirm — try again." };
   }
+  return { ok: true };
+}
+
+/**
+ * Student: move to a different seat after already checking in (CA-4).
+ *
+ * An UPDATE of the existing row, never a delete-and-reinsert. That is what
+ * guarantees Mike's requirement that a corrected seat costs nobody their
+ * attendance: the check-in — and any neighbor verification already on it —
+ * survives the move untouched.
+ *
+ * Atomicity comes from the same unique constraint the first check-in relies
+ * on: 23505 on (session_id, seat_id) means someone claimed the target between
+ * our occupancy check and the write. The pre-check exists to give a good
+ * message in the common case; the constraint is what actually prevents two
+ * people landing in one seat.
+ *
+ * `is_new_seat` is recomputed for the seat they end up in, excluding this very
+ * row. Credit should describe where they actually sat, and since there is only
+ * ever one check-in row per student per session, this can swing their
+ * networking score by at most one point — there is nothing to farm here.
+ */
+export async function moveSeat(
+  sessionId: string,
+  seatId: string
+): Promise<ActionResult<{ isNewSeat: boolean }> & { code?: SeatMoveError }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: session } = await supabase
+    .from("class_sessions")
+    .select("id, course_id, closed_at")
+    .eq("id", sessionId)
+    .single();
+
+  const { data: enrollment } = session
+    ? await supabase
+        .from("enrollments")
+        .select("id")
+        .eq("course_id", session.course_id)
+        .eq("profile_id", user.id)
+        .eq("status", "active")
+        .maybeSingle()
+    : { data: null };
+
+  const { data: mine } = enrollment
+    ? await supabase
+        .from("check_ins")
+        .select("id, seat_id")
+        .eq("session_id", sessionId)
+        .eq("enrollment_id", enrollment.id)
+        .maybeSingle()
+    : { data: null };
+
+  const { data: occupant } = await supabase
+    .from("check_ins")
+    .select("id")
+    .eq("session_id", sessionId)
+    .eq("seat_id", seatId)
+    .maybeSingle();
+
+  const verdict = seatMoveOutcome({
+    sessionOpen: Boolean(session) && !session?.closed_at,
+    hasCheckIn: Boolean(mine),
+    targetIsCurrentSeat: mine?.seat_id === seatId,
+    targetOccupied: Boolean(occupant),
+  });
+  if (!verdict.allowed) {
+    return {
+      ok: false,
+      error: SEAT_MOVE_MESSAGES[verdict.code],
+      code: verdict.code,
+    };
+  }
+  if (!mine) return { ok: false, error: SEAT_MOVE_MESSAGES.not_checked_in };
+
+  // Have they sat here before, ignoring the row we're about to change?
+  const { data: priorSeats } = await supabase
+    .from("check_ins")
+    .select("seat_id")
+    .eq("enrollment_id", enrollment!.id)
+    .neq("id", mine.id);
+  const isNewSeat = !(priorSeats ?? []).some((p) => p.seat_id === seatId);
+
+  const { error } = await supabase
+    .from("check_ins")
+    .update({ seat_id: seatId, is_new_seat: isNewSeat })
+    .eq("id", mine.id);
+
+  if (error) {
+    if (error.code === "23505") {
+      return {
+        ok: false,
+        error: SEAT_MOVE_MESSAGES.seat_taken,
+        code: "seat_taken",
+      };
+    }
+    return { ok: false, error: "Couldn't move you. Try again." };
+  }
+
+  revalidatePath(`/course/${session!.course_id}/checkin`);
+  return { ok: true, data: { isNewSeat } };
+}
+
+/** Why a professor's reassignment was refused, mapped from the RPC's SQLSTATEs. */
+const REASSIGN_MESSAGES: Record<string, string> = {
+  "42501": "Only the course's professor can move students.",
+  P0002: "That session no longer exists.",
+  P0003: "Class has ended — seats are locked for today.",
+  P0004: "That seat isn't in this room.",
+  P0005: "That student isn't on this course's roster.",
+  P0006:
+    "That seat is taken and this student has no seat to swap. Move the current occupant first.",
+};
+
+/**
+ * Professor: put a student in a seat, mid-class (CA-4c).
+ *
+ * Handles the three cases the room actually produces: seating someone who
+ * hasn't checked in, moving someone to a free seat, and — the one that
+ * matters — swapping a mis-seated student with whoever's seat they took.
+ *
+ * All of it happens inside `reassign_seat`, a single atomic statement. The
+ * swap has to delete a row and write it back, and doing that as separate
+ * client calls would leave a window where a failure erases a student's
+ * attendance for good. Authorization lives in the function too, since
+ * professors have no UPDATE policy on check_ins.
+ */
+export async function reassignSeat(
+  sessionId: string,
+  enrollmentId: string,
+  seatId: string
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { error } = await supabase.rpc("reassign_seat", {
+    p_session: sessionId,
+    p_enrollment: enrollmentId,
+    p_seat: seatId,
+  });
+
+  if (error) {
+    const known = error.code ? REASSIGN_MESSAGES[error.code] : undefined;
+    if (known) return { ok: false, error: known };
+    // 42883 = function doesn't exist: 0029 hasn't been applied yet. Say so
+    // rather than letting a professor conclude the feature is broken.
+    if (error.code === "42883") {
+      return {
+        ok: false,
+        error:
+          "Seat reassignment isn't installed on the database yet — run migration 0029_reassign_seat.sql.",
+      };
+    }
+    console.error("[reassign] failed:", { code: error.code, message: error.message });
+    return { ok: false, error: "Couldn't move that student. Try again." };
+  }
+
   return { ok: true };
 }

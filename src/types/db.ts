@@ -703,7 +703,14 @@ export type Database = {
       profile_answers: TableShape<ProfileAnswerRow>
     }
     Views: { [_ in never]: never }
-    Functions: { [_ in never]: never }
+    Functions: {
+      /** 0029 — professor moves a student between seats, swapping if the
+       *  target is occupied. Atomic; authorizes the caller internally. */
+      reassign_seat: {
+        Args: { p_session: string; p_enrollment: string; p_seat: string }
+        Returns: undefined
+      }
+    }
     Enums: { [_ in never]: never }
     CompositeTypes: { [_ in never]: never }
   }

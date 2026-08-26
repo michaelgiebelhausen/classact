@@ -28,6 +28,7 @@ import {
 } from "@/server/actions/absences";
 import { parseAttendancePolicy } from "@/lib/absences";
 import { recentMeetingDates, upcomingMeetingDates } from "@/lib/schedule";
+import { timed } from "@/server/loadmetrics";
 
 /**
  * Absence assessment posts to this route and waits on a model call (60s
@@ -43,6 +44,14 @@ export default async function CheckInPage({
   params: Promise<{ courseId: string }>;
 }) {
   const { courseId } = await params;
+  // Every `router.refresh()` from every phone in the room re-runs the whole
+  // render below. Measuring it is how we find out what one refresh costs.
+  // Timed from out here rather than inside: reading the clock during render
+  // is impure, and the render itself must stay pure.
+  return timed("checkin_page", { courseId }, () => renderCheckIn(courseId));
+}
+
+async function renderCheckIn(courseId: string) {
   const profile = await getProfile();
   if (!profile) redirect("/login");
 
@@ -291,6 +300,7 @@ export default async function CheckInPage({
         initialOccupants={initialOccupants}
         directory={directory}
         myEnrollmentId={isProfessor ? null : myEnrollmentId}
+        canReassign={isProfessor}
         networkingScore={networkingScore}
         verifiedByMe={verifiedByMe}
         mySeatIds={mySeatIds}
