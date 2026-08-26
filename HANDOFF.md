@@ -106,15 +106,42 @@ You already created the "Class Act" project at supabase.com. Now:
    - Site URL: `http://localhost:3000` for now (change to your live URL later)
    - Redirect URLs: add `http://localhost:3000/**`
 
-7. **Email templates — REQUIRED, and easy to miss.** Dashboard →
-   Authentication → Email Templates. Edit **Confirm signup** and **Reset
-   password** so the link is:
+7. **Turn OFF email confirmation, and fix three templates — REQUIRED.**
 
-   ```
-   {{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=signup
-   ```
+   **a. Authentication → Sign In / Providers → Email → uncheck "Confirm
+   email".** This is the single highest-leverage setting in the product.
+   `signUpAndJoin` already returns a session when confirmation isn't
+   required, so a student with a join code and a password is simply in — no
+   email, no link, nothing that can expire. Done 2026-08-26.
 
-   (use `type=recovery` in the Reset password template).
+   **b. Authentication → Emails → Templates.** Three of the six matter.
+   In each, replace ONLY `{{ .ConfirmationURL }}` inside the `href`, leaving
+   the surrounding HTML alone:
+
+   | Template | Replace the href with |
+   | --- | --- |
+   | **Magic link or OTP** | `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=magiclink` |
+   | **Reset password** | `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery` |
+   | **Confirm sign up** | `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=signup` |
+
+   **Magic link or OTP is the one that actually matters** and was missing
+   from this runbook until 2026-08-26. It backs "Email me a sign-in link
+   instead" and the join-by-code flow — the two `signInWithOtp` calls in
+   `server/actions/auth.ts`. Confirm sign up stops being sent once (a) is
+   done; set it anyway so re-enabling confirmation later doesn't restore the
+   trap. Reset password is bypassed by the app's own "Can't get in?" flow,
+   which mints its own link and sends via Resend.
+
+   Skip **Invite user** (ClassAct sends its own via Resend, deliberately —
+   Supabase's built-in mailer is throttled far below a 40-student class),
+   **Change email address**, and **Reauthentication**: no code path reaches
+   them.
+
+   The `type=` value must match the template — `/auth/callback` passes it to
+   `verifyOtp`, and a mismatch fails.
+
+   If a template contains `{{ .Token }}`, that's the six-digit-code variant;
+   the app has no path for typed codes, so keep the link form.
 
    **Why this matters more than it looks.** The stock templates use
    `{{ .ConfirmationURL }}`, which routes through Supabase's `/auth/v1/verify`
