@@ -281,15 +281,18 @@ student did their attending, and it needs doing by hand.
 Sections are named for the student's *situation*, and each carries the one fix
 that situation needs. In order:
 
+Sections run in the order they should be worked: everything with something
+owed first, settled groups after, departures last.
+
 | Section | What it means | The fix |
 | --- | --- | --- |
 | Confirmed their email, never got signed in | Their sign-up link only worked in the browser that requested it | **Reset** (in person) or email a set-password link |
 | Have a ClassAct account, haven't added the class | They can sign in; they never joined this course | **Email them the join code** |
 | Their invite bounced | The address rejects our mail | Fix it in Setup |
-| The same person, twice | A g.clemson shadow row beside their real Canvas row | Nothing yet — see below |
-| Joined, but not through Canvas | In the class under an address Canvas doesn't hold | Approve any who can't check in |
-| Confirmed from Canvas | Nothing to do | — |
-| From Canvas, not yet signed in | Haven't claimed an account | — |
+| From Canvas, not yet signed in | On the roster, no account behind them — they can't check in and nothing has told them | **Email them an invite** |
+| The same person, twice | A g.clemson shadow row beside their real Canvas row | **Remove duplicate** |
+| In the class, but not through Canvas | Approved, on their own address or never on Canvas — an auditor, or added by hand | Nothing owed; click a Canvas face beneath them to match |
+| Imported from Canvas, confirmed with Canvas email | Nothing to do | — |
 | No longer on Canvas | Canvas listed them once, last sync didn't | Tick and Drop |
 
 Every section shows faces. The professor recognises the student in front of

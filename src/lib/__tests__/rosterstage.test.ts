@@ -142,15 +142,18 @@ describe("rosterStage", () => {
   test("sections run problems-first, settled-last, departures at the very bottom", () => {
     // The eye lands on what needs attention; the big passive block of
     // unclaimed Canvas rows sits low, and people who have left sit lower.
+    // Everything with something owed comes first, settled groups after.
+    // "Hasn't claimed an account yet" is owed work; "in the class under their
+    // own address" is not, however unusual it looks.
     expect(ROSTER_STAGE_ORDER).toEqual([
       "awaiting_approval",
       "needs_password",
       "needs_class",
       "invite_failed",
+      "canvas_pending",
       "duplicate",
       "self_joined",
       "canvas_confirmed",
-      "canvas_pending",
       "no_longer_on_canvas",
     ]);
   });

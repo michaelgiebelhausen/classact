@@ -195,6 +195,18 @@ export function RosterSection({
               : `Email them the join code (${people.length})`}
           </Button>
         )}
+        {stage === "canvas_pending" && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={emailJoinCode}
+            disabled={busy !== null}
+          >
+            {busy === "bulk"
+              ? "Sending…"
+              : `Email them an invite (${people.length})`}
+          </Button>
+        )}
         {stage === "invite_failed" && (
           <Button asChild size="sm" variant="outline">
             <Link href={`/course/${courseId}/setup`}>

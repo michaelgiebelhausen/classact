@@ -24,15 +24,24 @@
 import type { ActivationState } from "@/lib/activation";
 import { emailAliasOf } from "@/lib/emailalias";
 
+/**
+ * Sections in the order a professor should work them: everything with
+ * something owed first, settled groups after, departures last.
+ *
+ * "From Canvas, not yet signed in" belongs in the first group — a student who
+ * hasn't claimed an account is not in the class yet, and that needs an invite.
+ * "In the class, but not through Canvas" belongs in the second: an auditor or
+ * a student on their own address is settled, however unusual the row looks.
+ */
 export const ROSTER_STAGE_ORDER = [
   "awaiting_approval",
   "needs_password",
   "needs_class",
   "invite_failed",
+  "canvas_pending",
   "duplicate",
   "self_joined",
   "canvas_confirmed",
-  "canvas_pending",
   "no_longer_on_canvas",
 ] as const;
 
@@ -176,8 +185,9 @@ export const ROSTER_STAGE_META: Record<
   },
   canvas_pending: {
     title: "From Canvas, not yet signed in",
-    blurb: "On the Canvas roster. They haven't claimed their account yet.",
-    tone: "outline",
+    blurb:
+      "On the Canvas roster with no account behind them yet. Until they claim one they can't check in, and nothing has told them so — send them an invite.",
+    tone: "secondary",
   },
   no_longer_on_canvas: {
     title: "No longer on the Canvas roster",
