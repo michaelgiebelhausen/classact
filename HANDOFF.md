@@ -235,6 +235,38 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## The roster sections, and what each one's button does
+
+Sections are named for the student's *situation*, and each carries the one fix
+that situation needs. In order:
+
+| Section | What it means | The fix |
+| --- | --- | --- |
+| Confirmed their email, never got signed in | Their sign-up link only worked in the browser that requested it | **Reset** (in person) or email a set-password link |
+| Have a ClassAct account, haven't added the class | They can sign in; they never joined this course | **Email them the join code** |
+| Their invite bounced | The address rejects our mail | Fix it in Setup |
+| The same person, twice | A g.clemson shadow row beside their real Canvas row | Nothing yet — see below |
+| Joined, but not through Canvas | In the class under an address Canvas doesn't hold | Approve any who can't check in |
+| Confirmed from Canvas | Nothing to do | — |
+| From Canvas, not yet signed in | Haven't claimed an account | — |
+| No longer on Canvas | Canvas listed them once, last sync didn't | Tick and Drop |
+
+Every section shows faces. The professor recognises the student in front of
+them long before they parse an address.
+
+**Duplicates (`the same person, twice`)**: created when a student signs in
+with their university Google account (`name@g.clemson.edu`) while Canvas holds
+`name@clemson.edu`. The sync's alias matcher marks both rows as seen, so the
+shadow used to read as "Confirmed from Canvas" — nameless, faceless, and
+apparently fully set up. The shadow is identified as the row whose *name* is
+an address: `/auth/join` names a row after the address when it has nothing
+better, while a Canvas import always carries the name Canvas holds, so the row
+with the student's real name and photo is always the one kept.
+
+There is deliberately **no drop button** on that section. Both rows have real
+accounts, and the check-ins are split across them — dropping one takes its
+attendance with it. Merging is the correct fix and is still to be built.
+
 ## Students who joined but can't check in (approve them)
 
 `/auth/join` parks anyone not on the imported roster in a **pending** row —

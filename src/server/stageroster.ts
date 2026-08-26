@@ -5,8 +5,9 @@ import {
   activationState,
   ACTIVATION_META,
   type AccountFacts,
-  type ActivationState,
 } from "@/lib/activation";
+import { emailAliasOf } from "@/lib/emailalias";
+import { isEmailAddress } from "@/lib/names";
 import {
   rosterStage,
   ROSTER_STAGE_ORDER,
@@ -57,6 +58,26 @@ export async function stageRoster(
     emailByProfile.set(u.id, u.email);
   }
 
+  // Shadow rows: the same human twice, because they signed in with their
+  // university Google account (name@g.clemson.edu) while Canvas holds
+  // name@clemson.edu. The sync's alias matcher marks both as seen, so without
+  // this the shadow reads as "confirmed from Canvas" — nameless, faceless and
+  // apparently fully set up.
+  //
+  // The shadow is the one carrying no real name: /auth/join names a row after
+  // the address when it has nothing better, while a Canvas import always
+  // carries the name Canvas holds. Identifying it by that rather than by which
+  // spelling looks official means the row with the student's actual name and
+  // photo is always the one kept.
+  const byAddress = new Map<string, StageableEnrollment>();
+  for (const e of enrollments) byAddress.set(e.roster_email.toLowerCase(), e);
+  const shadows = new Set<string>();
+  for (const e of enrollments) {
+    if (!isEmailAddress(e.roster_name)) continue;
+    const alias = emailAliasOf(e.roster_email.toLowerCase());
+    if (alias && byAddress.has(alias)) shadows.add(e.id);
+  }
+
   const groups = Object.fromEntries(
     ROSTER_STAGE_ORDER.map((s) => [s, [] as StagedPerson[]])
   ) as Record<RosterStage, StagedPerson[]>;
@@ -84,6 +105,7 @@ export async function stageRoster(
       activation,
       canvasMissingSince: e.canvas_missing_since,
       canvasSeenAt: e.canvas_seen_at,
+      isDuplicateShadow: shadows.has(e.id),
     });
 
     groups[stage].push({
@@ -91,7 +113,7 @@ export async function stageRoster(
       name: e.roster_name,
       email: e.roster_email,
       photoUrl: photoMap.get(e.id)?.[0] ?? null,
-      note: noteFor(stage, e, accountEmail, activation),
+      note: noteFor(stage, e, accountEmail),
       remedy: ACTIVATION_META[activation].remedy,
       pendingApproval: e.status === "invited" && Boolean(e.profile_id),
     });
@@ -107,16 +129,8 @@ export async function stageRoster(
 function noteFor(
   stage: RosterStage,
   enrollment: StageableEnrollment,
-  accountEmail: string | null,
-  activation: ActivationState
+  accountEmail: string | null
 ): string | undefined {
-  if (stage === "limbo") {
-    // Three different problems wear the same badge otherwise, and only one of
-    // them is fixed by a password link.
-    if (activation === "send_failed") return "invite bounced";
-    if (activation === "signed_in_not_joined") return "needs an invite";
-    return "needs a password";
-  }
   if (stage === "self_joined") {
     // The address they actually use is the whole point of this section: it is
     // what a professor needs to reconcile against Canvas.

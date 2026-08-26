@@ -1,4 +1,3 @@
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -14,8 +13,7 @@ import {
   type RosterStage,
 } from "@/lib/rosterstage";
 import { DepartureList } from "@/components/features/roster/DepartureList";
-import { StuckList } from "@/components/features/roster/StuckList";
-import { PendingJoiners } from "@/components/features/roster/PendingJoiners";
+import { RosterSection } from "@/components/features/roster/RosterSection";
 import { SyncCanvasButton } from "@/components/features/roster/SyncCanvasButton";
 
 export interface StagedPerson {
@@ -30,16 +28,6 @@ export interface StagedPerson {
   remedy?: Remedy;
   /** Joined with the course code and still pending, so check-in refuses them. */
   pendingApproval?: boolean;
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
 }
 
 /**
@@ -106,44 +94,13 @@ export function StagedRoster({
                     decide something. */}
                 {stage === "no_longer_on_canvas" ? (
                   <DepartureList courseId={courseId} people={people} />
-                ) : stage === "limbo" ? (
-                  /* A queue to work through with students standing there —
-                     names, addresses and one button each, not a gallery. */
-                  <StuckList
+                ) : (
+                  <RosterSection
+                    stage={stage}
                     courseId={courseId}
                     joinCode={joinCode}
                     people={people}
                   />
-                ) : (
-                  <>
-                    {stage === "self_joined" && (
-                      <PendingJoiners
-                        courseId={courseId}
-                        people={people.filter((p) => p.pendingApproval)}
-                      />
-                    )}
-                    <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
-                      {people.map((p) => (
-                        <div
-                          key={p.id}
-                          className="flex flex-col items-center gap-1 text-center"
-                        >
-                          <Avatar className="h-14 w-14">
-                            {p.photoUrl && (
-                              <AvatarImage src={p.photoUrl} alt={p.name} />
-                            )}
-                            <AvatarFallback>{initials(p.name)}</AvatarFallback>
-                          </Avatar>
-                          <span className="text-xs leading-tight">{p.name}</span>
-                          {p.note && (
-                            <span className="text-[10px] leading-tight text-muted-foreground">
-                              {p.note}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </>
                 )}
               </section>
             );

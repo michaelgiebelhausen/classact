@@ -24,7 +24,10 @@
 import type { ActivationState } from "@/lib/activation";
 
 export const ROSTER_STAGE_ORDER = [
-  "limbo",
+  "needs_password",
+  "needs_class",
+  "invite_failed",
+  "duplicate",
   "self_joined",
   "canvas_confirmed",
   "canvas_pending",
@@ -47,21 +50,10 @@ export interface RosterStageFacts {
   /** Set when a Canvas sync has actually matched or imported them. Null means
    *  Canvas has never listed this person, however settled the row looks. */
   canvasSeenAt: string | null;
+  /** This row is the auto-created shadow of another row for the same human —
+   *  the g.clemson twin of a Canvas import, carrying no name and no photo. */
+  isDuplicateShadow: boolean;
 }
-
-/**
- * States where the student cannot get themselves any further.
- *
- * `signed_in_not_joined` is in here only for rows nobody has claimed: it means
- * an account exists for the roster address and has been used, yet this row is
- * still unlinked. On a row that *is* claimed the same state just means an
- * off-roster joiner waiting to be approved, which is not a problem.
- */
-const BLOCKED: ActivationState[] = [
-  "stuck_no_session",
-  "send_failed",
-  "signed_in_not_joined",
-];
 
 const sameAddress = (a: string | null, b: string | null): boolean =>
   Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
@@ -74,8 +66,18 @@ export function rosterStage(facts: RosterStageFacts): RosterStage {
   // them again the next sync clears this and they return to it.
   if (facts.canvasMissingSince) return "no_longer_on_canvas";
 
+  // A shadow row is the same human a second time. Filed as "confirmed from
+  // Canvas" it inflates the roster and reads as a nameless, faceless student
+  // who is somehow fully set up — which is what made the label untrustworthy.
+  if (facts.isDuplicateShadow) return "duplicate";
+
   if (!facts.hasProfile) {
-    return BLOCKED.includes(facts.activation) ? "limbo" : "canvas_pending";
+    // One situation per section, named for the situation rather than lumped
+    // under "stuck", because the remedies have nothing in common.
+    if (facts.activation === "send_failed") return "invite_failed";
+    if (facts.activation === "stuck_no_session") return "needs_password";
+    if (facts.activation === "signed_in_not_joined") return "needs_class";
+    return "canvas_pending";
   }
 
   // Claimed, but not through the address Canvas holds — the g.clemson twin,
@@ -104,11 +106,29 @@ export const ROSTER_STAGE_META: Record<
   RosterStage,
   { title: string; blurb: string; tone: "destructive" | "secondary" | "default" | "outline" }
 > = {
-  limbo: {
-    title: "Stuck — needs you",
+  needs_password: {
+    title: "Confirmed their email, never got signed in",
     blurb:
-      "These students can't get themselves any further. A bounced invite, or an account that confirmed its email but never got signed in.",
+      "Their sign-up link only worked in the browser that asked for it, and theirs didn't. They have no password they've ever used. Another invite can't help — the invite isn't what failed.",
     tone: "destructive",
+  },
+  needs_class: {
+    title: "Have a ClassAct account, haven't added the class",
+    blurb:
+      "They can sign in perfectly well. They've just never joined this course, so nothing here belongs to them yet.",
+    tone: "secondary",
+  },
+  invite_failed: {
+    title: "Their invite bounced",
+    blurb:
+      "The address rejected our mail. Nothing will reach them until it's corrected in Setup.",
+    tone: "destructive",
+  },
+  duplicate: {
+    title: "The same person, twice",
+    blurb:
+      "A second row for someone already on the roster — created when they signed in with their university Google account (name@g.clemson.edu) instead of the address Canvas holds. Their real row has their name and photo; this one has neither.",
+    tone: "secondary",
   },
   self_joined: {
     title: "Joined, but not through Canvas",

@@ -9,6 +9,7 @@ const canvasRow = {
   activation: "emailed_no_account" as const,
   canvasMissingSince: null,
   canvasSeenAt: null,
+  isDuplicateShadow: false,
 };
 
 describe("rosterStage", () => {
@@ -77,33 +78,55 @@ describe("rosterStage", () => {
         activation: "signed_in_not_joined",
         canvasMissingSince: null,
         canvasSeenAt: null,
+        isDuplicateShadow: false,
       })
     ).toBe("self_joined");
   });
 
-  test("confirmed their email but never got a session is limbo", () => {
+  test("confirmed their email but never got a session needs a password", () => {
     expect(
       rosterStage({ ...canvasRow, activation: "stuck_no_session" })
-    ).toBe("limbo");
+    ).toBe("needs_password");
   });
 
-  test("a bounced invite is limbo — it needs the professor, not the student", () => {
+  test("a bounced invite is its own situation — the address is wrong", () => {
     expect(rosterStage({ ...canvasRow, activation: "send_failed" })).toBe(
-      "limbo"
+      "invite_failed"
     );
   });
 
-  test("an unclaimed row whose owner has signed in elsewhere is limbo", () => {
+  test("an account that works but never joined this class needs the class", () => {
     expect(
       rosterStage({ ...canvasRow, activation: "signed_in_not_joined" })
-    ).toBe("limbo");
+    ).toBe("needs_class");
+  });
+
+  test("the g-twin shadow row is filed as a duplicate, not as confirmed", () => {
+    // ekutshe@g.clemson.edu sat under "Confirmed from Canvas" with no name and
+    // no photo, because the sync's alias matcher had marked it seen. It is the
+    // same student as ekutshe@clemson.edu, who has both.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "ekutshe@g.clemson.edu",
+        accountEmail: "ekutshe@g.clemson.edu",
+        activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+        isDuplicateShadow: true,
+      })
+    ).toBe("duplicate");
   });
 
   test("sections run problems-first, settled-last, departures at the very bottom", () => {
     // The eye lands on what needs attention; the big passive block of
     // unclaimed Canvas rows sits low, and people who have left sit lower.
     expect(ROSTER_STAGE_ORDER).toEqual([
-      "limbo",
+      "needs_password",
+      "needs_class",
+      "invite_failed",
+      "duplicate",
       "self_joined",
       "canvas_confirmed",
       "canvas_pending",
