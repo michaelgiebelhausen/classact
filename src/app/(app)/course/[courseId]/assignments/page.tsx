@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { LocalTime } from "@/components/ui/localtime";
 import { getProfile } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -88,7 +89,7 @@ export default async function AssignmentsPage({
                 <div>
                   <p className="font-medium">{a.title}</p>
                   <p className="text-sm text-muted-foreground">
-                    Due {new Date(a.deadline).toLocaleString()}
+                    Due <LocalTime iso={a.deadline} />
                   </p>
                 </div>
                 <Badge variant={a.state === "published" ? "default" : "secondary"}>

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { LocalTime } from "@/components/ui/localtime";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -167,7 +168,7 @@ export function PeerReview({
               Your calls move the real rankings, and each one is also a bet:
               agreeing with where the class and professor finally land raises
               your &ldquo;recognizes good work&rdquo; score. Window closes{" "}
-              {new Date(peerCloseAt).toLocaleString()}.
+              <LocalTime iso={peerCloseAt} />.
             </CardDescription>
           </CardHeader>
           <CardContent>

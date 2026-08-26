@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { LocalTime } from "@/components/ui/localtime";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Card,
@@ -190,9 +191,13 @@ export function GradingCockpit({
         <Badge variant={published ? "default" : "secondary"}>
           {published
             ? "Published"
-            : state === "peer_review"
-              ? `Peer grading open until ${new Date(peerCloseAt).toLocaleString()}`
-              : "Ready for your review"}
+            : state === "peer_review" ? (
+              <>
+                Peer grading open until <LocalTime iso={peerCloseAt} />
+              </>
+            ) : (
+              "Ready for your review"
+            )}
         </Badge>
         <Badge variant="outline">
           {decidedPeerVotes}/{totalPeerPairs} peer votes in

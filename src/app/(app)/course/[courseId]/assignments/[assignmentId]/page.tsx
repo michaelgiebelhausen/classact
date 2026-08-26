@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { LocalTime } from "@/components/ui/localtime";
 import { resolveCourseAi, scoringPricing } from "@/server/aicreds";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
@@ -82,7 +83,7 @@ export default async function AssignmentPage({
     <div>
       <h1 className="text-2xl font-semibold tracking-tight">{assignment.title}</h1>
       <p className="text-sm text-muted-foreground">
-        {courseMeta.name} · due {new Date(assignment.deadline).toLocaleString()}
+        {courseMeta.name} · due <LocalTime iso={assignment.deadline} />
       </p>
     </div>
   );

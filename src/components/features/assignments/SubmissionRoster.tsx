@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { LocalTime } from "@/components/ui/localtime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -33,15 +34,6 @@ export interface SubmissionRosterRow {
   } | null;
 }
 
-function when(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function initialsOf(name: string): string {
   return (
     name
@@ -53,13 +45,18 @@ function initialsOf(name: string): string {
   );
 }
 
-function tasteCell(taste: SubmissionRosterRow["taste"]): string {
+function tasteCell(taste: SubmissionRosterRow["taste"]) {
   if (!taste) return "—";
   if (taste.untouchedDefault) return "Default, untouched";
   const count = `${taste.criteriaCount} ${
     taste.criteriaCount === 1 ? "criterion" : "criteria"
   }`;
-  return taste.editedAt ? `${count} · ${when(taste.editedAt)}` : count;
+  if (!taste.editedAt) return count;
+  return (
+    <>
+      {count} · <LocalTime iso={taste.editedAt} variant="short" />
+    </>
+  );
 }
 
 export function SubmissionRoster({ rows }: { rows: SubmissionRosterRow[] }) {
@@ -126,10 +123,18 @@ export function SubmissionRoster({ rows }: { rows: SubmissionRosterRow[] }) {
                   </Badge>
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
-                  {r.submittedAt ? when(r.submittedAt) : "—"}
+                  {r.submittedAt ? (
+                    <LocalTime iso={r.submittedAt} variant="short" />
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
-                  {r.editedAt ? when(r.editedAt) : "—"}
+                  {r.editedAt ? (
+                    <LocalTime iso={r.editedAt} variant="short" />
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {tasteCell(r.taste)}

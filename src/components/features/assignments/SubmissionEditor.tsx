@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { LocalTime } from "@/components/ui/localtime";
 import {
   Card,
   CardContent,
@@ -289,13 +290,13 @@ export function SubmissionEditor({
             }
           >
             {deadlinePassed ? "Deadline passed" : "Due"}{" "}
-            {new Date(deadline).toLocaleString()}
+            <LocalTime iso={deadline} />
           </p>
 
           {submittedAt && (
             <div className="grid gap-1 rounded-lg border bg-muted/30 p-3">
               <p className="text-sm font-medium">
-                Submitted {new Date(submittedAt).toLocaleString()}
+                Submitted <LocalTime iso={submittedAt} />
               </p>
               {submittedFileUrl ? (
                 <a
