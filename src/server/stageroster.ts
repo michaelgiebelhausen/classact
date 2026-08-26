@@ -1,7 +1,12 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/db";
-import { activationState, type AccountFacts } from "@/lib/activation";
+import {
+  activationState,
+  ACTIVATION_META,
+  type AccountFacts,
+  type ActivationState,
+} from "@/lib/activation";
 import {
   rosterStage,
   ROSTER_STAGE_ORDER,
@@ -86,7 +91,8 @@ export async function stageRoster(
       name: e.roster_name,
       email: e.roster_email,
       photoUrl: photoMap.get(e.id)?.[0] ?? null,
-      note: noteFor(stage, e, accountEmail, activation === "send_failed"),
+      note: noteFor(stage, e, accountEmail, activation),
+      remedy: ACTIVATION_META[activation].remedy,
     });
   }
 
@@ -101,10 +107,14 @@ function noteFor(
   stage: RosterStage,
   enrollment: StageableEnrollment,
   accountEmail: string | null,
-  sendFailed: boolean
+  activation: ActivationState
 ): string | undefined {
   if (stage === "limbo") {
-    return sendFailed ? "invite bounced" : "can't sign in";
+    // Three different problems wear the same badge otherwise, and only one of
+    // them is fixed by a password link.
+    if (activation === "send_failed") return "invite bounced";
+    if (activation === "signed_in_not_joined") return "needs an invite";
+    return "needs a password";
   }
   if (stage === "self_joined") {
     // The address they actually use is the whole point of this section: it is

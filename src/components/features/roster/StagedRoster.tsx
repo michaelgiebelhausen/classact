@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import type { Remedy } from "@/lib/activation";
 import {
   ROSTER_STAGE_ORDER,
   ROSTER_STAGE_META,
@@ -23,6 +24,9 @@ export interface StagedPerson {
   photoUrl: string | null;
   /** Why they're in this section, when it isn't obvious from the section. */
   note?: string;
+  /** What would actually help this person — the stuck section holds two
+   *  different problems whose remedies are opposites. */
+  remedy?: Remedy;
 }
 
 function initials(name: string): string {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,19 +9,21 @@ import { sendSetPasswordLinks } from "@/server/actions/activation";
 import type { StagedPerson } from "@/components/features/roster/StagedRoster";
 
 /**
- * One button for the whole stuck section.
+ * Remedies for the stuck section — one button per problem, not one for the lot.
  *
- * These students confirmed their email and never obtained a session — their
- * sign-up link only worked in the browser that requested it, and theirs
- * didn't. Another invite cannot help: the invite is not what failed. A
- * set-password link can, because it is verified server-side and opens on any
- * device.
+ * "Stuck" holds two situations whose fixes are opposites, and the difference is
+ * invisible from a grid of faces:
  *
- * Deliberately not "delete their account and let the next sync rebuild them".
- * That would work — enrollments survive a profile deletion with profile_id
- * nulled, so attendance is safe — but it also throws away their uploaded
- * photo and their identity to solve a problem a link solves, and it cannot be
- * undone if the professor clicks it on the wrong person.
+ * - **Needs a password.** Confirmed their email, never obtained a session,
+ *   because their sign-up link only worked in the browser that requested it.
+ *   A set-password link fixes them; another invite cannot, because the invite
+ *   is not what failed.
+ * - **Needs an invite.** Already has a working account and has signed in —
+ *   they simply aren't enrolled in *this* class, usually a join link they
+ *   never opened. A password link would sign them in and change nothing.
+ *
+ * Sending the wrong one is not harmless: it looks like help, the student
+ * follows it, nothing improves, and they stop believing the next email.
  */
 export function StuckActions({
   courseId,
@@ -32,11 +35,14 @@ export function StuckActions({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
+  const needPassword = people.filter((p) => p.remedy === "set_password");
+  const needInvite = people.filter((p) => p.remedy === "reinvite");
+
   async function send() {
     setBusy(true);
     const result = await sendSetPasswordLinks({
       courseId,
-      enrollmentIds: people.map((p) => p.id),
+      enrollmentIds: needPassword.map((p) => p.id),
     });
     setBusy(false);
     if (!result.ok) {
@@ -53,13 +59,36 @@ export function StuckActions({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" onClick={send} disabled={busy || people.length === 0}>
-        {busy ? "Sending…" : `Email set-password links (${people.length})`}
-      </Button>
-      <span className="text-xs text-muted-foreground">
-        Works on any device — unlike the sign-up link that stranded them.
-      </span>
+    <div className="grid gap-2">
+      {needPassword.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={send} disabled={busy}>
+            {busy
+              ? "Sending…"
+              : `Email set-password links (${needPassword.length})`}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            For the {needPassword.length} marked{" "}
+            <span className="font-medium">needs a password</span> — works on any
+            device, unlike the sign-up link that stranded them.
+          </span>
+        </div>
+      )}
+
+      {needInvite.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/course/${courseId}/setup`}>
+              Invite the other {needInvite.length}
+            </Link>
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            The ones marked <span className="font-medium">needs an invite</span>{" "}
+            can already sign in — they just aren&apos;t in this class yet. A
+            password link wouldn&apos;t help them.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
