@@ -221,6 +221,19 @@ export type AssignmentRow = {
   course_id: string
   title: string
   storage_path: string | null
+  /** 0033 — the student-facing brief, plain text. Distinct from
+   *  settings.gradingInstructions, which is the professor's private AI
+   *  grading criteria and must never be shown to a student. */
+  instructions: string
+  /** 0033 — what the assignment is worth. Null = no value set, which is
+   *  not the same fact as zero. Feeds nothing yet. */
+  points: number | null
+  /** 0033 — the Canvas gradebook column this maps to, retained in a CSV
+   *  header so a re-export updates rather than duplicates. */
+  canvas_assignment_id: string | null
+  /** 0033 — when we last generated a Canvas CSV. Not proof Canvas got it:
+   *  the professor uploads by hand and never reports back. */
+  canvas_exported_at: string | null
   deadline: string
   peer_close_at: string
   settings: Record<string, unknown>
@@ -389,6 +402,10 @@ export type EnrollmentRow = {
    * Canvas never listed them — joined by code, or added by CSV — so they can
    * never be a Canvas departure. */
   canvas_seen_at: string | null
+  /** 0033 — the Canvas user id, which a gradebook CSV uses as its "ID"
+   *  column to match a row to a student. Populated by the roster sync;
+   *  null for anyone Canvas never listed. */
+  canvas_user_id: string | null
   created_at: string
 }
 

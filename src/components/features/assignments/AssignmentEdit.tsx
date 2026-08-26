@@ -23,6 +23,10 @@ interface Props {
   assignmentId: string;
   state: AssignmentState;
   title: string;
+  /** 0033 — student-facing brief. NOT the ai_only grading criteria. */
+  instructions: string;
+  /** 0033 — null means no point value set, which isn't zero. */
+  points: number | null;
   /** ISO datetimes. */
   deadline: string;
   peerCloseAt: string;
@@ -41,6 +45,8 @@ export function AssignmentEdit({
   assignmentId,
   state,
   title: initialTitle,
+  instructions: initialInstructions,
+  points: initialPoints,
   deadline,
   peerCloseAt,
 }: Props) {
@@ -48,6 +54,9 @@ export function AssignmentEdit({
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [title, setTitle] = useState(initialTitle);
+  const initialPointsText = initialPoints === null ? "" : String(initialPoints);
+  const [instructions, setInstructions] = useState(initialInstructions);
+  const [points, setPoints] = useState(initialPointsText);
   const dl = toLocalParts(deadline);
   const pc = toLocalParts(peerCloseAt);
   const [dlDate, setDlDate] = useState(dl.date);
@@ -61,6 +70,10 @@ export function AssignmentEdit({
   async function save() {
     const input: Parameters<typeof updateAssignment>[0] = { assignmentId };
     if (title.trim() !== initialTitle) input.title = title;
+    // Neither is state-gated: unlike the deadline, a typo in the brief or
+    // the point value is worth fixing at any point in the lifecycle.
+    if (instructions !== initialInstructions) input.instructions = instructions;
+    if (points !== initialPointsText) input.points = points;
     if (canEditDeadline && (dlDate !== dl.date || dlTime !== dl.time)) {
       const next = new Date(`${dlDate}T${dlTime}`);
       if (Number.isNaN(next.getTime())) {
@@ -77,11 +90,10 @@ export function AssignmentEdit({
       }
       input.peerCloseAt = next.toISOString();
     }
-    if (
-      input.title === undefined &&
-      input.deadline === undefined &&
-      input.peerCloseAt === undefined
-    ) {
+    // Only assignmentId present means nothing was actually changed. Counting
+    // keys rather than naming fields, so a new field can't be forgotten here
+    // and silently fail to save.
+    if (Object.keys(input).length <= 1) {
       setOpen(false);
       return;
     }
@@ -126,6 +138,39 @@ export function AssignmentEdit({
             onChange={(e) => setTitle(e.target.value)}
             className="max-w-md"
           />
+        </div>
+
+        <div className="grid gap-1.5">
+          <Label htmlFor="edit-instructions">Instructions</Label>
+          <textarea
+            id="edit-instructions"
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+            rows={5}
+            maxLength={5000}
+            placeholder="What are they making, and what does done look like?"
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          />
+          <p className="text-xs text-muted-foreground">
+            Students read this. Editable at any point — it isn&apos;t baked
+            into the analysis the way the deadline is.
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
+          <Label htmlFor="edit-points">Points</Label>
+          <Input
+            id="edit-points"
+            type="number"
+            min="0"
+            step="any"
+            value={points}
+            onChange={(e) => setPoints(e.target.value)}
+            className="max-w-[140px]"
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave blank if this assignment isn&apos;t worth points.
+          </p>
         </div>
 
         <div className="grid gap-1.5">

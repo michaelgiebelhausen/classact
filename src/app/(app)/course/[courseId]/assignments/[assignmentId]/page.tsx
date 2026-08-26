@@ -50,7 +50,7 @@ export default async function AssignmentPage({
   const { data: assignment } = await supabase
     .from("assignments")
     .select(
-      "id, course_id, title, deadline, peer_close_at, settings, state, analysis, published_at, courses!inner(name, professor_id, grading_defaults)"
+      "id, course_id, title, instructions, points, deadline, peer_close_at, settings, state, analysis, published_at, courses!inner(name, professor_id, grading_defaults)"
     )
     .eq("id", assignmentId)
     .eq("course_id", courseId)
@@ -80,11 +80,19 @@ export default async function AssignmentPage({
   const enrollmentId = myEnrollment?.id ?? null;
 
   const header = (
-    <div>
-      <h1 className="text-2xl font-semibold tracking-tight">{assignment.title}</h1>
-      <p className="text-sm text-muted-foreground">
-        {courseMeta.name} · due <LocalTime iso={assignment.deadline} />
-      </p>
+    <div className="grid gap-3">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">{assignment.title}</h1>
+        <p className="text-sm text-muted-foreground">
+          {courseMeta.name} · due <LocalTime iso={assignment.deadline} />
+          {assignment.points !== null ? ` · ${assignment.points} points` : ""}
+        </p>
+      </div>
+      {assignment.instructions && (
+        <p className="max-w-3xl whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">
+          {assignment.instructions}
+        </p>
+      )}
     </div>
   );
 
@@ -214,6 +222,8 @@ export default async function AssignmentPage({
             assignmentId={assignmentId}
             state={assignment.state}
             title={assignment.title}
+            instructions={assignment.instructions}
+            points={assignment.points}
             deadline={assignment.deadline}
             peerCloseAt={assignment.peer_close_at}
           />
@@ -349,6 +359,8 @@ export default async function AssignmentPage({
           assignmentId={assignmentId}
           state={assignment.state}
           title={assignment.title}
+          instructions={assignment.instructions}
+          points={assignment.points}
           deadline={assignment.deadline}
           peerCloseAt={assignment.peer_close_at}
         />

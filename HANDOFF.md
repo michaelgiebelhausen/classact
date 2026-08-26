@@ -235,6 +235,34 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## Assignment instructions and points, plus Canvas identity (0033)
+
+**Run `supabase/migrations/0033_assignment_fields.sql` BEFORE deploying** —
+the assignment page selects `instructions` and `points`, and the Canvas
+roster sync writes `enrollments.canvas_user_id`. Without the columns the
+assignment pages 404 and the sync fails.
+
+`instructions` is the student-facing brief. It is **not**
+`settings.gradingInstructions`, which is the professor's private AI grading
+criteria for ai_only assignments — similar name, opposite audience. The
+create form now labels the latter "Your grading criteria" and holds it in a
+`gradingCriteria` variable, so the two can't be confused in code either.
+
+Instructions are additive: `storage_path` (the brief PDF) still works
+exactly as before, and an assignment may have either, both, or neither. A
+typed brief also now feeds the AI taste-file draft, so a text-only
+assignment no longer drafts from the title alone.
+
+`points` is nullable on purpose. Null means "no point value set", which is
+a different fact from zero — a `default 0` would have made every existing
+assignment look deliberately worthless. Nothing reads it yet: it does not
+affect cut points, letters, or ranking. That is the speed-grader work.
+
+`canvas_assignment_id`, `canvas_exported_at` and `canvas_user_id` are
+identity for a future Canvas gradebook CSV export, which is spec'd but not
+built. Only `canvas_user_id` is populated, by the roster sync, for free on
+every resync. See `docs/canvas-assignment-fields-plan.md`.
+
 ## A student's school email vs their login (0032)
 
 **Run `supabase/migrations/0032_school_email.sql` BEFORE deploying** — the

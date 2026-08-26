@@ -28,6 +28,10 @@ export interface CanvasStudent {
   name: string;
   email: string;
   avatarUrl: string | null; // null when Canvas returns a generic default
+  /** 0033 — Canvas's own user id. A gradebook CSV matches rows on this, so
+   *  a grade export needs it; email is fine for reading a roster and wrong
+   *  for writing grades back. Already fetched, previously discarded. */
+  canvasUserId: string;
 }
 
 /**
@@ -167,6 +171,7 @@ async function fetchCanvasRoster(
         name: u.name?.trim() || email,
         email,
         avatarUrl: real ? (u.avatar_url as string) : null,
+        canvasUserId: String(u.id),
       });
     }
     url = nextLink(res.headers.get("link"), base);
@@ -403,6 +408,27 @@ export async function syncCanvasRoster(input: {
     await supabase
       .from("enrollments")
       .update({ status: "active" as const })
+      .eq("id", e.id);
+  }
+
+  // Canvas identity for a future gradebook CSV export (0033). One pass over
+  // everyone Canvas just listed, after every other branch has settled, so it
+  // doesn't matter which one created the row. Idempotent: only writes when
+  // the value is actually new, so a resync that changes nothing costs
+  // nothing. Nothing reads this yet — it backfills for free.
+  const canvasIdByEmail = new Map(
+    roster.students.map((s) => [s.email, s.canvasUserId])
+  );
+  const { data: forCanvasIds } = await supabase
+    .from("enrollments")
+    .select("id, roster_email, canvas_user_id")
+    .eq("course_id", course.id);
+  for (const e of forCanvasIds ?? []) {
+    const canvasUserId = canvasIdByEmail.get(e.roster_email);
+    if (!canvasUserId || e.canvas_user_id === canvasUserId) continue;
+    await supabase
+      .from("enrollments")
+      .update({ canvas_user_id: canvasUserId })
       .eq("id", e.id);
   }
 

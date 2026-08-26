@@ -1,6 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import {
+  normalizeInstructions,
+  normalizePoints,
+} from "@/lib/assignmentfields";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
@@ -57,6 +61,11 @@ export async function createAssignment(input: {
   courseId: string;
   title: string;
   storagePath: string | null;
+  /** Student-facing brief. NOT gradingInstructions, which is the
+   *  professor's private AI criteria for ai_only assignments. */
+  instructions?: string;
+  /** What the assignment is worth. Blank/absent = no value set. */
+  points?: string | number | null;
   /** ISO datetime. */
   deadline: string;
   /** ISO datetime; defaults to deadline + peerWindowDays. */
@@ -72,6 +81,10 @@ export async function createAssignment(input: {
 
   const title = input.title.trim().slice(0, 200);
   if (!title) return { ok: false, error: "Give the assignment a title." };
+  const instructions = normalizeInstructions(input.instructions ?? "");
+  if (!instructions.ok) return { ok: false, error: instructions.message };
+  const points = normalizePoints(input.points);
+  if (!points.ok) return { ok: false, error: points.message };
   // AI-only grading has no emergent rubric — the instructor's taste
   // criteria ARE the standard, so they're required (one sentence is fine).
   if (input.gradingMode === "ai_only" && !(input.gradingInstructions ?? "").trim()) {
@@ -136,6 +149,8 @@ export async function createAssignment(input: {
             briefBase64 && input.storagePath
               ? { base64: briefBase64, kind: docKindFromPath(input.storagePath) }
               : null,
+          // A text-only assignment used to draft from the title alone.
+          instructions: instructions.value,
         },
         creds
       );
@@ -149,6 +164,8 @@ export async function createAssignment(input: {
       course_id: input.courseId,
       title,
       storage_path: input.storagePath,
+      instructions: instructions.value,
+      points: points.value,
       deadline: deadline.toISOString(),
       peer_close_at: peerClose.toISOString(),
       settings: {
@@ -382,6 +399,8 @@ export async function saveSubmissionNote(
 export async function updateAssignment(input: {
   assignmentId: string;
   title?: string;
+  instructions?: string;
+  points?: string | number | null;
   /** ISO datetime. */
   deadline?: string;
   /** ISO datetime. */
@@ -403,13 +422,32 @@ export async function updateAssignment(input: {
     return { ok: false, error: "Only the course owner can edit an assignment." };
   }
 
-  const patch: Partial<Pick<AssignmentRow, "title" | "deadline" | "peer_close_at">> =
-    {};
+  const patch: Partial<
+    Pick<
+      AssignmentRow,
+      "title" | "deadline" | "peer_close_at" | "instructions" | "points"
+    >
+  > = {};
 
   if (input.title !== undefined) {
     const title = input.title.trim().slice(0, 200);
     if (!title) return { ok: false, error: "Give the assignment a title." };
     patch.title = title;
+  }
+
+  // Neither field is state-gated. Unlike the deadline — which is baked into
+  // the analysis once grading starts — a typo in the brief or the point
+  // value is worth fixing at any point in the assignment's life.
+  if (input.instructions !== undefined) {
+    const verdict = normalizeInstructions(input.instructions);
+    if (!verdict.ok) return { ok: false, error: verdict.message };
+    patch.instructions = verdict.value;
+  }
+
+  if (input.points !== undefined) {
+    const verdict = normalizePoints(input.points);
+    if (!verdict.ok) return { ok: false, error: verdict.message };
+    patch.points = verdict.value;
   }
 
   let deadline = new Date(assignment.deadline);

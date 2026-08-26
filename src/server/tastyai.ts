@@ -156,6 +156,10 @@ export async function generateDefaultTaste(
   input: {
     assignmentTitle: string;
     brief: DocInput | null;
+    /** 0033 — the typed brief. An assignment may carry this instead of a
+     *  PDF; without it a text-only assignment drafted from the title alone
+     *  and every student started from a near-empty taste file. */
+    instructions?: string;
   },
   creds: AiCallCreds
 ): Promise<AiResult<TasteDraft>> {
@@ -166,8 +170,19 @@ export async function generateDefaultTaste(
     "Keep it deliberately solid-but-generic: students are scored on how far they push BEYOND this default.",
     'Reply with ONLY JSON: {"criteria":[{"name":string,"standard":string}],"barStatement":string}',
   ].join("\n");
+  const instructions = (input.instructions ?? "").trim();
   const content: unknown[] = [
-    { type: "text", text: `Assignment: "${input.assignmentTitle}". Draft the default taste file.` },
+    {
+      type: "text",
+      text: instructions
+        ? `Assignment: "${input.assignmentTitle}".
+
+Instructions given to students:
+${instructions}
+
+Draft the default taste file.`
+        : `Assignment: "${input.assignmentTitle}". Draft the default taste file.`,
+    },
   ];
   if (input.brief) content.push(docPart("assignment", input.brief));
   const result = await callModel(

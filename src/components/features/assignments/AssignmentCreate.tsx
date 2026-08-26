@@ -54,7 +54,12 @@ export function AssignmentCreate({
   const [peerCloseDate, setPeerCloseDate] = useState("");
   const [peerCloseTime, setPeerCloseTime] = useState(END_OF_DAY);
   const [gradingMode, setGradingMode] = useState<"tasty" | "ai_only">("tasty");
+  // The professor's PRIVATE AI grading criteria (ai_only mode). Not the
+  // student-facing brief — that is `instructions` below.
+  const [gradingCriteria, setGradingCriteria] = useState("");
+  // 0033 — the student-facing brief. Students read this.
   const [instructions, setInstructions] = useState("");
+  const [points, setPoints] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function create() {
@@ -70,7 +75,7 @@ export function AssignmentCreate({
       toast.error("Give the deadline a time.");
       return;
     }
-    if (gradingMode === "ai_only" && !instructions.trim()) {
+    if (gradingMode === "ai_only" && !gradingCriteria.trim()) {
       toast.error(
         "AI-only grading needs your criteria — one sentence is enough."
       );
@@ -106,13 +111,18 @@ export function AssignmentCreate({
             ).toISOString()
           : null,
       gradingMode,
-      gradingInstructions: gradingMode === "ai_only" ? instructions : undefined,
+      instructions,
+      points,
+      gradingInstructions:
+        gradingMode === "ai_only" ? gradingCriteria : undefined,
     });
     setSaving(false);
     if (result.ok) {
       toast.success("Assignment published — students can start their taste files now.");
       setTitle("");
       setFile(null);
+      setInstructions("");
+      setPoints("");
       // Clear the days, keep the times at their defaults for the next one.
       setDeadlineDate("");
       setDeadlineTime(END_OF_DAY);
@@ -148,6 +158,39 @@ export function AssignmentCreate({
             className="max-w-md"
           />
         </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="a-brief">Instructions (optional)</Label>
+          <textarea
+            id="a-brief"
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+            placeholder="What are they making, and what does done look like?"
+            rows={5}
+            maxLength={5000}
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          />
+          <p className="text-xs text-muted-foreground">
+            Students read this on the assignment. A brief PDF still works —
+            you can use either, both, or neither.
+          </p>
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="a-points">Points (optional)</Label>
+          <Input
+            id="a-points"
+            type="number"
+            min="0"
+            step="any"
+            value={points}
+            onChange={(e) => setPoints(e.target.value)}
+            className="max-w-[140px]"
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave blank if this assignment isn&apos;t worth points.
+          </p>
+        </div>
         <div className="grid gap-2">
           <Label>Grading mode</Label>
           <div className="flex gap-2">
@@ -177,14 +220,14 @@ export function AssignmentCreate({
 
         {gradingMode === "ai_only" && (
           <div className="grid gap-2">
-            <Label htmlFor="a-instructions">
+            <Label htmlFor="a-grading-criteria">
               Your grading criteria (required — this is the standard the AI
               grades against)
             </Label>
             <textarea
-              id="a-instructions"
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
+              id="a-grading-criteria"
+              value={gradingCriteria}
+              onChange={(e) => setGradingCriteria(e.target.value)}
               placeholder={
                 "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
               }
