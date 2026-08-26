@@ -41,3 +41,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# student data — never commit. Canvas gradebook exports carry names, SIS
+# C-numbers, campus emails and grades (FERPA). Keep them out of git history
+# even transiently: a `git add -A` in a busy tree is all it takes.
+*Grades-*.csv
+*Grades_*.csv
