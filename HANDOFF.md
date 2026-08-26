@@ -235,6 +235,25 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## Resolving a duplicate student
+
+A student who signs in with their university Google account gets a second auth
+user and a second enrolment: `name@g.clemson.edu` beside the `name@clemson.edu`
+Canvas holds. They usually reach their real account later and do all their work
+there, leaving the shadow with a few icebreaker answers and nothing else.
+
+**Remove duplicate** on that section deletes the spare row and the unused login
+behind it. The real row — name, photo, attendance — is untouched. The login is
+only deleted once it owns nothing anywhere; otherwise the student would be
+signing in to an account that can't reach any class, and the next use of the
+course code would rebuild the shadow.
+
+It refuses two cases rather than guessing: no surviving twin (this is their
+only enrolment, not a duplicate), and any check-in on the row being removed.
+That second guard matters because 22 tables cascade-delete off `enrollments` —
+the one duplicate that *does* hold attendance is exactly the row where the
+student did their attending, and it needs doing by hand.
+
 ## The roster sections, and what each one's button does
 
 Sections are named for the student's *situation*, and each carries the one fix

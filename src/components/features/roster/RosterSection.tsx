@@ -10,6 +10,7 @@ import {
   sendSetPasswordLinks,
   resetStuckAccount,
   approveJoiners,
+  resolveDuplicate,
 } from "@/server/actions/activation";
 import type { RosterStage } from "@/lib/rosterstage";
 import type { StagedPerson } from "@/components/features/roster/StagedRoster";
@@ -116,6 +117,22 @@ export function RosterSection({
       router.refresh();
     });
 
+  const resolveOne = (person: StagedPerson) =>
+    run(person.id, async () => {
+      const result = await resolveDuplicate({
+        courseId,
+        enrollmentId: person.id,
+      });
+      if (!result.ok) return toast.error(result.error, { duration: 12_000 });
+      toast.success(
+        result.data?.accountDeleted
+          ? `Removed the duplicate ${result.data.removed} and its unused login. Their real row is untouched.`
+          : `Removed the duplicate ${result.data?.removed}. Their real row is untouched.`,
+        { duration: 8000 }
+      );
+      router.refresh();
+    });
+
   const resetOne = (person: StagedPerson) =>
     run(person.id, async () => {
       const result = await resetStuckAccount({
@@ -192,9 +209,9 @@ export function RosterSection({
         )}
         {stage === "duplicate" && (
           <span className="text-xs text-muted-foreground">
-            Nothing to do today — their real row already works. Merging the two
-            is still to come; dropping this one would take their check-ins with
-            it.
+            Removing a duplicate deletes this spare row and the unused login
+            behind it. Their real row — name, photo, attendance — is untouched,
+            and any row holding check-ins is refused rather than removed.
           </span>
         )}
       </div>
@@ -226,6 +243,38 @@ export function RosterSection({
                 {busy === p.id ? "Approving…" : "Approve"}
               </Button>
             )}
+
+            {stage === "duplicate" &&
+              (confirming === p.id ? (
+                <span className="flex flex-col items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="h-6 px-2 text-[10px]"
+                    disabled={busy !== null}
+                    onClick={() => resolveOne(p)}
+                  >
+                    {busy === p.id ? "Removing…" : "Yes, remove"}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-[10px] underline text-muted-foreground"
+                    onClick={() => setConfirming(null)}
+                  >
+                    cancel
+                  </button>
+                </span>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px]"
+                  disabled={busy !== null}
+                  onClick={() => setConfirming(p.id)}
+                >
+                  Remove duplicate
+                </Button>
+              ))}
 
             {stage === "needs_password" &&
               (confirming === p.id ? (

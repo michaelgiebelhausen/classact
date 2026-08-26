@@ -14,6 +14,8 @@ import {
 } from "@/lib/activation";
 import { canResetAccount } from "@/lib/accountreset";
 import { canApproveJoiner } from "@/lib/approvejoiner";
+import { canResolveDuplicate } from "@/lib/duplicateresolve";
+import { emailAliasOf } from "@/lib/emailalias";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
 
@@ -343,4 +345,103 @@ export async function approveJoiners(input: {
   revalidatePath(`/course/${parsed.data.courseId}`);
   revalidatePath(`/course/${parsed.data.courseId}/setup`);
   return { ok: true, data: { approved: (updated ?? []).length } };
+}
+
+const duplicateSchema = z.object({
+  courseId: z.string().uuid(),
+  enrollmentId: z.string().uuid(),
+});
+
+/**
+ * Remove the shadow row when a student is on the roster twice.
+ *
+ * The pattern, seen four times by hand and identical every time: the student
+ * signed in with their university Google account, which created a second auth
+ * user and a second enrolment; later they reached their real Clemson account
+ * and did everything there. The shadow holds a handful of icebreaker answers
+ * and no attendance.
+ *
+ * The orphaned login goes too, but only once it owns nothing anywhere —
+ * otherwise the student would be signing in to an account that can no longer
+ * reach any class, and the next time they used the course code it would build
+ * the same shadow again.
+ *
+ * Refuses anything that isn't demonstrably a duplicate: no surviving twin, or
+ * any check-in on the row being removed.
+ */
+export async function resolveDuplicate(input: {
+  courseId: string;
+  enrollmentId: string;
+}): Promise<ActionResult<{ removed: string; accountDeleted: boolean }>> {
+  const parsed = duplicateSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid request." };
+
+  const owned = await ownedCourse(parsed.data.courseId);
+  if (!owned.ok) return { ok: false, error: owned.error };
+  if (!isConfigured.supabaseAdmin) {
+    return { ok: false, error: "The server isn't configured for this." };
+  }
+
+  const supabase = await createClient();
+  const { data: shadow } = await supabase
+    .from("enrollments")
+    .select("id, roster_email, profile_id")
+    .eq("course_id", parsed.data.courseId)
+    .eq("id", parsed.data.enrollmentId)
+    .maybeSingle();
+  if (!shadow) return { ok: false, error: "That row isn't on this roster." };
+
+  // The twin is found by address alias, the same rule the sync uses, rather
+  // than by name — the shadow's name is usually just its own address.
+  const alias = emailAliasOf(shadow.roster_email.toLowerCase());
+  const { data: twin } = alias
+    ? await supabase
+        .from("enrollments")
+        .select("id, roster_name")
+        .eq("course_id", parsed.data.courseId)
+        .ilike("roster_email", alias)
+        .neq("id", shadow.id)
+        .maybeSingle()
+    : { data: null };
+
+  const { count } = await supabase
+    .from("check_ins")
+    .select("id", { count: "exact", head: true })
+    .eq("enrollment_id", shadow.id);
+
+  const verdict = canResolveDuplicate({
+    hasTwin: Boolean(twin),
+    shadowCheckIns: count ?? 0,
+  });
+  if (!verdict.allowed) return { ok: false, error: verdict.reason };
+
+  const { error } = await supabase
+    .from("enrollments")
+    .delete()
+    .eq("id", shadow.id);
+  if (error) return { ok: false, error: "Couldn't remove that row. Try again." };
+
+  // Clean up the login behind it, but only when it now owns nothing at all.
+  let accountDeleted = false;
+  if (shadow.profile_id) {
+    const admin = createAdminClient();
+    const { data: stillOwns } = await admin
+      .from("enrollments")
+      .select("id")
+      .eq("profile_id", shadow.profile_id)
+      .limit(1);
+    if ((stillOwns ?? []).length === 0) {
+      const { error: delErr } = await admin.auth.admin.deleteUser(
+        shadow.profile_id
+      );
+      accountDeleted = !delErr;
+    }
+  }
+
+  invalidateCourseDirectory(parsed.data.courseId);
+  revalidatePath(`/course/${parsed.data.courseId}`);
+  return {
+    ok: true,
+    data: { removed: shadow.roster_email, accountDeleted },
+  };
 }
