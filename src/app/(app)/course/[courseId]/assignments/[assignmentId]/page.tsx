@@ -5,7 +5,10 @@ import { resolveCourseAi, scoringPricing } from "@/server/aicreds";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { resolveEnrollmentPhotos } from "@/lib/storage";
+import {
+  getSignedSubmissionUrl,
+  resolveEnrollmentPhotos,
+} from "@/lib/storage";
 import { resolveSettings } from "@/lib/tastegrading";
 import { judgingStats, type DecidedComparison } from "@/lib/tastestats";
 import { Card, CardContent } from "@/components/ui/card";
@@ -391,11 +394,19 @@ export default async function AssignmentPage({
         .maybeSingle(),
       supabase
         .from("submissions")
-        .select("submitted_at, note")
+        .select("submitted_at, note, storage_path")
         .eq("assignment_id", assignmentId)
         .eq("enrollment_id", enrollmentId)
         .maybeSingle(),
     ]);
+    // Let the student open what they actually submitted. A timestamp alone
+    // doesn't answer "did the right file go up?", which is the question
+    // behind most of the emails.
+    const submittedFileUrl = submission?.storage_path
+      ? await getSignedSubmissionUrl(supabase, submission.storage_path)
+      : null;
+    const submittedFileExt =
+      submission?.storage_path?.split(".").pop()?.toLowerCase() ?? null;
     const defaultTaste = (
       assignment.settings as {
         defaultTaste?: { criteria: TasteCriterion[]; barStatement: string };
@@ -418,6 +429,8 @@ export default async function AssignmentPage({
           tasteIsDefault={taste ? taste.is_default_untouched : true}
           submittedAt={submission?.submitted_at ?? null}
           submissionNote={submission?.note ?? ""}
+          submittedFileUrl={submittedFileUrl}
+          submittedFileExt={submittedFileExt}
           mode={
             (assignment.settings as { gradingMode?: string }).gradingMode ===
             "ai_only"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/browser";
@@ -15,7 +15,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { saveTasteFile, submitWork } from "@/server/actions/assignments";
+import {
+  saveSubmissionNote,
+  saveTasteFile,
+  submitWork,
+} from "@/server/actions/assignments";
+import { classifySubmissionFile } from "@/lib/submissionfile";
 import type { TasteCriterion } from "@/types/db";
 
 /**
@@ -36,6 +41,11 @@ interface Props {
   tasteIsDefault: boolean;
   submittedAt: string | null;
   submissionNote: string;
+  /** Short-lived signed URL for the student's own submitted file, so they
+   *  can confirm the right one landed. Null when nothing is submitted. */
+  submittedFileUrl?: string | null;
+  /** Extension of the submitted file (pdf/md/png/jpg), for the label. */
+  submittedFileExt?: string | null;
   /** ai_only: no student taste file — the instructor's criteria rule. */
   mode?: "tasty" | "ai_only";
   instructorCriteria?: string;
@@ -51,6 +61,8 @@ export function SubmissionEditor({
   tasteIsDefault,
   submittedAt,
   submissionNote,
+  submittedFileUrl = null,
+  submittedFileExt = null,
   mode = "tasty",
   instructorCriteria = "",
 }: Props) {
@@ -65,6 +77,22 @@ export function SubmissionEditor({
   const [savingTaste, setSavingTaste] = useState(false);
   const [note, setNote] = useState(submissionNote);
   const [uploading, setUploading] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+
+  // Watched rather than computed at render: a student sitting on this page
+  // as the deadline arrives should see it close, not find out by having an
+  // upload refused. Starts false so the server and the first client render
+  // agree, then corrects on mount.
+  const deadlineMs = new Date(deadline).getTime();
+  const [deadlinePassed, setDeadlinePassed] = useState(false);
+  useEffect(() => {
+    const check = () => setDeadlinePassed(Date.now() > deadlineMs);
+    check();
+    const id = setInterval(check, 30_000);
+    return () => clearInterval(id);
+  }, [deadlineMs]);
+
+  const noteChanged = note !== submissionNote;
 
   function setCriterion(i: number, patch: Partial<TasteCriterion>) {
     setCriteria((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)));
@@ -83,29 +111,33 @@ export function SubmissionEditor({
   }
 
   async function handleFile(file: File) {
-    if (file.size > 20 * 1024 * 1024) {
-      toast.error("Keep your file under 20 MB.");
+    // Check the deadline before spending the student's bandwidth. The server
+    // action checks it again — this only saves them a 20 MB upload that was
+    // always going to be refused.
+    if (new Date(deadline).getTime() < Date.now()) {
+      toast.error("The deadline has passed — this can't be submitted now.");
       return;
     }
+
+    // Refuse unknown types rather than guessing. A .docx used to be stored
+    // as a .pdf, which "succeeded" and handed the professor a file that
+    // wouldn't open.
+    const verdict = classifySubmissionFile({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+    });
+    if (!verdict.ok) {
+      toast.error(verdict.message);
+      return;
+    }
+
     setUploading(true);
     const supabase = createClient();
-    const lower = file.name.toLowerCase();
-    const isMd = lower.endsWith(".md") || file.type === "text/markdown";
-    const isPng = lower.endsWith(".png") || file.type === "image/png";
-    const isJpeg =
-      lower.endsWith(".jpg") || lower.endsWith(".jpeg") || file.type === "image/jpeg";
-    const ext = isMd ? "md" : isPng ? "png" : isJpeg ? "jpg" : "pdf";
-    const contentType = isMd
-      ? "text/markdown"
-      : isPng
-        ? "image/png"
-        : isJpeg
-          ? "image/jpeg"
-          : "application/pdf";
-    const storagePath = `${courseId}/sub/${enrollmentId}/${crypto.randomUUID()}.${ext}`;
+    const storagePath = `${courseId}/sub/${enrollmentId}/${crypto.randomUUID()}.${verdict.file.ext}`;
     const { error } = await supabase.storage
       .from(ASSIGNMENT_BUCKET)
-      .upload(storagePath, file, { contentType });
+      .upload(storagePath, file, { contentType: verdict.file.contentType });
     if (error) {
       setUploading(false);
       toast.error("Upload failed — try again.");
@@ -117,6 +149,18 @@ export function SubmissionEditor({
       toast.success(
         submittedAt ? "Submission replaced." : "Submitted. You can replace it until the deadline."
       );
+      router.refresh();
+    } else {
+      toast.error(result.error);
+    }
+  }
+
+  async function saveNote() {
+    setSavingNote(true);
+    const result = await saveSubmissionNote(assignmentId, note);
+    setSavingNote(false);
+    if (result.ok) {
+      toast.success("Note saved.");
       router.refresh();
     } else {
       toast.error(result.error);
@@ -235,12 +279,42 @@ export function SubmissionEditor({
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          {/* The deadline shows whether or not anything is submitted — it
+              matters most to the student who hasn't submitted yet. */}
+          <p
+            className={
+              deadlinePassed
+                ? "text-sm font-medium text-destructive"
+                : "text-sm text-muted-foreground"
+            }
+          >
+            {deadlinePassed ? "Deadline passed" : "Due"}{" "}
+            {new Date(deadline).toLocaleString()}
+          </p>
+
           {submittedAt && (
-            <p className="text-sm text-muted-foreground">
-              Submitted {new Date(submittedAt).toLocaleString()} · deadline{" "}
-              {new Date(deadline).toLocaleString()}
-            </p>
+            <div className="grid gap-1 rounded-lg border bg-muted/30 p-3">
+              <p className="text-sm font-medium">
+                Submitted {new Date(submittedAt).toLocaleString()}
+              </p>
+              {submittedFileUrl ? (
+                <a
+                  href={submittedFileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-fit text-sm underline underline-offset-4"
+                >
+                  Open the file you submitted
+                  {submittedFileExt ? ` (${submittedFileExt.toUpperCase()})` : ""}
+                </a>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Your file is stored. Reload if the link doesn&apos;t appear.
+                </p>
+              )}
+            </div>
           )}
+
           <div className="grid gap-2">
             <Label htmlFor="note">Note to the graders (optional)</Label>
             <Input
@@ -248,7 +322,31 @@ export function SubmissionEditor({
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Anything the reader should know"
+              disabled={deadlinePassed}
             />
+            {submittedAt ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-fit"
+                  onClick={() => void saveNote()}
+                  disabled={savingNote || !noteChanged || deadlinePassed}
+                >
+                  {savingNote ? "Saving…" : "Save note"}
+                </Button>
+                {noteChanged && !deadlinePassed && (
+                  <span className="text-xs text-muted-foreground">
+                    Unsaved
+                  </span>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Saved together with your file when you upload.
+              </p>
+            )}
           </div>
           <input
             ref={fileRef}
@@ -257,21 +355,27 @@ export function SubmissionEditor({
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) handleFile(f);
+              if (f) void handleFile(f);
               e.target.value = "";
             }}
           />
           <Button
             onClick={() => fileRef.current?.click()}
-            disabled={uploading}
+            disabled={uploading || deadlinePassed}
             className="w-fit"
           >
             {uploading
               ? "Uploading…"
               : submittedAt
                 ? "Replace file"
-                : "Upload PDF or Markdown"}
+                : "Choose your file"}
           </Button>
+          {deadlinePassed && (
+            <p className="text-xs text-muted-foreground">
+              Submissions closed at the deadline. Talk to your professor if
+              something went wrong.
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

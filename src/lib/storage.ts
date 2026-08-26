@@ -4,6 +4,7 @@ import type { Database, PhotoKind } from "@/types/db"
 export const PHOTO_BUCKET = "profile-photos"
 export const DECK_BUCKET = "lecture-decks"
 export const PROJECT_BUCKET = "project-docs"
+export const ASSIGNMENT_BUCKET = "assignment-docs"
 const SIGNED_URL_TTL_SECONDS = 60 * 60 // 1 hour
 
 /** Short-lived signed URL for a lecture deck PDF. */
@@ -25,6 +26,19 @@ export async function getSignedProjectUrl(
 ): Promise<string | null> {
   const { data, error } = await client.storage
     .from(PROJECT_BUCKET)
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
+  if (error || !data) return null
+  return data.signedUrl
+}
+
+/** Short-lived signed URL for a student's own submitted file, so they can
+ *  confirm the right one landed instead of trusting a timestamp. */
+export async function getSignedSubmissionUrl(
+  client: SupabaseClient<Database>,
+  path: string
+): Promise<string | null> {
+  const { data, error } = await client.storage
+    .from(ASSIGNMENT_BUCKET)
     .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
   if (error || !data) return null
   return data.signedUrl

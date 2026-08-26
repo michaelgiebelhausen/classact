@@ -318,6 +318,57 @@ export async function submitWork(
   return { ok: true };
 }
 
+/**
+ * Student: save the note to graders without re-uploading the file.
+ *
+ * The note used to travel only inside submitWork, so a student who had
+ * already submitted and then thought of something to say had no way to save
+ * it — the text sat in the box and vanished on the next refresh. Editing
+ * the note is not a resubmission: `last_edit_at` is deliberately left alone,
+ * because that field decides timeliness and a typo fix at 11:58 shouldn't
+ * read as handing the work in at 11:58.
+ */
+export async function saveSubmissionNote(
+  assignmentId: string,
+  note: string
+): Promise<ActionResult> {
+  const { supabase, user } = await requireUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: assignment } = await supabase
+    .from("assignments")
+    .select("id, course_id, deadline")
+    .eq("id", assignmentId)
+    .single();
+  if (!assignment) return { ok: false, error: "Assignment not found." };
+  if (new Date(assignment.deadline).getTime() < Date.now()) {
+    return { ok: false, error: "The deadline has passed." };
+  }
+  const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
+  if (!enrollmentId) {
+    return { ok: false, error: "You're not on this course's roster." };
+  }
+
+  const { data: existing } = await supabase
+    .from("submissions")
+    .select("id")
+    .eq("assignment_id", assignmentId)
+    .eq("enrollment_id", enrollmentId)
+    .maybeSingle();
+  if (!existing) {
+    return { ok: false, error: "Upload your file first — the note goes with it." };
+  }
+
+  const { error } = await supabase
+    .from("submissions")
+    .update({ note: note.trim().slice(0, 2000) })
+    .eq("id", existing.id);
+  if (error) return { ok: false, error: "Couldn't save the note — try again." };
+
+  revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
+  return { ok: true };
+}
+
 /** Professor: adjust assignment settings (pair mix, weights, cut points…). */
 /**
  * Professor: edit an assignment after creating it. What's editable depends
