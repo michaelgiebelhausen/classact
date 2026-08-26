@@ -208,6 +208,63 @@ student at once:
 - [ ] Both: Metrics pages show sensible numbers
 - [ ] Student: Profile → Delete my photos & answers → confirm it works
 
+## Seat corrections (CA-4) — needs migration 0029
+
+**Run `supabase/migrations/0029_reassign_seat.sql` in the SQL editor.** Until
+you do, the professor's reassign taps return "Seat reassignment isn't
+installed on the database yet" — the student-side move works without it.
+
+- **Students** can move themselves: tap any open seat after checking in. It's
+  an `UPDATE` of the existing check-in row, never a delete, so attendance and
+  any neighbor verification survive the move.
+- **Professors** tap a student, then tap a seat. A free seat moves them; an
+  occupied seat swaps the two students. Seating a student who hasn't checked
+  in works too.
+
+Why 0029 has to exist: `check_ins` carries a non-deferrable
+`unique (session_id, seat_id)`, so two UPDATEs can never swap two students
+without transiently colliding. The swap must delete one row and write it back,
+and doing that from the client — three round trips, no transaction — would
+destroy a student's attendance if it failed midway. `reassign_seat` does it in
+one atomic statement and authorizes the caller internally, since professors
+have no UPDATE policy on `check_ins`.
+
+## Reading the check-in metrics after a class (CA-7)
+
+The check-in path now emits one JSON line per measured operation, tagged
+`[loadmetrics]`. This is how you find out what happened during a class that
+froze, after it has ended.
+
+Pull the lines from the Vercel runtime logs for the class period and grep for
+the tag. Four operations are recorded:
+
+| op | what it measures |
+| --- | --- |
+| `checkin` | the check-in action end to end; `code` carries the Postgres SQLSTATE on failure (`23505` seat/duplicate race, `40P01` deadlock, `55P03` lock unavailable, `53300` connections exhausted) |
+| `checkin_page` | one full render of the check-in page — what a single `router.refresh()` costs |
+| `realtime_down` | a student's device lost its realtime subscription and started refreshing every 5s; `code` is the transport status |
+| `realtime_up` | it recovered; `ms` is how long that device spent degraded |
+
+**What to look for.** A cluster of `realtime_down` at the moment the room
+seized, followed by `checkin_page` latency climbing, is the cascading-failure
+signature: the fallback poll re-renders the whole page (~11 queries) on every
+device every 5 seconds, which starves the database that realtime is already
+struggling with. Few or no `realtime_down` lines means the freeze is
+something else, and that rules out a whole branch of the search.
+
+Lines carry `courseId` (page renders) or `sessionId` (check-ins and realtime
+reports), and deliberately carry **no** user, enrollment, or seat identifier — latency and contention are answerable without
+them, and these land in a log with wider access than the database.
+
+To turn an export into percentiles, feed the lines to `aggregateLines()` from
+`src/lib/loadmetrics.ts`.
+
+The load-test harness is `scripts/loadtest-checkin.ts`. It refuses to run
+unless **both** the app URL and the Supabase project are local, because it
+provisions accounts and writes check-ins into today's open session — against
+the production project that would corrupt real attendance. It has not been run
+yet; it needs a local Supabase to point at.
+
 ## Known items still open (deliberately)
 
 - **Playwright end-to-end test** (roadmap TASK-059): needs a live seeded
