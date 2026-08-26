@@ -50,10 +50,11 @@ describe("rosterStage", () => {
     ).toBe("canvas_confirmed");
   });
 
-  test("signing in with a different address than Canvas has counts as self-joined", () => {
-    // The g.clemson twin: they reached the right roster row, but not through
-    // the address Canvas holds, so the professor should see it as unconfirmed
-    // against Canvas rather than as a clean match.
+  test("the g-twin of the Canvas address is the same university identity", () => {
+    // Clemson issues both spellings to one person: Canvas reports
+    // jdoe@clemson.edu, Google sign-in supplies jdoe@g.clemson.edu. Demanding
+    // an exact string match filed seven confirmed students under "not through
+    // Canvas" in a single section.
     expect(
       rosterStage({
         ...canvasRow,
@@ -62,6 +63,23 @@ describe("rosterStage", () => {
         rosterEmail: "jdoe@clemson.edu",
         accountEmail: "jdoe@g.clemson.edu",
         activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+      })
+    ).toBe("canvas_confirmed");
+  });
+
+  test("an unrelated personal address is not the Canvas identity", () => {
+    // The alias rule stays narrow: jdoe@gmail.com and jdoe@clemson.edu can be
+    // different people, and matching them hands one student another's place.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "jdoe@clemson.edu",
+        accountEmail: "jdoe@gmail.com",
+        activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
       })
     ).toBe("self_joined");
   });
@@ -192,5 +210,37 @@ describe("rosterStage", () => {
         canvasSeenAt: "2026-08-26T09:00:00Z",
       })
     ).toBe("canvas_confirmed");
+  });
+
+  test("synced from Canvas and signed in with the Canvas address is confirmed, whatever the row status", () => {
+    // Mike's rule: being on the Canvas roster and holding the Canvas address
+    // is what "confirmed" means. A row still sitting at 'invited' does not
+    // make the identity less confirmed -- it just means nobody approved it,
+    // which is surfaced separately.
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "invited",
+        rosterEmail: "jdoe@clemson.edu",
+        accountEmail: "jdoe@clemson.edu",
+        activation: "signed_in_not_joined",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+      })
+    ).toBe("canvas_confirmed");
+  });
+
+  test("but a personal address is still not confirmed, whatever the status", () => {
+    expect(
+      rosterStage({
+        ...canvasRow,
+        hasProfile: true,
+        status: "active",
+        rosterEmail: "jdoe@clemson.edu",
+        accountEmail: "jdoe@hotmail.com",
+        activation: "active",
+        canvasSeenAt: "2026-08-26T09:00:00Z",
+      })
+    ).toBe("self_joined");
   });
 });

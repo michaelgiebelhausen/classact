@@ -204,6 +204,11 @@ export function RosterSection({
             <span className="text-[10px] leading-tight text-muted-foreground">
               {p.email}
             </span>
+            {p.note && (
+              <span className="text-[10px] leading-tight text-muted-foreground/80">
+                {p.note}
+              </span>
+            )}
 
             {p.pendingApproval && stage === "self_joined" && (
               <Badge variant="destructive" className="text-[10px]">

@@ -85,7 +85,7 @@ export function StagedRoster({
                   <h3 className="text-sm font-semibold">{meta.title}</h3>
                   <Badge variant={meta.tone}>{people.length}</Badge>
                 </div>
-                <p className="max-w-prose text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   {meta.blurb}
                 </p>
 

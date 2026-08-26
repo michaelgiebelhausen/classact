@@ -126,18 +126,29 @@ export async function stageRoster(
  * The one detail that makes a row actionable, where the section heading isn't
  * already enough. Kept short — this renders under a face at 10px.
  */
+/**
+ * The detail a section heading can't carry.
+ *
+ * For anyone signing in as something other than the address Canvas holds, that
+ * is the login address itself. The card shows `roster_email` — what Canvas
+ * says — and a sync rewrites it to the official spelling, so a student can be
+ * displayed under an address they have never typed while being judged on one
+ * that was never shown. Printing it removes the guesswork.
+ */
 function noteFor(
   stage: RosterStage,
   enrollment: StageableEnrollment,
   accountEmail: string | null
 ): string | undefined {
+  const differs =
+    accountEmail &&
+    accountEmail.toLowerCase() !== enrollment.roster_email.toLowerCase();
+
   if (stage === "self_joined") {
-    // The address they actually use is the whole point of this section: it is
-    // what a professor needs to reconcile against Canvas.
-    if (accountEmail && accountEmail.toLowerCase() !== enrollment.roster_email.toLowerCase()) {
-      return accountEmail;
-    }
-    return "not on Canvas roster";
+    return differs ? `signs in as ${accountEmail}` : "not on Canvas roster";
+  }
+  if (stage === "duplicate" || stage === "canvas_confirmed") {
+    return differs ? `signs in as ${accountEmail}` : undefined;
   }
   return undefined;
 }

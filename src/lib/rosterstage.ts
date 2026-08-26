@@ -22,6 +22,7 @@
  * anything about where a student came from.
  */
 import type { ActivationState } from "@/lib/activation";
+import { emailAliasOf } from "@/lib/emailalias";
 
 export const ROSTER_STAGE_ORDER = [
   "needs_password",
@@ -55,8 +56,22 @@ export interface RosterStageFacts {
   isDuplicateShadow: boolean;
 }
 
-const sameAddress = (a: string | null, b: string | null): boolean =>
-  Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
+/**
+ * The same university identity, not merely the same string.
+ *
+ * Clemson issues both `x@clemson.edu` and `x@g.clemson.edu` to one person:
+ * Canvas reports the first, Google sign-in supplies the second. Exact matching
+ * filed seven fully-confirmed students under "not through Canvas" in one
+ * section. `emailAliasOf` is deliberately narrow — identical local part, one
+ * domain exactly `g.` + the other, .edu only — so a personal address is still
+ * a different person.
+ */
+const sameAddress = (a: string | null, b: string | null): boolean => {
+  if (!a || !b) return false;
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  return x === y || emailAliasOf(x) === y || emailAliasOf(y) === x;
+};
 
 export function rosterStage(facts: RosterStageFacts): RosterStage {
   // Checked before everything else. Someone Canvas has stopped listing may
@@ -80,26 +95,20 @@ export function rosterStage(facts: RosterStageFacts): RosterStage {
     return "canvas_pending";
   }
 
-  // Claimed, but not through the address Canvas holds — the g.clemson twin,
-  // or anyone who signed up with a personal address and reached the row by
-  // course code. Worth showing separately: Canvas has not been confirmed.
-  if (facts.accountEmail && !sameAddress(facts.accountEmail, facts.rosterEmail)) {
-    return "self_joined";
+  // Confirmed means two recorded things: Canvas has listed this student, and
+  // the account holding the row is their university identity. Row status is
+  // not part of it — a row still sitting at 'invited' means nobody approved
+  // it, which is surfaced on its own rather than by calling the student
+  // unconfirmed.
+  if (facts.canvasSeenAt && sameAddress(facts.accountEmail, facts.rosterEmail)) {
+    return "canvas_confirmed";
   }
 
-  // Claimed and still pending: no Canvas row existed, so /auth/join created
-  // one for them. Waiting on the professor, not lost.
-  if (facts.status !== "active") return "self_joined";
-
-  // Being active is not evidence of having come from Canvas. A course-code
-  // joiner whose login happens to equal their roster address looks identical
-  // to a confirmed import from every angle except this one — which is why
-  // `wgt567654@gmail.com`, a Gmail address that was never on a Clemson Canvas
-  // roster, was filed under "Confirmed from Canvas" on the live page.
-  // Provenance is recorded now, so stop inferring it.
-  if (!facts.canvasSeenAt) return "self_joined";
-
-  return "canvas_confirmed";
+  // Everything else: signed in with an address that isn't the Canvas identity,
+  // or a row Canvas has never listed. `wgt567654@gmail.com` was filed as a
+  // confirmed import purely because its row happened to be active, which is
+  // the inference this replaces.
+  return "self_joined";
 }
 
 export const ROSTER_STAGE_META: Record<
@@ -137,8 +146,9 @@ export const ROSTER_STAGE_META: Record<
     tone: "secondary",
   },
   canvas_confirmed: {
-    title: "Confirmed from Canvas",
-    blurb: "Imported from Canvas and signed in with their Canvas address. Nothing to do.",
+    title: "Imported from Canvas, confirmed with Canvas email",
+    blurb:
+      "On the Canvas roster and signed in with their university address. Nothing to do.",
     tone: "default",
   },
   canvas_pending: {
@@ -147,7 +157,7 @@ export const ROSTER_STAGE_META: Record<
     tone: "outline",
   },
   no_longer_on_canvas: {
-    title: "No longer on Canvas",
+    title: "No longer on the Canvas roster",
     blurb:
       "Canvas listed these students once and the last sync didn't find them — usually a drop. Students who joined with the course code and were never in Canvas are not shown here. Someone in a section you don't sync can still appear, so check before dropping.",
     tone: "outline",
