@@ -11,6 +11,15 @@ import {
   signUpSchema,
 } from "@/lib/validators";
 import { normalizeJoinCode } from "@/lib/joincode";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { rateLimit } from "@/lib/ratelimit";
+import { sendSelfRecoveryEmail } from "@/lib/email";
+import {
+  buildRecoveryUrl,
+  recoveryOutcome,
+  RECOVERY_LIMIT,
+  RECOVERY_WINDOW_MS,
+} from "@/lib/recovery";
 
 const NOT_CONFIGURED =
   "ClassAct isn't connected to its database yet. Add the Supabase keys in .env.local (see HANDOFF.md).";
@@ -155,7 +164,21 @@ export async function signUpWithPassword(input: {
   return { ok: true, data: { confirmationNeeded: !data.session } };
 }
 
-/** Send the set-a-new-password email. Always succeeds (no enumeration). */
+/**
+ * Send a set-a-new-password link. Always answers the same (no enumeration).
+ *
+ * Deliberately does NOT use `supabase.auth.resetPasswordForEmail`, which is
+ * what this used to do and why it was no help to the students who needed it
+ * most. That path sends through Supabase's built-in mailer — throttled well
+ * below a 40-student class — using the stock recovery template, whose
+ * `{{ .ConfirmationURL }}` is a PKCE link bound to the browser that requested
+ * it. Locked-out students are precisely the ones who cannot satisfy that
+ * condition, so the escape hatch failed in the same way as the trap.
+ *
+ * `generateLink` gives us the `hashed_token` directly. We build our own
+ * `/auth/callback?token_hash=…` URL, which `verifyOtp` accepts from any
+ * device, and send it via Resend.
+ */
 export async function requestPasswordReset(input: {
   email: string;
 }): Promise<ActionResult> {
@@ -164,12 +187,48 @@ export async function requestPasswordReset(input: {
     return { ok: false, error: parsed.error.issues[0].message };
   }
   if (!isConfigured.supabase) return { ok: false, error: NOT_CONFIGURED };
+  if (!isConfigured.supabaseAdmin) {
+    return {
+      ok: false,
+      error: "This server can't issue sign-in links. Tell your professor.",
+    };
+  }
 
-  const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${env.siteUrl}/auth/callback?next=/update-password`,
+  const email = parsed.data.email.trim().toLowerCase();
+
+  // Counted before we know whether the address is real, so the rate limit
+  // cannot itself become an oracle: probing an unknown address costs the same
+  // as probing a known one.
+  const { remaining } = rateLimit(`recovery:${email}`, {
+    limit: RECOVERY_LIMIT,
+    windowMs: RECOVERY_WINDOW_MS,
   });
-  return { ok: true };
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.auth.admin.generateLink({
+    type: "recovery",
+    email,
+  });
+  const hashed = data?.properties?.hashed_token;
+
+  const decision = recoveryOutcome({
+    accountExists: !error && Boolean(hashed),
+    emailConfigured: isConfigured.email,
+    recentRequests: RECOVERY_LIMIT - remaining,
+  });
+
+  if (decision.send && hashed) {
+    // Failure to send is not reported back: it would distinguish a real
+    // address from a fake one. It is logged so a silent outage is still
+    // visible to us.
+    const sent = await sendSelfRecoveryEmail(
+      email,
+      buildRecoveryUrl(env.siteUrl, hashed, "/update-password")
+    );
+    if (!sent) console.error("[recovery] send failed for a requested address");
+  }
+
+  return decision.result;
 }
 
 /** Set a new password — requires the session from a reset (or normal) link. */

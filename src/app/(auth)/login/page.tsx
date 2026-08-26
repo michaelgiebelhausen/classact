@@ -21,6 +21,7 @@ import {
   signUpWithPassword,
 } from "@/server/actions/auth";
 import { CALLBACK_MESSAGES, reasonFromQuery } from "@/lib/authreason";
+import { RECOVERY_SENT_MESSAGE } from "@/lib/recovery";
 
 /**
  * Password-first sign-in (magic links stay as the fallback for accounts
@@ -35,9 +36,14 @@ const HEADINGS: Record<Mode, { title: string; blurb: string }> = {
     title: "Create your account",
     blurb: "One confirmation email, then it's just email + password.",
   },
+  // Named for the situation rather than the mechanism. Most people who land
+  // here never had a working password to forget — their sign-up link died and
+  // they've been stuck ever since, so "Reset your password" doesn't read as
+  // theirs.
   forgot: {
-    title: "Reset your password",
-    blurb: "We'll email you a link to set a new one.",
+    title: "Can't get in?",
+    blurb:
+      "Enter your email and we'll send a link that works on any device. Use this whether you forgot your password or never managed to set one.",
   },
   magic: {
     title: "Sign in by email",
@@ -105,9 +111,7 @@ function LoginForm() {
       const result = await requestPasswordReset({ email });
       setBusy(false);
       if (result.ok) {
-        setSent(
-          "If that email has an account, a password-reset link is on the way."
-        );
+        setSent(RECOVERY_SENT_MESSAGE);
       } else {
         toast.error(result.error);
       }
@@ -139,6 +143,17 @@ function LoginForm() {
             <p className="mt-1 text-sm text-muted-foreground">
               {CALLBACK_MESSAGES[callbackReason].help}
             </p>
+            {mode !== "forgot" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={() => switchMode("forgot")}
+              >
+                Send me a link that works
+              </Button>
+            )}
           </div>
         )}
         {sent ? (
@@ -227,7 +242,7 @@ function LoginForm() {
                   : mode === "signup"
                     ? "Create account"
                     : mode === "forgot"
-                      ? "Email me a reset link"
+                      ? "Send me a link that works"
                       : "Email me a sign-in link"}
             </Button>
 

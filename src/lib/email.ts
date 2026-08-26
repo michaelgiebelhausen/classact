@@ -206,3 +206,37 @@ export async function sendFeedbackNotification(input: {
     // Courtesy email only — the feedback itself is safe in the database.
   }
 }
+
+/**
+ * A student asked for a way back in themselves.
+ *
+ * Separate from `sendRecoveryEmails` because the situation is different: no
+ * professor initiated this, there is no course context, and the person is
+ * looking at the login page right now waiting for it. Deliberately says
+ * nothing about why they were locked out — they asked a simple question and
+ * want a link, not an incident report.
+ */
+export async function sendSelfRecoveryEmail(
+  to: string,
+  link: string
+): Promise<boolean> {
+  const [result] = await sendInviteEmails([
+    {
+      enrollmentId: "self-recovery",
+      to,
+      subject: "Your ClassAct sign-in link",
+      text: [
+        `You asked for a way into ClassAct.`,
+        ``,
+        `Open this link and pick a password. It works on any device or browser —`,
+        `you don't have to use the one you signed up on:`,
+        ``,
+        link,
+        ``,
+        `If you didn't ask for this, you can ignore it. Nothing has changed on`,
+        `your account, and the link expires on its own.`,
+      ].join("\n"),
+    },
+  ]);
+  return result?.sent ?? false;
+}

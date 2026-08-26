@@ -83,9 +83,12 @@ export const CALLBACK_MESSAGES: Record<
     headline: "You opened that link on a different device or browser.",
     help: "Your email is confirmed and your account is ready — just sign in below with the password you chose. (Opening the link in the same browser you signed up in also works.)",
   },
+  // "Open it in this same browser" was the old advice, and it was the trap
+  // restated: the students who see this are the ones who cannot satisfy that
+  // condition. Point them at the device-independent link instead.
   link_expired: {
     headline: "That link has expired or was already used.",
-    help: "Request a new one below, then open it in this same browser.",
+    help: "Get a fresh one below — the new link works on any device, so it doesn't matter which browser you open it in.",
   },
   link_invalid: {
     headline: "We couldn't finish signing you in with that link.",
@@ -93,11 +96,11 @@ export const CALLBACK_MESSAGES: Record<
   },
   no_token: {
     headline: "That link is missing its sign-in token.",
-    help: "It may have been broken across two lines by your email app. Try copying the whole link, or sign in with your password below.",
+    help: "Your email app may have broken it across two lines. Sign in with your password below, or get a fresh link that works on any device.",
   },
   provider_error: {
     headline: "Your email provider reported a problem with that link.",
-    help: "Sign in with your email and password below, or request a fresh link.",
+    help: "Some university mail systems open links to scan them, which spends a one-time link before you ever click it. Get a fresh one below and open it right away.",
   },
 };
 
