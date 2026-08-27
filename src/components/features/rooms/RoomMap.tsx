@@ -638,8 +638,17 @@ export function RoomMap({
   if (!fit) return room;
 
   // The shell owns the available space; the room scales down inside it.
+  //
+  // Its height is set explicitly to the SCALED height because `transform:
+  // scale()` doesn't reflow — a room shrunk to 60% would otherwise keep
+  // reserving 100% of its original height and leave a gaping band of empty
+  // space under the map, which on a projector reads as a broken page.
   return (
-    <div ref={shell} className="h-full w-full overflow-hidden">
+    <div
+      ref={shell}
+      className="w-full overflow-hidden"
+      style={scale !== 1 ? { height: geo.height * scale } : undefined}
+    >
       {room}
     </div>
   );

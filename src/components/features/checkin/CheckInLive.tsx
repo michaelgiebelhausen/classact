@@ -208,7 +208,20 @@ export function CheckInLive({
         const ok = status === "SUBSCRIBED";
         setLive(ok);
         if (!ok && !pollTimer) {
-          pollTimer = setInterval(() => router.refresh(), 5000);
+          // The fallback is the prime suspect for the room freezing. Every
+          // client that loses realtime starts refreshing the WHOLE page —
+          // about eleven queries — and forty phones dropping together at
+          // 9:29 then hammer in lockstep, against the same database realtime
+          // is already struggling with.
+          //
+          // Jittered and slowed until the instrumentation says otherwise:
+          // 6–12s instead of a synchronised 5s roughly halves the sustained
+          // rate and, more importantly, spreads it out instead of arriving
+          // as one spike per interval. The cost is a map up to twelve
+          // seconds stale while realtime is down, which is the state where
+          // it is already degraded.
+          const period = 6000 + Math.floor(Math.random() * 6000);
+          pollTimer = setInterval(() => router.refresh(), period);
           degradedSince = Date.now();
           report("down", { reason: status });
         }
