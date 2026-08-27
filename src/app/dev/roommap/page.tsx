@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
 import {
   buildLayout,
@@ -98,7 +98,15 @@ const SAMPLES: Array<{ title: string; params: PresetParams }> = [
   },
 ];
 
-function PresetPreview({ title, params }: { title: string; params: PresetParams }) {
+function PresetPreview({
+  title,
+  params,
+  professor,
+}: {
+  title: string;
+  params: PresetParams;
+  professor: boolean;
+}) {
   const seats = useMemo(() => {
     const layout = buildLayout(params);
     const shapes = new Map<string, TableShape>();
@@ -125,25 +133,58 @@ function PresetPreview({ title, params }: { title: string; params: PresetParams 
       <h2 className="text-sm font-semibold">
         {title} <span className="font-normal text-muted-foreground">· {seats.length} seats</span>
       </h2>
-      <div className="overflow-x-auto rounded-lg border bg-muted/20 p-4">
-        <RoomMap seats={seats} ariaLabel={title} />
+      <div
+        className={
+          professor
+            ? "rounded-lg border bg-muted/20 p-4"
+            : "overflow-x-auto rounded-lg border bg-muted/20 p-4"
+        }
+        style={professor ? { height: 420 } : undefined}
+      >
+        <RoomMap
+          seats={seats}
+          ariaLabel={title}
+          captions={professor}
+          flipped={professor}
+          perspective={professor}
+          fit={professor}
+          podium
+          frontLabel={professor ? "You are here — front of room" : "Front of room"}
+        />
       </div>
     </section>
   );
 }
 
 export default function RoomMapGallery() {
+  const [professor, setProfessor] = useState(false);
   return (
     <main className="mx-auto grid max-w-5xl gap-8 p-6">
-      <div>
+      <div className="grid gap-2">
         <h1 className="text-xl font-semibold">Room layout gallery</h1>
         <p className="text-sm text-muted-foreground">
-          Dev-only visual test bench — every preset rendered exactly as
-          students see it at check-in.
+          Dev-only visual test bench — every preset rendered through the real
+          geometry, in either of the two ways a room gets looked at.
         </p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setProfessor(false)}
+            className={`rounded-md border px-3 py-1.5 text-sm ${!professor ? "bg-primary text-primary-foreground" : ""}`}
+          >
+            Student view (front at top)
+          </button>
+          <button
+            type="button"
+            onClick={() => setProfessor(true)}
+            className={`rounded-md border px-3 py-1.5 text-sm ${professor ? "bg-primary text-primary-foreground" : ""}`}
+          >
+            Professor view (front at bottom, with depth)
+          </button>
+        </div>
       </div>
       {SAMPLES.map((sample) => (
-        <PresetPreview key={sample.title} {...sample} />
+        <PresetPreview key={sample.title} {...sample} professor={professor} />
       ))}
     </main>
   );

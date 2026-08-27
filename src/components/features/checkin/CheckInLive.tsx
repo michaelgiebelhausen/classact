@@ -17,7 +17,7 @@ import {
 import {
   checkIn,
   moveSeat,
-  reassignSeat,
+  releaseSeat,
   verifyNeighbor,
 } from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
@@ -104,8 +104,15 @@ export function CheckInLive({
     () => new Set(verifiedByMe)
   );
   const [live, setLive] = useState(true);
-  // Professor reassignment: the student picked up and awaiting a destination.
-  const [holding, setHolding] = useState<string | null>(null);
+  /**
+   * Students can turn the map around.
+   *
+   * At least one wrong-seat check-in happened because the map was read the
+   * wrong way up. Which way round is "obvious" depends on where you're sitting
+   * and which way you're facing, so rather than pick one and insist, let them
+   * match the map to the room in front of them.
+   */
+  const [studentFlipped, setStudentFlipped] = useState(false);
   const unknownEnrollment = useRef(false);
 
   const seatByLabel = useMemo(() => {
@@ -229,74 +236,40 @@ export function CheckInLive({
    * its rightful occupant had to go elsewhere.
    */
   /**
-   * Professor: pick a student up, then put them down.
+   * Professor: tap an occupied seat to empty it.
    *
-   * Two taps rather than a drag, because this happens on a laptop at the front
-   * of a room while thirty people watch, and a mis-drag is worse than a
-   * mis-tap. Tapping the held student again puts them back down.
+   * Deliberately not a reassignment. Moving a student somewhere else means
+   * deciding what happens to whoever is already there, which needs a swap and
+   * an atomicity story. Freeing the seat needs neither: the student checks
+   * themselves back in wherever they actually are.
    */
   async function handleProfessorTap(seat: { id: string; label: string }) {
     if (!sessionId || pendingSeat) return;
     const occupant = occupants.get(seat.id);
+    if (!occupant) return;
 
-    if (!holding) {
-      if (!occupant) {
-        toast.info("Tap a student first, then tap where they should sit.");
-        return;
-      }
-      setHolding(occupant.enrollmentId);
-      return;
-    }
-
-    if (occupant?.enrollmentId === holding) {
-      setHolding(null); // put them back down
-      return;
-    }
-
-    const held = holding;
-    const from =
-      Array.from(occupants.values()).find((o) => o.enrollmentId === held) ??
-      null;
-    // Read before the write, so the wording describes what was true when the
-    // professor tapped rather than what is true after.
-    const displaced = occupant ?? null;
+    const previous = occupants;
+    const who = directory[occupant.enrollmentId]?.name ?? "That student";
 
     setPendingSeat(seat.id);
-    const result = await reassignSeat(sessionId, held, seat.id);
-    setPendingSeat(null);
-
-    if (!result.ok) {
-      toast.error(result.error, { duration: 8000 });
-      return;
-    }
-
-    // Apply exactly what the database did: the held student takes the seat,
-    // and whoever was there swaps into the seat just vacated. Anything less
-    // precise leaves a ghost on the projected map.
     setOccupants((prev) => {
       const next = new Map(prev);
-      next.set(seat.id, {
-        enrollmentId: held,
-        seatId: seat.id,
-        verified: from?.verified ?? false,
-      });
-      if (from) {
-        if (displaced) {
-          next.set(from.seatId, { ...displaced, seatId: from.seatId });
-        } else {
-          next.delete(from.seatId);
-        }
-      }
+      next.delete(seat.id);
       return next;
     });
 
-    setHolding(null);
-    const name = directory[held]?.name ?? "That student";
-    toast.success(
-      displaced
-        ? `Swapped ${name} into seat ${seat.label}.`
-        : `Moved ${name} to seat ${seat.label}.`
-    );
+    const result = await releaseSeat(sessionId, seat.id);
+    setPendingSeat(null);
+
+    if (result.ok) {
+      toast.success(
+        `Seat ${seat.label} is free. ${who} can check in again wherever they are.`,
+        { duration: 6000 }
+      );
+    } else {
+      setOccupants(previous);
+      toast.error(result.error, { duration: 8000 });
+    }
   }
 
   async function handleSeatTap(seat: { id: string; label: string }) {
@@ -361,7 +334,11 @@ export function CheckInLive({
     }
   }
 
-  if (!sessionId) {
+  // Students get a waiting room; the professor gets the room itself. They are
+  // usually looking at this page — often projecting it — before anyone can
+  // check in, and an empty seat map filling up is the point. A paragraph of
+  // text where the map goes is the thing this replaces.
+  if (!sessionId && !canReassign) {
     return (
       <Card>
         <CardContent className="grid gap-2 py-12 text-center text-muted-foreground">
@@ -453,40 +430,56 @@ export function CheckInLive({
 
       {canReassign && (
         <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-          {holding ? (
+          <span className="font-medium text-foreground">
+            You&apos;re looking at the room from the front.
+          </span>{" "}
+          {sessionId ? (
             <>
-              <span className="font-medium text-foreground">
-                Holding {directory[holding]?.name ?? "a student"}.
-              </span>{" "}
-              Tap where they should sit. If someone&apos;s already there, the
-              two swap seats — nobody loses their attendance. Tap them again to
-              cancel.
+              Someone in a seat they&apos;re not sitting in? Tap them to free it
+              — they can check in again wherever they actually are.
             </>
           ) : (
             <>
-              <span className="font-medium text-foreground">
-                Someone in the wrong seat?
-              </span>{" "}
-              Tap the student, then tap the seat they belong in.
+              Check-in hasn&apos;t opened yet, so the room is empty.
+              {scheduleHint ? ` ${scheduleHint}` : ""}
             </>
           )}
         </p>
       )}
 
-      {mySeat && (
-        <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">
-            In the wrong seat?
-          </span>{" "}
-          Tap any open seat to move there. Your attendance for today stays
-          exactly as it is.
-        </p>
+      {!canReassign && seats.length > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
+          <span>
+            The <span className="font-medium text-foreground">front of the room</span>{" "}
+            is at the {studentFlipped ? "bottom" : "top"} of this map.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => setStudentFlipped((v) => !v)}
+          >
+            Turn the map around
+          </Button>
+        </div>
       )}
 
       <div className="overflow-x-auto rounded-lg border p-4">
         <RoomMap
           seats={seats}
           onSeatTap={handleSeatTap}
+          captions={canReassign}
+          flipped={canReassign || studentFlipped}
+          perspective={canReassign}
+          fit={canReassign}
+          podium
+          frontLabel={
+            canReassign
+              ? "You are here — front of room"
+              : studentFlipped
+                ? "Front of room (behind you)"
+                : "Front of room"
+          }
           stateFor={(seat) => {
             const occupant = occupants.get(seat.id);
             const isMine = occupant?.enrollmentId === myEnrollmentId;
@@ -502,14 +495,17 @@ export function CheckInLive({
               name: entry?.name ?? (occupant ? "A classmate" : null),
               photoUrl: entry?.photoUrl ?? null,
               pending: pendingSeat === seat.id,
-              // Professors can tap anything — occupied seats to pick a student
-              // up, any seat to set them down. Students can tap open seats,
-              // which is a check-in first and a move afterwards.
+              // The professor taps an occupied seat to free it, so an empty
+              // one does nothing. Students tap open seats — a check-in first,
+              // a move afterwards.
               tappable: canReassign
-                ? pendingSeat === null
+                ? Boolean(occupant) && pendingSeat === null
                 : !occupant && pendingSeat === null && Boolean(myEnrollmentId),
+              caption: canReassign
+                ? entry?.name?.split(/\s+/)[0] ?? undefined
+                : undefined,
               highlight: canReassign
-                ? occupant?.enrollmentId === holding
+                ? false
                 : !occupant &&
                   !myCheckIn &&
                   Boolean(myEnrollmentId) &&

@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { TableFootprint } from "@/lib/roomlayout";
+import { depthScale, fitScale, flipY } from "@/lib/mapview";
 
 /**
  * The one seat-map renderer: professor preview, designer, and student
@@ -66,6 +67,18 @@ interface Props {
   ariaLabel?: string;
   /** Widen the seat pitch to make room for name captions under seats. */
   captions?: boolean;
+  /**
+   * Draw the room as the professor sees it: front of room at the BOTTOM,
+   * nearest row largest. The student view keeps front-at-top, which is what
+   * they read down into from a phone.
+   */
+  flipped?: boolean;
+  /** Scale seats by depth. Only meaningful with `flipped`. */
+  perspective?: boolean;
+  /** Shrink the whole room to fit its container — projection must not scroll. */
+  fit?: boolean;
+  /** Mark where the professor stands, at the front, centre. */
+  podium?: boolean;
 }
 
 const UNIT = 44; // px per seat unit — tap-target sized
@@ -98,6 +111,10 @@ export function RoomMap({
   frontLabel = "Front of room",
   ariaLabel = "Classroom seat map",
   captions = false,
+  flipped = false,
+  perspective = false,
+  fit = false,
+  podium = false,
 }: Props) {
   // Live pixel offset of the table being dragged, before it's committed.
   const [drag, setDrag] = useState<{
@@ -107,6 +124,20 @@ export function RoomMap({
   } | null>(null);
   const dragOffset = (tableId: string | null | undefined) =>
     drag && tableId === drag.tableId ? drag : null;
+
+  // `fit` needs the space actually available, which only the browser knows.
+  const shell = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    if (!fit || !shell.current) return;
+    const el = shell.current;
+    const ro = new ResizeObserver(() => {
+      setBox({ w: el.clientWidth, h: el.clientHeight });
+    });
+    ro.observe(el);
+    setBox({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, [fit]);
 
   const geo = useMemo(() => {
     if (seats.length === 0) return null;
@@ -120,7 +151,10 @@ export function RoomMap({
     const width = (maxX - minX + PAD_L + PAD_R) * hu;
     const height = (maxY - minY + PAD_T + PAD_B) * vu;
     const px = (x: number) => (x - minX + PAD_L) * hu;
-    const py = (y: number) => (y - minY + PAD_T) * vu;
+    // Flipping here rather than at each call site means tables, row letters
+    // and the balcony divider all turn over with the seats.
+    const py = (y: number) =>
+      (flipY(y, minY, maxY, flipped) - minY + PAD_T) * vu;
 
     // Tables: a surface under each seat cluster, drawn in its real shape.
     const tables: Array<{
@@ -191,18 +225,38 @@ export function RoomMap({
       balconyY = (mainMaxY + balconyMinY) / 2;
     }
 
-    return { width, height, px, py, tables, rowMarks, balconyY, hu, vu };
-  }, [seats, captions]);
+    return {
+      width,
+      height,
+      px,
+      py,
+      tables,
+      rowMarks,
+      balconyY,
+      hu,
+      vu,
+      minY,
+      maxY,
+    };
+  }, [seats, captions, flipped]);
 
   if (!geo) return null;
   const resolveState = stateFor ?? (() => EMPTY_STATE);
 
-  return (
+  const scale = fit ? fitScale(geo.width, geo.height, box.w, box.h) : 1;
+
+  const room = (
     <div
       role="group"
       aria-label={ariaLabel}
       className="relative mx-auto w-max"
-      style={{ width: geo.width, height: geo.height }}
+      style={{
+        width: geo.width,
+        height: geo.height,
+        ...(scale !== 1
+          ? { transform: `scale(${scale})`, transformOrigin: "top center" }
+          : {}),
+      }}
     >
       <svg
         className="absolute inset-0"
@@ -210,29 +264,62 @@ export function RoomMap({
         height={geo.height}
         aria-hidden="true"
       >
-        {/* Front of room — the anchor students orient by. */}
-        <rect
-          x={UNIT * 0.3}
-          y={UNIT * 0.12}
-          width={geo.width - UNIT * 0.6}
-          height={UNIT * 0.5}
-          rx={6}
-          style={{ fill: "var(--muted-foreground)", opacity: 0.18 }}
-        />
-        <text
-          x={geo.width / 2}
-          y={UNIT * 0.37}
-          textAnchor="middle"
-          dominantBaseline="central"
-          style={{
-            fill: "var(--muted-foreground)",
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: "0.18em",
-          }}
-        >
-          {frontLabel.toUpperCase()}
-        </text>
+        {/* Front of room — the anchor everyone orients by, and the thing a
+            student misreads when they check into the wrong seat. Drawn in the
+            accent colour rather than a faint grey, and moved to the bottom
+            when the professor is looking out from it. */}
+        {(() => {
+          const barH = UNIT * 0.5;
+          const barY = flipped ? geo.height - barH - UNIT * 0.12 : UNIT * 0.12;
+          return (
+            <>
+              <rect
+                x={UNIT * 0.3}
+                y={barY}
+                width={geo.width - UNIT * 0.6}
+                height={barH}
+                rx={6}
+                style={{ fill: "var(--primary)", opacity: 0.16 }}
+              />
+              <rect
+                x={UNIT * 0.3}
+                y={flipped ? barY : barY + barH - 2.5}
+                width={geo.width - UNIT * 0.6}
+                height={2.5}
+                rx={1.5}
+                style={{ fill: "var(--primary)", opacity: 0.85 }}
+              />
+              <text
+                x={geo.width / 2}
+                y={barY + barH / 2}
+                textAnchor="middle"
+                dominantBaseline="central"
+                style={{
+                  fill: "var(--primary)",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.18em",
+                }}
+              >
+                {frontLabel.toUpperCase()}
+              </text>
+              {/* Where the professor stands. A person at the front is a
+                  stronger orientation cue than a label, because it says which
+                  way the room is facing rather than naming an edge. */}
+              {podium && (
+                <g
+                  transform={`translate(${geo.width / 2}, ${
+                    flipped ? barY - UNIT * 0.42 : barY + barH + UNIT * 0.42
+                  })`}
+                  style={{ fill: "var(--primary)", opacity: 0.55 }}
+                >
+                  <circle cx={0} cy={-5} r={4.5} />
+                  <path d="M -7 8 a 7 7 0 0 1 14 0 z" />
+                </g>
+              )}
+            </>
+          );
+        })()}
 
         {geo.tables.map((t) => {
           const off = dragOffset(t.id);
@@ -339,6 +426,11 @@ export function RoomMap({
       {seats.map((seat) => {
         const state = resolveState(seat);
         const tappable = Boolean(state.tappable && onSeatTap);
+        // Nearer the professor = larger. Scales from the seat's centre so the
+        // grid stays aligned however much each row grows or shrinks.
+        const depth = perspective
+          ? depthScale(seat.y, geo.minY, geo.maxY)
+          : 1;
         const caption = state.caption ? (
           <span
             key={`${seat.id}-caption`}
@@ -349,8 +441,14 @@ export function RoomMap({
             ].join(" ")}
             style={{
               left: geo.px(seat.x) - geo.hu / 2 + 2,
-              top: geo.py(seat.y) + SEAT / 2 + 2,
+              top: geo.py(seat.y) + (SEAT / 2) * depth + 2,
               width: geo.hu - 4,
+              ...(depth !== 1
+                ? {
+                    transform: `scale(${depth})`,
+                    transformOrigin: "top center",
+                  }
+                : {}),
             }}
           >
             {state.caption}
@@ -399,12 +497,19 @@ export function RoomMap({
               top: geo.py(seat.y) - SEAT / 2,
               width: SEAT,
               height: SEAT,
-              // Seats ride along with their table while it's being dragged.
-              transform: dragOffset(seat.tableId)
-                ? `translate(${dragOffset(seat.tableId)!.dx}px, ${
-                    dragOffset(seat.tableId)!.dy
-                  }px)`
-                : undefined,
+              // Seats ride along with their table while it's being dragged,
+              // and grow or shrink with their distance from the front.
+              transform:
+                [
+                  dragOffset(seat.tableId)
+                    ? `translate(${dragOffset(seat.tableId)!.dx}px, ${
+                        dragOffset(seat.tableId)!.dy
+                      }px)`
+                    : "",
+                  depth !== 1 ? `scale(${depth})` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined,
             }}
           >
             {(state.kind === "taken" || state.kind === "verified" || state.kind === "mine") &&
@@ -527,6 +632,15 @@ export function RoomMap({
             )}
           </div>
         ))}
+    </div>
+  );
+
+  if (!fit) return room;
+
+  // The shell owns the available space; the room scales down inside it.
+  return (
+    <div ref={shell} className="h-full w-full overflow-hidden">
+      {room}
     </div>
   );
 }

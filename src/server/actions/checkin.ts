@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/server/actions/auth";
 import { flagAbsencesElsewhere } from "@/server/absences";
 import { timed } from "@/server/loadmetrics";
+import { canReleaseSeat } from "@/lib/seatrelease";
 import {
   seatMoveOutcome,
   SEAT_MOVE_MESSAGES,
@@ -444,4 +445,75 @@ export async function reassignSeat(
   }
 
   return { ok: true };
+}
+
+/**
+ * Professor: empty a seat during a live class (CA-4c).
+ *
+ * The simple half of seat correction. Someone checked into a seat they aren't
+ * sitting in — or checked in and left — and the professor frees it; the
+ * student checks back in wherever they actually are. No swap, no second
+ * student to place, nothing to make atomic.
+ *
+ * Deletes the check-in, so the student has no attendance for this session
+ * until they check in again. That is the point when they aren't here, and it
+ * resolves itself in seconds when they are.
+ */
+export async function releaseSeat(
+  sessionId: string,
+  seatId: string
+): Promise<ActionResult<{ name: string | null }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: session } = await supabase
+    .from("class_sessions")
+    .select("id, course_id, closed_at")
+    .eq("id", sessionId)
+    .single();
+  if (!session) return { ok: false, error: "Session not found." };
+
+  // Only the course owner. RLS lets a student delete nothing here, but the
+  // check is explicit because this removes someone else's attendance.
+  const { data: course } = await supabase
+    .from("courses")
+    .select("id, professor_id")
+    .eq("id", session.course_id)
+    .single();
+  if (!course || course.professor_id !== user.id) {
+    return { ok: false, error: "Only the course's professor can free a seat." };
+  }
+
+  const { data: occupant } = await supabase
+    .from("check_ins")
+    .select("id, enrollment_id")
+    .eq("session_id", sessionId)
+    .eq("seat_id", seatId)
+    .maybeSingle();
+
+  const verdict = canReleaseSeat({
+    sessionOpen: !session.closed_at,
+    occupied: Boolean(occupant),
+  });
+  if (!verdict.allowed) return { ok: false, error: verdict.reason };
+
+  // Scoped to the row we actually looked at, so a check-in that arrived in
+  // between isn't deleted instead of the one the professor tapped.
+  const { error } = await supabase
+    .from("check_ins")
+    .delete()
+    .eq("id", occupant!.id);
+  if (error) return { ok: false, error: "Couldn't free that seat. Try again." };
+
+  const { data: enrollment } = await supabase
+    .from("enrollments")
+    .select("roster_name")
+    .eq("id", occupant!.enrollment_id)
+    .maybeSingle();
+
+  revalidatePath(`/course/${session.course_id}/checkin`);
+  return { ok: true, data: { name: enrollment?.roster_name ?? null } };
 }

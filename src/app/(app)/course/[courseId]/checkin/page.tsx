@@ -20,6 +20,11 @@ import {
 import { SessionControls } from "@/components/features/checkin/SessionControls";
 import { ReportAbsence } from "@/components/features/checkin/ReportAbsence";
 import { ScheduledAbsences } from "@/components/features/checkin/ScheduledAbsences";
+import { CollapsedAbsences } from "@/components/features/checkin/CollapsedAbsences";
+import {
+  LastSessionMap,
+  type LastSessionOccupant,
+} from "@/components/features/checkin/LastSessionMap";
 import {
   listCourseAbsences,
   listMyAbsences,
@@ -244,6 +249,39 @@ async function renderCheckIn(courseId: string) {
     }
   }
 
+  // The most recent class that actually happened, for the reference map under
+  // the live one. "Most recent" means most recent WITH check-ins: a cancelled
+  // or unopened day would otherwise render as an empty room and read as a
+  // class where nobody came.
+  let lastSession:
+    | { date: string; rows: Array<{ seatId: string; enrollmentId: string }> }
+    | null = null;
+  if (isProfessor) {
+    const { data: priorSessions } = await supabase
+      .from("class_sessions")
+      .select("id, session_date")
+      .eq("course_id", courseId)
+      .lt("session_date", today)
+      .order("session_date", { ascending: false })
+      .limit(8);
+
+    for (const prior of priorSessions ?? []) {
+      const { data: rows } = await supabase
+        .from("check_ins")
+        .select("enrollment_id, seat_id")
+        .eq("session_id", prior.id);
+      if ((rows ?? []).length === 0) continue;
+      lastSession = {
+        date: prior.session_date,
+        rows: (rows ?? []).map((r) => ({
+          seatId: r.seat_id,
+          enrollmentId: r.enrollment_id,
+        })),
+      };
+      break;
+    }
+  }
+
   // Directory (names + one photo, no emails) via admin — the RLS course
   // check above already proved membership.
   //
@@ -254,6 +292,15 @@ async function renderCheckIn(courseId: string) {
   const directory: Record<string, DirectoryEntry> = isConfigured.supabaseAdmin
     ? await getCourseDirectory(createAdminClient(), courseId)
     : {};
+
+  // Names and faces come from the same per-course directory the live map uses,
+  // so the two maps agree and this costs no extra queries.
+  const lastSessionOccupants: LastSessionOccupant[] = (lastSession?.rows ?? [])
+    .map((r) => ({
+      seatId: r.seatId,
+      name: directory[r.enrollmentId]?.name ?? null,
+      photoUrl: directory[r.enrollmentId]?.photoUrl ?? null,
+    }));
 
   // Absences. The professor gets the whole judged list; a student gets their
   // own reports plus the next few class dates to pick from.
@@ -316,8 +363,20 @@ async function renderCheckIn(courseId: string) {
 
       {/* Absences: report one instead of emailing (student), or read the
           already-judged list (professor). */}
+      {/* Last class, under the live map. Doubles as the thing that pushes the
+          absence list below the fold on a projected screen. */}
+      {isProfessor && lastSession && lastSessionOccupants.length > 0 && (
+        <LastSessionMap
+          seats={seats}
+          occupants={lastSessionOccupants}
+          date={lastSession.date}
+        />
+      )}
+
       {isProfessor ? (
-        <ScheduledAbsences rows={courseAbsences} policySet={policySet} />
+        <CollapsedAbsences count={courseAbsences.length}>
+          <ScheduledAbsences rows={courseAbsences} policySet={policySet} />
+        </CollapsedAbsences>
       ) : myEnrollmentId ? (
         <ReportAbsence
           courseId={courseId}
