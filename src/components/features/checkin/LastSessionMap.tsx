@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Card,
   CardContent,
@@ -25,6 +27,10 @@ export interface LastSessionOccupant {
  * Rendered flat and small on purpose: no perspective, no fit, no taps. This is
  * a reference, not the thing being projected, and making it look like the live
  * map would invite someone to try to correct a seat in it.
+ *
+ * A client component because it hands `stateFor` — a function — to RoomMap,
+ * and functions cannot cross the server/client boundary. As a server component
+ * this compiled and type-checked cleanly and then threw on every render.
  */
 export function LastSessionMap({
   seats,
