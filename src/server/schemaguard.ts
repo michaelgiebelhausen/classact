@@ -39,6 +39,28 @@ const UNHEALTHY_RECHECK_MS = 60_000;
 let cached: { at: number; status: SchemaStatus } | null = null;
 let inFlight: Promise<SchemaStatus> | null = null;
 
+/**
+ * The probe must never outlast the thing it is protecting. Supabase being
+ * slow or unreachable is not evidence about the schema, and a boot path that
+ * waits indefinitely on it would turn someone else's outage into ours.
+ */
+const PROBE_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(work: Promise<T>, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), PROBE_TIMEOUT_MS);
+    work
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(fallback);
+      });
+  });
+}
+
 async function probe(): Promise<SchemaStatus> {
   if (!isConfigured.supabaseAdmin) return SKIPPED;
   const admin = createAdminClient();
@@ -78,8 +100,7 @@ export async function checkSchema(): Promise<SchemaStatus> {
   }
   // Collapse a burst of simultaneous requests into one round of probes.
   if (!inFlight) {
-    inFlight = probe()
-      .catch(() => SKIPPED) // never let the guard itself break a page
+    inFlight = withTimeout(probe(), SKIPPED) // never let the guard itself break or stall a page
       .then((status) => {
         cached = { at: Date.now(), status };
         inFlight = null;

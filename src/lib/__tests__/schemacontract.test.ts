@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CHECKIN_TABLES,
   SCHEMA_CONTRACT,
   describeSchemaGap,
+  gapsForTables,
   isSchemaGapCode,
   migrationsToRun,
   type SchemaGap,
@@ -19,6 +21,13 @@ describe("isSchemaGapCode", () => {
   it("treats a missing column or table as a real gap", () => {
     expect(isSchemaGapCode("42703")).toBe(true); // undefined_column
     expect(isSchemaGapCode("42P01")).toBe(true); // undefined_table
+  });
+
+  // A missing table never reaches Postgres: PostgREST resolves the name
+  // against its own schema cache and 404s on its own authority. Without
+  // this, every table-level contract entry was undetectable.
+  it("catches PostgREST's own missing-table answer", () => {
+    expect(isSchemaGapCode("PGRST205")).toBe(true);
   });
 
   // The safety property: only Postgres saying "that doesn't exist" counts.
@@ -52,6 +61,38 @@ describe("migrationsToRun", () => {
 
   it("is empty when nothing is missing", () => {
     expect(migrationsToRun([])).toEqual([]);
+  });
+});
+
+describe("gapsForTables", () => {
+  const unrelated = gap({
+    table: "assignments",
+    migration: "0033_assignment_fields.sql",
+    detail: "column assignments.points does not exist",
+  });
+
+  // The property that keeps this guard from being worse than the bug: a
+  // migration check-in doesn't read must never take attendance offline.
+  it("does not report an unrelated table's gap to the check-in page", () => {
+    expect(gapsForTables([unrelated], CHECKIN_TABLES)).toEqual([]);
+  });
+
+  it("still reports check-in's own tables", () => {
+    expect(gapsForTables([gap()], CHECKIN_TABLES)).toHaveLength(1);
+    expect(
+      gapsForTables([gap({ table: "seat_denials" })], CHECKIN_TABLES)
+    ).toHaveLength(1);
+  });
+
+  it("keeps only the relevant half of a mixed result", () => {
+    const kept = gapsForTables([unrelated, gap()], CHECKIN_TABLES);
+    expect(kept.map((g) => g.table)).toEqual(["check_ins"]);
+  });
+
+  it("every check-in table is actually in the contract", () => {
+    for (const table of CHECKIN_TABLES) {
+      expect(SCHEMA_CONTRACT.some((e) => e.table === table)).toBe(true);
+    }
   });
 });
 

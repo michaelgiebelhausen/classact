@@ -38,9 +38,18 @@ export async function register() {
   //
   // Node runtime only: the check needs the service role key and the
   // Supabase admin client, neither of which belongs in an edge bundle.
+  //
+  // Awaited in development, where stopping the developer is the entire point
+  // and a second of latency costs nothing. NOT awaited in production:
+  // `register()` must finish before the instance serves its first request,
+  // so awaiting would put a database round trip in front of every cold start
+  // — including the ones Vercel creates while forty students check in at
+  // once. There it runs in the background and the answer is waiting by the
+  // time a page asks for it.
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { assertSchemaAtBoot } = await import("@/server/schemaguard");
-    await assertSchemaAtBoot();
+    if (process.env.NODE_ENV === "production") void assertSchemaAtBoot();
+    else await assertSchemaAtBoot();
   }
 }
 

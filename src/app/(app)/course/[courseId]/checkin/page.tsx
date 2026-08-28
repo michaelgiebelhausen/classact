@@ -46,7 +46,11 @@ import { timed } from "@/server/loadmetrics";
 export const maxDuration = 90;
 import { loadCourseSeats } from "@/server/courseseats";
 import { checkSchema } from "@/server/schemaguard";
-import { migrationsToRun } from "@/lib/schemacontract";
+import {
+  CHECKIN_TABLES,
+  gapsForTables,
+  migrationsToRun,
+} from "@/lib/schemacontract";
 import { SchemaBehindNotice } from "@/components/features/checkin/SchemaBehindNotice";
 
 export default async function CheckInPage({
@@ -169,8 +173,15 @@ async function renderCheckIn(courseId: string) {
   // the occupants query below returns nothing and the room draws empty —
   // indistinguishable from a class nobody came to. Cached per instance, so
   // this costs a healthy deployment one probe at boot and nothing after.
+  //
+  // Narrowed to check-in's OWN tables: a missing column in assignments or
+  // profile_documents says nothing about whether this seat map can be drawn,
+  // and blocking attendance over it would make the guard more dangerous than
+  // the failure it exists to catch.
   const schema = await checkSchema();
-  const schemaGap = schema.healthy ? null : migrationsToRun(schema.gaps);
+  const checkinGaps = gapsForTables(schema.gaps, CHECKIN_TABLES);
+  const schemaGap =
+    checkinGaps.length > 0 ? migrationsToRun(checkinGaps) : null;
 
   // Seats with geometry and adjacency, shared with every other page that
   // draws this room.

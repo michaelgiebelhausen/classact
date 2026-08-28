@@ -65,17 +65,23 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
 ];
 
 /**
- * The two SQLSTATEs that mean "the schema really is behind", as opposed to
- * "the database was briefly unreachable".
+ * The codes that mean "the schema really is behind", as opposed to "the
+ * database was briefly unreachable".
  *
- * The distinction is the whole safety story. A missing column (42703) or
- * missing table (42P01) is a definitive, reproducible answer from Postgres.
- * Anything else — a timeout, a connection reset, an auth hiccup — proves
- * nothing about the schema, and treating it as a gap would let a blip take a
- * working seat map off the screen during a class. So the guard only ever
- * reports a gap on these two, and stays silent on everything else.
+ * The distinction is the whole safety story. Anything else — a timeout, a
+ * connection reset, an auth hiccup — proves nothing about the schema, and
+ * treating it as a gap would let a blip take a working seat map off the
+ * screen during a class. So the guard only reports a gap on these, and stays
+ * silent on everything else.
+ *
+ * `PGRST205` is here because a missing TABLE never reaches Postgres at all:
+ * PostgREST resolves table names against its own schema cache first and
+ * answers 404 "Could not find the table" on its own authority. Watching only
+ * for Postgres's 42P01 meant every table-level entry in the contract —
+ * exactly the ones with no columns to probe — was silently undetectable.
+ * (42P01 is kept for the direct-SQL paths that do surface it.)
  */
-export const SCHEMA_GAP_CODES = ["42703", "42P01"] as const;
+export const SCHEMA_GAP_CODES = ["42703", "42P01", "PGRST205"] as const;
 
 export function isSchemaGapCode(code: string | undefined): boolean {
   return Boolean(code) && (SCHEMA_GAP_CODES as readonly string[]).includes(code!);
@@ -91,6 +97,26 @@ export interface SchemaGap {
 /** The migrations behind the gaps, de-duplicated, in contract order. */
 export function migrationsToRun(gaps: SchemaGap[]): string[] {
   return [...new Set(gaps.map((g) => g.migration))];
+}
+
+/**
+ * The contract tables the check-in page actually reads.
+ *
+ * A page must only ever be blocked by ITS OWN missing schema. The first
+ * version of this guard blocked check-in on the whole contract, which meant
+ * an unapplied migration touching assignments or profile_documents — tables
+ * the seat map never looks at — would have taken attendance offline for
+ * every course. A guard that can cause a worse outage than the bug it
+ * watches for is not worth having.
+ */
+export const CHECKIN_TABLES = ["check_ins", "seat_denials"] as const;
+
+/** Narrow a whole-database result to the gaps one surface actually cares about. */
+export function gapsForTables(
+  gaps: SchemaGap[],
+  tables: readonly string[]
+): SchemaGap[] {
+  return gaps.filter((g) => tables.includes(g.table));
 }
 
 /**

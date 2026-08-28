@@ -1016,7 +1016,14 @@ export function NameGames({
                 const who = lastSession.occupants.find(
                   (o) => o.seatId === seat.id
                 );
-                if (who?.enrollmentId) setOpenId(who.enrollmentId);
+                // The seat map comes from check_ins, which includes YOU;
+                // the roster deliberately doesn't, since a name game
+                // shouldn't quiz you on yourself. So your own seat has no
+                // card to open — say nothing rather than opening an empty
+                // dialog.
+                if (who?.enrollmentId && cardFor.has(who.enrollmentId)) {
+                  setOpenId(who.enrollmentId);
+                }
               }}
             />
           </div>
