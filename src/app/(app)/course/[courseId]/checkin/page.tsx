@@ -8,9 +8,12 @@ import {
   formatSchedule,
   isMeetingWindow,
   isScheduleComplete,
+  meetingStartInstant,
   sessionDateFor,
   type CourseSchedule,
 } from "@/lib/schedule";
+import { socialModeEndsAt } from "@/lib/arrivals";
+import { flashcardHintFields } from "@/lib/icebreakers";
 import {
   CheckInLive,
   type DirectoryEntry,
@@ -65,7 +68,7 @@ async function renderCheckIn(courseId: string) {
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy"
+      "id, name, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy, icebreaker_fields"
     )
     .eq("id", courseId)
     .single();
@@ -108,12 +111,13 @@ async function renderCheckIn(courseId: string) {
     : now.toISOString().slice(0, 10);
   const { data: session } = await supabase
     .from("class_sessions")
-    .select("id, closed_at")
+    .select("id, closed_at, opened_at")
     .eq("course_id", courseId)
     .eq("session_date", today)
     .is("closed_at", null)
     .maybeSingle();
   let sessionId = session?.id ?? null;
+  let sessionOpenedAt = session?.opened_at ?? null;
 
   // Scheduled auto-open: inside the meeting window (start − 15 min → end),
   // the first person to load this page opens the session — no professor
@@ -134,18 +138,29 @@ async function renderCheckIn(courseId: string) {
       .maybeSingle();
     if (opened) {
       sessionId = opened.id;
+      sessionOpenedAt = new Date().toISOString();
     } else if (openError?.code === "23505") {
       // Someone else opened it between our check and insert.
       const { data: raced } = await supabase
         .from("class_sessions")
-        .select("id")
+        .select("id, opened_at")
         .eq("course_id", courseId)
         .eq("session_date", today)
         .is("closed_at", null)
         .maybeSingle();
       sessionId = raced?.id ?? null;
+      sessionOpenedAt = raced?.opened_at ?? null;
     }
   }
+
+  // The social/quiet boundary: "introduce yourself" framing until the
+  // scheduled start, silent confirmations after. Computed once, server-side,
+  // so every client agrees on the minute. Courses without a schedule get a
+  // bounded window after the session opened instead.
+  const socialEndsAt = socialModeEndsAt(
+    schedule ? meetingStartInstant(schedule, today)?.toISOString() ?? null : null,
+    sessionOpenedAt
+  );
 
   // Seats with geometry. Pre-migration rows without x/y fall back to their
   // grid coords so the map never comes up blank.
@@ -201,9 +216,13 @@ async function renderCheckIn(courseId: string) {
   myEnrollmentId = myEnrollment?.id ?? null;
 
   // Seat-variety nudge data: which seats I've already tried and how many
-  // classmates I've met — surfaced at the moment of choosing a seat.
+  // classmates I've met — surfaced at the moment of choosing a seat. The
+  // same verifications query also yields WHO I've met, which decides whether
+  // a neighbor gets the full introduction treatment or a quiet one-tap
+  // re-confirm.
   let mySeatIds: string[] = [];
   let peopleMet = 0;
+  let metBeforeIds: string[] = [];
   if (myEnrollmentId) {
     const [{ data: myCheckIns }, { data: myVerifs }] = await Promise.all([
       supabase
@@ -219,24 +238,32 @@ async function renderCheckIn(courseId: string) {
     ]);
     networkingScore = (myCheckIns ?? []).filter((c) => c.is_new_seat).length;
     mySeatIds = [...new Set((myCheckIns ?? []).map((c) => c.seat_id))];
-    peopleMet = new Set(
-      (myVerifs ?? []).map((v) =>
-        v.verifier_enrollment_id === myEnrollmentId
-          ? v.subject_enrollment_id
-          : v.verifier_enrollment_id
-      )
-    ).size;
+    metBeforeIds = [
+      ...new Set(
+        (myVerifs ?? []).map((v) =>
+          v.verifier_enrollment_id === myEnrollmentId
+            ? v.subject_enrollment_id
+            : v.verifier_enrollment_id
+        )
+      ),
+    ];
+    peopleMet = metBeforeIds.length;
   }
 
   if (sessionId) {
     const { data: checkins } = await supabase
       .from("check_ins")
-      .select("enrollment_id, seat_id, verified")
+      .select(
+        "id, enrollment_id, seat_id, verified, denied_count, professor_confirmed_at"
+      )
       .eq("session_id", sessionId);
     initialOccupants = (checkins ?? []).map((c) => ({
+      id: c.id,
       enrollmentId: c.enrollment_id,
       seatId: c.seat_id,
       verified: c.verified,
+      deniedCount: c.denied_count ?? 0,
+      professorConfirmed: c.professor_confirmed_at != null,
     }));
 
     if (myEnrollmentId) {
@@ -292,6 +319,46 @@ async function renderCheckIn(courseId: string) {
   const directory: Record<string, DirectoryEntry> = isConfigured.supabaseAdmin
     ? await getCourseDirectory(createAdminClient(), courseId)
     : {};
+
+  // One icebreaker fact per classmate, for the introduction rows: the FIRST
+  // answered flashcard-eligible field in catalog order — the same selection
+  // rule the name-game flash cards use, so the fact a student reads at
+  // check-in matches the one on that person's card in the games.
+  let neighborFacts: Record<string, { label: string; value: string }> = {};
+  if (!isProfessor && myEnrollmentId && sessionId && isConfigured.supabaseAdmin) {
+    const hintFields = flashcardHintFields(
+      (course.icebreaker_fields as string[] | null) ?? []
+    );
+    if (hintFields.length > 0) {
+      const admin = createAdminClient();
+      const { data: answers } = await admin
+        .from("student_answers")
+        .select("enrollment_id, field_key, value, enrollments!inner(course_id)")
+        .eq("enrollments.course_id", courseId);
+      const byEnrollment = new Map<string, Map<string, string>>();
+      for (const a of answers ?? []) {
+        const value = (a.value ?? "").trim();
+        if (!value) continue;
+        let m = byEnrollment.get(a.enrollment_id);
+        if (!m) {
+          m = new Map();
+          byEnrollment.set(a.enrollment_id, m);
+        }
+        m.set(a.field_key, value);
+      }
+      const facts: Record<string, { label: string; value: string }> = {};
+      for (const [enrollmentId, m] of byEnrollment) {
+        for (const f of hintFields) {
+          const value = m.get(f.key);
+          if (value) {
+            facts[enrollmentId] = { label: f.label, value };
+            break;
+          }
+        }
+      }
+      neighborFacts = facts;
+    }
+  }
 
   // Names and faces come from the same per-course directory the live map uses,
   // so the two maps agree and this costs no extra queries.
@@ -352,6 +419,9 @@ async function renderCheckIn(courseId: string) {
         verifiedByMe={verifiedByMe}
         mySeatIds={mySeatIds}
         peopleMet={peopleMet}
+        metBeforeIds={metBeforeIds}
+        neighborFacts={neighborFacts}
+        socialEndsAt={socialEndsAt ? socialEndsAt.toISOString() : null}
         scheduleHint={
           schedule
             ? `Class meets ${formatSchedule(schedule)}${

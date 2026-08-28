@@ -65,7 +65,7 @@ export async function getStudentMetrics(
     await Promise.all([
       supabase
         .from("check_ins")
-        .select("seat_id, verified, is_new_seat")
+        .select("seat_id, verified, is_new_seat, professor_confirmed_at")
         .eq("enrollment_id", enrollment.id),
       supabase
         .from("seat_verifications")
@@ -95,7 +95,11 @@ export async function getStudentMetrics(
 
   return {
     sessionsAttended: (checkins ?? []).length,
-    verifiedAttendances: (checkins ?? []).filter((c) => c.verified).length,
+    // A professor's confirmation is verified ATTENDANCE (integrity), though
+    // it never counts toward peopleMet (social credit).
+    verifiedAttendances: (checkins ?? []).filter(
+      (c) => c.verified || c.professor_confirmed_at != null
+    ).length,
     seatsVisited: new Set((checkins ?? []).map((c) => c.seat_id)).size,
     peopleMet: met.size,
     networkingScore: (checkins ?? []).filter((c) => c.is_new_seat).length,
@@ -145,9 +149,9 @@ export async function getCourseMetrics(
     enrollmentIds.length > 0
       ? client
           .from("check_ins")
-          .select("enrollment_id, verified, is_new_seat")
+          .select("enrollment_id, verified, is_new_seat, professor_confirmed_at")
           .in("enrollment_id", enrollmentIds)
-      : Promise.resolve({ data: [] as { enrollment_id: string; verified: boolean; is_new_seat: boolean }[] }),
+      : Promise.resolve({ data: [] as { enrollment_id: string; verified: boolean; is_new_seat: boolean; professor_confirmed_at: string | null }[] }),
     enrollmentIds.length > 0
       ? client
           .from("name_game_scores")
@@ -167,7 +171,8 @@ export async function getCourseMetrics(
     const agg = byEnrollment.get(c.enrollment_id);
     if (!agg) continue;
     agg.checkIns++;
-    if (c.verified) agg.verified++;
+    // Peer-verified or professor-confirmed both count as verified attendance.
+    if (c.verified || c.professor_confirmed_at != null) agg.verified++;
     if (c.is_new_seat) agg.networking++;
   }
   for (const s of scores ?? []) {
@@ -176,7 +181,9 @@ export async function getCourseMetrics(
   }
 
   const totalCheckIns = (checkins ?? []).length;
-  const totalVerified = (checkins ?? []).filter((c) => c.verified).length;
+  const totalVerified = (checkins ?? []).filter(
+    (c) => c.verified || c.professor_confirmed_at != null
+  ).length;
 
   return {
     sessionCount: (sessions ?? []).length,
@@ -508,7 +515,7 @@ export async function getStudentWorkReadiness(
     supabase.from("class_sessions").select("id").eq("course_id", courseId),
     supabase
       .from("check_ins")
-      .select("verified, is_new_seat")
+      .select("verified, is_new_seat, professor_confirmed_at")
       .eq("enrollment_id", enrollment.id),
     supabase
       .from("seat_verifications")
@@ -566,7 +573,9 @@ export async function getStudentWorkReadiness(
   return computeWorkReadiness({
     sessionsHeld: (sessions ?? []).length,
     sessionsAttended: (checkins ?? []).length,
-    verifiedAttendances: (checkins ?? []).filter((c) => c.verified).length,
+    verifiedAttendances: (checkins ?? []).filter(
+      (c) => c.verified || c.professor_confirmed_at != null
+    ).length,
     newSeats: (checkins ?? []).filter((c) => c.is_new_seat).length,
     peopleMet: met.size,
     neighborsVerified,

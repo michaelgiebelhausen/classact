@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Tooltip,
@@ -59,6 +59,16 @@ export interface RoomMapSeatState {
   alert?: boolean;
   /** The cold-call pick: a big primary ring so the whole room can find them. */
   spotlight?: boolean;
+  /**
+   * Confirmation status ring, drawn on occupied seats (taken/verified only —
+   * a student's own seat reports its status through the badge instead).
+   * green = someone vouched, red = awaiting a neighbor, amber = nobody
+   * adjacent to ask, denied = a neighbor says they're NOT in this seat.
+   * Rings are box-shadows: radially symmetric, so the professor's flipped
+   * perspective can't distort them, and drawn outside the seat box so the
+   * avatar can't cover them.
+   */
+  ring?: "confirmed" | "unconfirmed" | "unconfirmable" | "denied";
 }
 
 interface Props {
@@ -98,6 +108,13 @@ interface Props {
    * small to recognise a face, especially in the shrunken back rows.
    */
   photoZoom?: boolean;
+  /**
+   * Replaces the hover card's default content (big photo + name) with the
+   * caller's own — e.g. the professor's confirm-attendance card. Only
+   * rendered where `photoZoom` already pops a card; without this prop the
+   * default card stands, so existing maps are untouched.
+   */
+  hoverContent?: (seat: RoomMapSeat, state: RoomMapSeatState) => ReactNode;
 }
 
 const UNIT = 44; // px per seat unit — tap-target sized
@@ -135,6 +152,7 @@ export function RoomMap({
   fit = false,
   podium = false,
   photoZoom = false,
+  hoverContent,
 }: Props) {
   // Live pixel offset of the table being dragged, before it's committed.
   const [drag, setDrag] = useState<{
@@ -514,10 +532,45 @@ export function RoomMap({
             (state.kind === "taken" || state.kind === "verified") &&
             state.name
         );
+        // Status rings decorate other people's occupied seats; a student's
+        // own seat says "you" (primary ring) and reports its status through
+        // the badge above the map instead of fighting that ring.
+        const statusRing =
+          state.kind === "taken" || state.kind === "verified"
+            ? state.ring
+            : undefined;
+        const ringLabel =
+          statusRing === "denied"
+            ? ", reported not in this seat"
+            : statusRing === "confirmed"
+              ? ", confirmed present"
+              : statusRing === "unconfirmed"
+                ? ", checked in, not yet confirmed"
+                : statusRing === "unconfirmable"
+                  ? ", checked in, no neighbors to confirm them yet"
+                  : "";
+        // Exactly ONE ring decoration per seat, picked here rather than by
+        // CSS-cascade luck. A denial is always newer information than any
+        // confirmation (the DB resolves denials inside every confirm), so it
+        // outranks everything; the shipped alert-beats-spotlight order stays.
+        const decoration =
+          statusRing === "denied"
+            ? "z-10 border-red-600 ring-4 ring-red-600/80 ring-offset-1 animate-pulse shadow-lg"
+            : state.alert
+              ? "border-destructive ring-2 ring-destructive/70 ring-offset-1"
+              : state.spotlight
+                ? "z-10 border-primary ring-4 ring-primary/70 ring-offset-2 shadow-lg"
+                : statusRing === "confirmed"
+                  ? "ring-[3px] ring-green-500/80 ring-offset-1"
+                  : statusRing === "unconfirmed"
+                    ? "ring-[3px] ring-red-500/80 ring-offset-1"
+                    : statusRing === "unconfirmable"
+                      ? "ring-[3px] ring-amber-500/80 ring-offset-1"
+                      : "";
         const seatButton = (
           <button
             type="button"
-            aria-label={`Seat ${seat.label}, ${stateLabel}${
+            aria-label={`Seat ${seat.label}, ${stateLabel}${ringLabel}${
               state.spotlight ? ", cold call pick" : ""
             }`}
             disabled={!tappable && !zoomable}
@@ -539,13 +592,7 @@ export function RoomMap({
                           : "bg-card hover:border-primary hover:text-primary"
                         : "bg-card text-muted-foreground/60",
               state.pending ? "animate-pulse" : "",
-              state.spotlight
-                ? "z-10 border-primary ring-4 ring-primary/70 ring-offset-2 shadow-lg"
-                : "",
-              // Alert is listed after spotlight so its red ring wins if both apply.
-              state.alert
-                ? "border-destructive ring-2 ring-destructive/70 ring-offset-1"
-                : "",
+              decoration,
             ].join(" ")}
             style={{
               left: geo.px(seat.x) - SEAT / 2,
@@ -594,15 +641,21 @@ export function RoomMap({
             <Tooltip>
               <TooltipTrigger asChild>{seatButton}</TooltipTrigger>
               <TooltipContent side="top" sideOffset={6} className="flex-col p-2">
-                <Avatar className="h-24 w-24">
-                  {state.photoUrl && (
-                    <AvatarImage src={state.photoUrl} alt={state.name ?? ""} />
-                  )}
-                  <AvatarFallback className="text-2xl">
-                    {initials(state.name ?? "")}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="text-xs font-medium">{state.name}</span>
+                {hoverContent ? (
+                  hoverContent(seat, state)
+                ) : (
+                  <>
+                    <Avatar className="h-24 w-24">
+                      {state.photoUrl && (
+                        <AvatarImage src={state.photoUrl} alt={state.name ?? ""} />
+                      )}
+                      <AvatarFallback className="text-2xl">
+                        {initials(state.name ?? "")}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="text-xs font-medium">{state.name}</span>
+                  </>
+                )}
               </TooltipContent>
             </Tooltip>
           ) : (

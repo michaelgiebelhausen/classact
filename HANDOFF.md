@@ -263,6 +263,70 @@ identity for a future Canvas gradebook CSV export, which is spec'd but not
 built. Only `canvas_user_id` is populated, by the roster sync, for free on
 every resync. See `docs/canvas-assignment-fields-plan.md`.
 
+## Neighbors can say no, and the professor can say yes (0036)
+
+**Run `supabase/migrations/0036_neighbor_denials.sql` BEFORE deploying.** This
+one is NOT deploy-order safe: the check-in page now selects
+`check_ins.denied_count` and `check_ins.professor_confirmed_at`, so deployed
+code against an unmigrated database fails the page load with a 42703
+(column does not exist); the professor's "Confirm attendance" button returns
+"isn't installed on the database yet — run migration 0036" (42883) and the
+student's "Report it" button says the same (42P01). Run the migration first
+and none of those can appear.
+
+**What this ships.** The neighbor-confirmation mechanic finally became
+visible in class:
+
+- **Rings on the map, every screen including the projection.** Green =
+  someone vouched (a neighbor, or you). Red = checked in, nobody has
+  confirmed them yet. Amber = nobody is sitting adjacent, so peer
+  confirmation is impossible — early arrivers aren't shamed. Pulsing red =
+  a neighbor pressed "**{Name} is not in the seat to my left**", which is
+  the live signature of a proxy check-in. Rings are deliberately public:
+  the social pressure is the mechanism, and someone checking in from home
+  can't see the projected screen anyway.
+- **Hover (or tap) a seat → action card**: big photo, status, **Confirm
+  attendance** (turns the ring green, resolves any denial, does NOT count
+  toward people-met) and **Free this seat** (the old tap behavior, now
+  behind a deliberate step instead of firing on a stray tap).
+- **Introduce once, confirm always.** The first time a pair are EVER
+  neighbors, the student card shows the full introduction (photo, an
+  icebreaker answer, "Introduce yourself"). Every later class with the same
+  person collapses to one tap: "Still your row: Alex, Priya? → Confirm
+  all 2."
+- **The social/quiet boundary is the scheduled start, sharp.** Before it,
+  a course-wide toast taps seated students on the shoulder — "Alex just sat
+  down to your left — say hi!" with a one-tap confirm — anywhere in the
+  course app, including the name games. From the scheduled minute on:
+  no toasts, no "introduce yourself"; latecomers are confirmed silently
+  from the card. (No schedule set → the window is opened_at + 15 minutes.)
+
+**What the migration replaces (not just adds):** `handle_seat_verification`
+(now fires on INSERT OR UPDATE and resolves denials — required, or a
+mis-tapped denial could never be cleared by re-confirming) and
+`reassign_seat` (its swap now carries `professor_confirmed_at`; without this
+a swap silently stripped your confirmation). `seat_denials` is deliberately
+NOT added to the realtime publication — denials reach clients as the
+trigger's update to `check_ins`, which is already published.
+
+**It also fixes a real bug:** no `FOR DELETE` policy on `check_ins` existed
+in any migration, so the professor's "free this seat" was deleting **zero
+rows** through RLS while toasting success — the seat stayed occupied on
+everyone else's screen. 0036 adds `checkins_delete_professor`. To check
+whether a hand-applied policy already existed, run in the SQL editor:
+`select polname from pg_policies where tablename = 'check_ins';` — either
+way the migration is idempotent. Two client-side realtime bugs rode along:
+freed seats now disappear from other students' maps without a reload, and a
+student who moves seats no longer shows up in two places.
+
+**Smoke test, two browsers (~3 min):** student checks in → red ring on the
+projected map within ~2s. Second student sits adjacent → first student gets
+the say-hi toast (before the scheduled start) — try it from the games page.
+Toast's "They're here" → both rings green, live. "Report it" from the card →
+pulsing ring on your map; hover → "Confirm attendance" → green, and the
+student's people-met count did NOT move. Free a seat → it empties on the
+student's screen without a reload.
+
 ## Nobody declares a role any more (0035)
 
 **Run `supabase/migrations/0035_membership_is_the_role.sql`.** Deploy-order

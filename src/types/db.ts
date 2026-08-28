@@ -460,6 +460,10 @@ export type CheckInRow = {
   is_new_seat: boolean
   verified: boolean
   checked_in_at: string
+  /** 0036 — active "not in that seat" reports; recounted by trigger. */
+  denied_count: number
+  /** 0036 — set once by professor_confirm_attendance; never unset. */
+  professor_confirmed_at: string | null
 }
 
 export type SeatVerificationRow = {
@@ -469,6 +473,25 @@ export type SeatVerificationRow = {
   subject_enrollment_id: string
   relation: SeatRelation
   created_at: string
+}
+
+/** 0036 — a neighbor's report that the claimed person isn't in the seat.
+ *  Never deleted: resolved (with a reason) when any confirmation supersedes
+ *  it, so disputes keep their audit trail. */
+export type SeatDenialRow = {
+  id: string
+  session_id: string
+  verifier_enrollment_id: string
+  subject_enrollment_id: string
+  relation: SeatRelation
+  created_at: string
+  resolved_at: string | null
+  resolved_by:
+    | 'peer_confirm'
+    | 'professor_confirm'
+    | 'seat_change'
+    | 'checkin_removed'
+    | null
 }
 
 export type NameGameScoreRow = {
@@ -716,6 +739,7 @@ export type Database = {
       class_sessions: TableShape<ClassSessionRow>
       check_ins: TableShape<CheckInRow>
       seat_verifications: TableShape<SeatVerificationRow>
+      seat_denials: TableShape<SeatDenialRow>
       name_game_scores: TableShape<NameGameScoreRow>
       lecture_decks: TableShape<LectureDeckRow>
       lectures: TableShape<LectureRow>
@@ -759,6 +783,12 @@ export type Database = {
        *  target is occupied. Atomic; authorizes the caller internally. */
       reassign_seat: {
         Args: { p_session: string; p_enrollment: string; p_seat: string }
+        Returns: undefined
+      }
+      /** 0036 — professor vouches for a checked-in student from the map;
+       *  resolves active denials. Authorizes the caller internally. */
+      professor_confirm_attendance: {
+        Args: { p_session: string; p_enrollment: string }
         Returns: undefined
       }
     }

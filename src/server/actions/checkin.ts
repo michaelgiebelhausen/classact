@@ -217,12 +217,22 @@ async function runCheckIn(
  * Student: confirm a present neighbor (FR-011). Server verifies adjacency
  * from seat coordinates; the DB trigger flips the subject's check-in to
  * verified.
+ *
+ * An UPSERT, not an insert-and-shrug. The 0036 verification trigger is what
+ * clears an active denial, and it fires on INSERT OR UPDATE — a duplicate
+ * insert swallowed as 23505 fires nothing, which would leave a mis-tapped
+ * denial pulsing forever with no student able to clear it. The conflict path
+ * refreshes `relation`, since the pair may sit differently than they first
+ * did.
+ *
+ * Returns whether this was the pair's first meeting EVER (any session,
+ * either direction) so the caller can celebrate accordingly.
  */
 export async function verifyNeighbor(
   sessionId: string,
   subjectEnrollmentId: string,
   relation: SeatRelation
-): Promise<ActionResult> {
+): Promise<ActionResult<{ firstEverMet: boolean }>> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -231,10 +241,13 @@ export async function verifyNeighbor(
 
   const { data: session } = await supabase
     .from("class_sessions")
-    .select("id, course_id")
+    .select("id, course_id, closed_at")
     .eq("id", sessionId)
     .single();
   if (!session) return { ok: false, error: "Session not found." };
+  if (session.closed_at) {
+    return { ok: false, error: "Class has ended — confirmations are closed." };
+  }
 
   const { data: me } = await supabase
     .from("enrollments")
@@ -271,14 +284,122 @@ export async function verifyNeighbor(
     return { ok: false, error: "That person isn't in that seat." };
   }
 
-  const { error } = await supabase.from("seat_verifications").insert({
+  // Have these two ever confirmed each other before, in any session? Probed
+  // before the write so the answer means "first meeting", not "row existed".
+  const { data: priorMeeting } = await supabase
+    .from("seat_verifications")
+    .select("id")
+    .or(
+      `and(verifier_enrollment_id.eq.${me.id},subject_enrollment_id.eq.${subjectEnrollmentId}),` +
+        `and(verifier_enrollment_id.eq.${subjectEnrollmentId},subject_enrollment_id.eq.${me.id})`
+    )
+    .limit(1);
+  const firstEverMet = (priorMeeting ?? []).length === 0;
+
+  const { error } = await supabase.from("seat_verifications").upsert(
+    {
+      session_id: sessionId,
+      verifier_enrollment_id: me.id,
+      subject_enrollment_id: subjectEnrollmentId,
+      relation,
+    },
+    { onConflict: "session_id,verifier_enrollment_id,subject_enrollment_id" }
+  );
+  if (error) {
+    return { ok: false, error: "Couldn't confirm — try again." };
+  }
+  return { ok: true, data: { firstEverMet } };
+}
+
+/**
+ * Student: report that the person claiming an adjacent seat is not actually
+ * in it — the live signature of a proxy check-in (someone checking in from
+ * home on a friend's phone).
+ *
+ * Validation is deliberately identical to verifyNeighbor: the reporter must
+ * be checked in, the subject must be checked in, and the claimed relation
+ * must match the reporter's persisted neighbor links — so nobody can flag a
+ * stranger across the room. The insert's trigger recounts the subject's
+ * denied_count on check_ins, and THAT update is what reaches every client
+ * (including the professor's projected map) over the existing realtime
+ * subscription. The denial is quietly resolved the moment anyone confirms
+ * the subject — peer or professor — or the subject moves seats.
+ *
+ * Idempotent per pair: a second report while one is active hits the partial
+ * unique index and is treated as success.
+ */
+export async function denyNeighbor(
+  sessionId: string,
+  subjectEnrollmentId: string,
+  relation: SeatRelation
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: session } = await supabase
+    .from("class_sessions")
+    .select("id, course_id, closed_at")
+    .eq("id", sessionId)
+    .single();
+  if (!session) return { ok: false, error: "Session not found." };
+  if (session.closed_at) {
+    return { ok: false, error: "Class has ended — reports are closed." };
+  }
+
+  const { data: me } = await supabase
+    .from("enrollments")
+    .select("id")
+    .eq("course_id", session.course_id)
+    .eq("profile_id", user.id)
+    .eq("status", "active")
+    .maybeSingle();
+  if (!me) return { ok: false, error: "You're not in this course." };
+  if (subjectEnrollmentId === me.id) {
+    return { ok: false, error: "You can't report your own seat." };
+  }
+
+  const { data: checkins } = await supabase
+    .from("check_ins")
+    .select("enrollment_id, seat_id, seats(label, neighbors)")
+    .eq("session_id", sessionId)
+    .in("enrollment_id", [me.id, subjectEnrollmentId]);
+
+  const mine = (checkins ?? []).find((c) => c.enrollment_id === me.id);
+  const theirs = (checkins ?? []).find(
+    (c) => c.enrollment_id === subjectEnrollmentId
+  );
+  if (!mine) return { ok: false, error: "Check in before reporting a seat." };
+  if (!theirs) return { ok: false, error: "They aren't checked in anymore." };
+
+  const mySeat = mine.seats as unknown as {
+    label: string;
+    neighbors: SeatNeighbors;
+  };
+  const theirSeat = theirs.seats as unknown as { label: string };
+  const expected = (mySeat.neighbors ?? {})[relation];
+  if (!expected || expected !== theirSeat.label) {
+    return { ok: false, error: "That seat isn't next to yours." };
+  }
+
+  const { error } = await supabase.from("seat_denials").insert({
     session_id: sessionId,
     verifier_enrollment_id: me.id,
     subject_enrollment_id: subjectEnrollmentId,
     relation,
   });
   if (error && error.code !== "23505") {
-    return { ok: false, error: "Couldn't confirm — try again." };
+    // 42P01 = table missing: 0036 hasn't been applied yet.
+    if (error.code === "42P01") {
+      return {
+        ok: false,
+        error:
+          "Seat reports aren't installed on the database yet — run migration 0036_neighbor_denials.sql.",
+      };
+    }
+    return { ok: false, error: "Couldn't send that report — try again." };
   }
   return { ok: true };
 }
@@ -442,6 +563,62 @@ export async function reassignSeat(
     }
     console.error("[reassign] failed:", { code: error.code, message: error.message });
     return { ok: false, error: "Couldn't move that student. Try again." };
+  }
+
+  return { ok: true };
+}
+
+/** Why a professor's confirmation was refused, mapped from the RPC's SQLSTATEs. */
+const CONFIRM_MESSAGES: Record<string, string> = {
+  "42501": "Only the course's professor can confirm attendance.",
+  P0002: "That session no longer exists.",
+  P0003: "Class has ended — attendance is locked for today.",
+  P0007: "That student isn't checked in.",
+};
+
+/**
+ * Professor: vouch for a student's presence from the map.
+ *
+ * The peer system can't cover everyone — edge seats with no neighbors,
+ * ignored prompts, or a disputed seat the professor can settle with their
+ * own eyes. This is the backstop: it turns the ring green and resolves any
+ * active denials, but it deliberately writes NO seat_verifications row, so
+ * it never counts as anyone "meeting" anyone — attendance integrity, not
+ * social credit.
+ *
+ * A SECURITY DEFINER RPC for the same reason as reassign_seat: professors
+ * have no enrollment and no UPDATE policy on check_ins, and the function is
+ * the authorization boundary.
+ */
+export async function professorConfirmAttendance(
+  sessionId: string,
+  enrollmentId: string
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { error } = await supabase.rpc("professor_confirm_attendance", {
+    p_session: sessionId,
+    p_enrollment: enrollmentId,
+  });
+
+  if (error) {
+    const known = error.code ? CONFIRM_MESSAGES[error.code] : undefined;
+    if (known) return { ok: false, error: known };
+    // 42883 = function doesn't exist: 0036 hasn't been applied yet. Say so
+    // rather than letting a professor conclude the feature is broken.
+    if (error.code === "42883") {
+      return {
+        ok: false,
+        error:
+          "Attendance confirmation isn't installed on the database yet — run migration 0036_neighbor_denials.sql.",
+      };
+    }
+    console.error("[confirm] failed:", { code: error.code, message: error.message });
+    return { ok: false, error: "Couldn't confirm that student. Try again." };
   }
 
   return { ok: true };

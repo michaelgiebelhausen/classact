@@ -195,6 +195,19 @@ function PresetPreview({
                   const name = occupied.get(seat.id);
                   if (!name) return { kind: "empty", tappable: false };
                   const kind = name.length % 2 === 0 ? "verified" : "taken";
+                  // Confirmation rings, distributed deterministically so
+                  // every state is visible on every preset: mostly green and
+                  // red, an occasional amber, one-in-ten pulsing denied —
+                  // roughly the mix a real arrival window produces.
+                  const roll = (name.charCodeAt(0) + name.length) % 10;
+                  const ring =
+                    roll < 4
+                      ? ("confirmed" as const)
+                      : roll < 7
+                        ? ("unconfirmed" as const)
+                        : roll < 9
+                          ? ("unconfirmable" as const)
+                          : ("denied" as const);
                   return {
                     kind,
                     name,
@@ -204,6 +217,7 @@ function PresetPreview({
                     tappable: kind === "taken",
                     caption: name.split(" ")[0],
                     spotlight: seat.id === spotlightSeatId,
+                    ring,
                   };
                 }
               : undefined

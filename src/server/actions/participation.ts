@@ -110,7 +110,7 @@ async function buildCourseSignals(
     sessionIds.length > 0
       ? admin
           .from("check_ins")
-          .select("enrollment_id, verified, is_new_seat, session_id")
+          .select("enrollment_id, verified, is_new_seat, session_id, professor_confirmed_at")
           .in("session_id", sessionIds)
       : Promise.resolve({ data: [] as never[] }),
     sessionIds.length > 0
@@ -430,7 +430,9 @@ async function buildCourseSignals(
     const input: WorkReadinessInput = {
       sessionsHeld: sessionIds.length,
       sessionsAttended: myCheckIns.length,
-      verifiedAttendances: myCheckIns.filter((c) => c.verified).length,
+      verifiedAttendances: myCheckIns.filter(
+        (c) => c.verified || c.professor_confirmed_at != null
+      ).length,
       newSeats: myCheckIns.filter((c) => c.is_new_seat).length,
       peopleMet,
       neighborsVerified,

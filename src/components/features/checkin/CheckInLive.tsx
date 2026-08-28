@@ -6,22 +6,21 @@ import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   checkIn,
+  denyNeighbor,
   moveSeat,
+  professorConfirmAttendance,
   releaseSeat,
   verifyNeighbor,
 } from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
+import { NeighborPrompts, type NeighborPromptRow } from "@/components/features/checkin/NeighborPrompts";
+import { SeatActionCard } from "@/components/features/checkin/SeatActionCard";
+import { deriveSeatRing, type SeatRing } from "@/lib/seatrings";
 import { stablePhotoUrl } from "@/lib/photopin";
 import type { TableFootprint } from "@/lib/roomlayout";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
@@ -43,9 +42,15 @@ export interface SeatInfo {
 }
 
 export interface OccupantInfo {
+  /** check_ins row id — DELETE realtime payloads carry only this. */
+  id: string;
   enrollmentId: string;
   seatId: string;
   verified: boolean;
+  /** Active "not in that seat" reports against this check-in. */
+  deniedCount: number;
+  /** The professor vouched from the map. */
+  professorConfirmed: boolean;
 }
 
 export interface DirectoryEntry {
@@ -70,16 +75,12 @@ interface Props {
   peopleMet?: number;
   /** Professor view: tap a student, then tap a seat, to reassign them. */
   canReassign?: boolean;
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  /** Enrollment ids I've EVER confirmed with — repeat neighbors skip the intro. */
+  metBeforeIds?: string[];
+  /** One icebreaker fact per classmate, for the introduction rows. */
+  neighborFacts?: Record<string, { label: string; value: string }>;
+  /** ISO instant when "introduce yourself" turns into silent confirm-only. */
+  socialEndsAt?: string | null;
 }
 
 export function CheckInLive({
@@ -95,6 +96,9 @@ export function CheckInLive({
   mySeatIds = [],
   peopleMet = 0,
   canReassign = false,
+  metBeforeIds = [],
+  neighborFacts = {},
+  socialEndsAt = null,
 }: Props) {
   const router = useRouter();
   const [occupants, setOccupants] = useState<Map<string, OccupantInfo>>(
@@ -105,7 +109,14 @@ export function CheckInLive({
   const [confirmed, setConfirmed] = useState<Set<string>>(
     () => new Set(verifiedByMe)
   );
+  // Neighbors I reported this session: their prompt row leaves the card, and
+  // it stays gone even if nothing about their check-in changes.
+  const [deniedByMe, setDeniedByMe] = useState<Set<string>>(() => new Set());
+  const metBefore = useMemo(() => new Set(metBeforeIds), [metBeforeIds]);
   const [live, setLive] = useState(true);
+  /** Professor: the tapped seat whose action card is open in a dialog. */
+  const [actionSeatId, setActionSeatId] = useState<string | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   /**
    * Students can turn the map around.
    *
@@ -154,8 +165,31 @@ export function CheckInLive({
   const applyChange = useCallback((row: OccupantInfo) => {
     setOccupants((prev) => {
       const next = new Map(prev);
+      // A move arrives as an UPDATE keyed by the NEW seat; without evicting
+      // the old entry the same student renders in two seats on everyone
+      // else's map until a full refresh.
+      for (const [seatId, occ] of next) {
+        if (occ.enrollmentId === row.enrollmentId && seatId !== row.seatId) {
+          next.delete(seatId);
+        }
+      }
       next.set(row.seatId, row);
       return next;
+    });
+  }, []);
+
+  // DELETE payloads carry only the primary key (replica identity default),
+  // so eviction is by check-in id, not seat.
+  const evictById = useCallback((checkInId: string) => {
+    setOccupants((prev) => {
+      for (const [seatId, occ] of prev) {
+        if (occ.id === checkInId) {
+          const next = new Map(prev);
+          next.delete(seatId);
+          return next;
+        }
+      }
+      return prev;
     });
   }, []);
 
@@ -202,21 +236,41 @@ export function CheckInLive({
         },
         (payload) => {
           const rec = payload.new as {
+            id: string;
             enrollment_id: string;
             seat_id: string;
             verified: boolean;
+            denied_count?: number;
+            professor_confirmed_at?: string | null;
           };
           if (!rec?.seat_id) return;
           applyChange({
+            id: rec.id,
             enrollmentId: rec.enrollment_id,
             seatId: rec.seat_id,
             verified: rec.verified,
+            deniedCount: rec.denied_count ?? 0,
+            professorConfirmed: rec.professor_confirmed_at != null,
           });
           // Someone we don't have in the directory (activated after load).
           if (!directory[rec.enrollment_id] && !unknownEnrollment.current) {
             unknownEnrollment.current = true;
             router.refresh();
           }
+        }
+      )
+      // DELETEs are subscribed separately and UNFILTERED: with replica
+      // identity default the old row is just { id }, which has no session_id
+      // for the filter to match — a filtered channel may never deliver them.
+      // Eviction is id-keyed, so deletes from other sessions no-op harmlessly.
+      // This is what clears a freed seat (releaseSeat) and the vanishing half
+      // of a professor's swap on everyone else's map.
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "check_ins" },
+        (payload) => {
+          const oldId = (payload.old as { id?: string } | null)?.id;
+          if (oldId) evictById(oldId);
         }
       )
       .subscribe((status) => {
@@ -254,7 +308,7 @@ export function CheckInLive({
       if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
-  }, [sessionId, applyChange, directory, router]);
+  }, [sessionId, applyChange, evictById, directory, router]);
 
   /**
    * Tap an open seat: check in, or — if already checked in — move there.
@@ -264,14 +318,20 @@ export function CheckInLive({
    * its rightful occupant had to go elsewhere.
    */
   /**
-   * Professor: tap an occupied seat to empty it.
-   *
-   * Deliberately not a reassignment. Moving a student somewhere else means
-   * deciding what happens to whoever is already there, which needs a swap and
-   * an atomicity story. Freeing the seat needs neither: the student checks
-   * themselves back in wherever they actually are.
+   * Professor: tap an occupied seat to open its action card (confirm
+   * attendance / free the seat). Tapping used to release immediately, which
+   * meant one accidental tap erased a student's attendance — the card puts a
+   * deliberate step in front of the destructive half, and it's the touch
+   * path to confirmation on a tablet, where the hover card can't exist.
    */
-  async function handleProfessorTap(seat: { id: string; label: string }) {
+  function handleProfessorTap(seat: { id: string; label: string }) {
+    if (!sessionId || pendingSeat) return;
+    if (!occupants.get(seat.id)) return;
+    setActionSeatId(seat.id);
+  }
+
+  /** Professor: empty a seat, from the action card. */
+  async function freeSeat(seat: { id: string; label: string }) {
     if (!sessionId || pendingSeat) return;
     const occupant = occupants.get(seat.id);
     if (!occupant) return;
@@ -279,6 +339,7 @@ export function CheckInLive({
     const previous = occupants;
     const who = directory[occupant.enrollmentId]?.name ?? "That student";
 
+    setActionSeatId(null);
     setPendingSeat(seat.id);
     setOccupants((prev) => {
       const next = new Map(prev);
@@ -294,6 +355,43 @@ export function CheckInLive({
         `Seat ${seat.label} is free. ${who} can check in again wherever they are.`,
         { duration: 6000 }
       );
+    } else {
+      setOccupants(previous);
+      toast.error(result.error, { duration: 8000 });
+    }
+  }
+
+  /**
+   * Professor: vouch for a student from the map. The ring greens
+   * optimistically; the realtime echo of the RPC's UPDATE makes it stick on
+   * every other screen. No seat_verification is written — this is attendance
+   * integrity, not social credit, so people-met counts don't move.
+   */
+  async function confirmAttendance(seat: { id: string; label: string }) {
+    if (!sessionId || confirmBusy) return;
+    const occupant = occupants.get(seat.id);
+    if (!occupant) return;
+
+    const previous = occupants;
+    const who = directory[occupant.enrollmentId]?.name ?? "That student";
+
+    setConfirmBusy(true);
+    setOccupants((prev) => {
+      const next = new Map(prev);
+      next.set(seat.id, { ...occupant, professorConfirmed: true, deniedCount: 0 });
+      return next;
+    });
+
+    const result = await professorConfirmAttendance(
+      sessionId,
+      occupant.enrollmentId
+    );
+    setConfirmBusy(false);
+    setActionSeatId(null);
+
+    if (result.ok) {
+      capture("professor_confirmed_attendance");
+      toast.success(`${who.split(/\s+/)[0]} confirmed.`);
     } else {
       setOccupants(previous);
       toast.error(result.error, { duration: 8000 });
@@ -316,9 +414,15 @@ export function CheckInLive({
       const next = new Map(prev);
       if (from) next.delete(from);
       next.set(seat.id, {
+        // A fresh check-in's row id arrives with the realtime echo; until
+        // then an empty id just can't match any DELETE eviction.
+        id: myCheckIn?.id ?? "",
         enrollmentId: myEnrollmentId,
         seatId: seat.id,
         verified: myCheckIn?.verified ?? false,
+        // A seat change moots any denial (the DB does the same server-side).
+        deniedCount: 0,
+        professorConfirmed: myCheckIn?.professorConfirmed ?? false,
       });
       return next;
     });
@@ -350,16 +454,39 @@ export function CheckInLive({
     }
   }
 
-  async function handleVerify(subjectEnrollmentId: string, relation: SeatRelation) {
-    if (!sessionId) return;
+  async function handleVerify(
+    subjectEnrollmentId: string,
+    relation: SeatRelation
+  ): Promise<boolean> {
+    if (!sessionId) return false;
     const result = await verifyNeighbor(sessionId, subjectEnrollmentId, relation);
     if (result.ok) {
       capture("neighbor_verified", { relation });
       setConfirmed((prev) => new Set(prev).add(subjectEnrollmentId));
-      toast.success("Confirmed. You've officially met.");
-    } else {
-      toast.error(result.error);
+      toast.success(
+        result.data?.firstEverMet
+          ? "Confirmed. You've officially met."
+          : "Confirmed."
+      );
+      return true;
     }
+    toast.error(result.error);
+    return false;
+  }
+
+  async function handleDeny(
+    subjectEnrollmentId: string,
+    relation: SeatRelation
+  ): Promise<boolean> {
+    if (!sessionId) return false;
+    const result = await denyNeighbor(sessionId, subjectEnrollmentId, relation);
+    if (result.ok) {
+      capture("neighbor_denied", { relation });
+      setDeniedByMe((prev) => new Set(prev).add(subjectEnrollmentId));
+      return true;
+    }
+    toast.error(result.error);
+    return false;
   }
 
   // Students get a waiting room; the professor gets the room itself. They are
@@ -393,13 +520,10 @@ export function CheckInLive({
     );
   }
 
-  // Neighbor prompts: adjacent, checked-in, not yet confirmed by me.
-  const neighborPrompts: {
-    relation: SeatRelation;
-    seat: SeatInfo;
-    occupant: OccupantInfo;
-    entry: DirectoryEntry | undefined;
-  }[] = [];
+  // Neighbor prompts: adjacent, checked-in, not yet confirmed (or reported)
+  // by me. First-ever pairs get the introduction treatment; repeats get the
+  // quiet one-tap row.
+  const neighborPrompts: NeighborPromptRow[] = [];
   if (mySeat) {
     (["front", "back", "left", "right"] as SeatRelation[]).forEach((relation) => {
       const neighborLabel = mySeat.neighbors?.[relation];
@@ -408,12 +532,45 @@ export function CheckInLive({
       const occupant = occupants.get(seat.id);
       if (!occupant || occupant.enrollmentId === myEnrollmentId) return;
       if (confirmed.has(occupant.enrollmentId)) return;
+      if (deniedByMe.has(occupant.enrollmentId)) return;
+      const entry = directory[occupant.enrollmentId];
       neighborPrompts.push({
         relation,
-        seat,
-        occupant,
-        entry: directory[occupant.enrollmentId],
+        seatLabel: seat.label,
+        enrollmentId: occupant.enrollmentId,
+        name: entry?.name ?? null,
+        photoUrl: entry?.photoUrl ?? null,
+        firstEver: !metBefore.has(occupant.enrollmentId),
+        fact: neighborFacts[occupant.enrollmentId] ?? null,
       });
+    });
+  }
+
+  // The confirmation ring for an occupied seat, derived the same way on
+  // every screen — including the professor's projection — from data already
+  // on the wire. "Could a peer vouch for them?" is read from the seat's own
+  // neighbor links against current occupancy.
+  function ringFor(seat: SeatInfo | undefined, occupant: OccupantInfo): SeatRing {
+    let hasOccupiedAdjacentSeat = false;
+    for (const relation of ["front", "back", "left", "right"] as const) {
+      const label = seat?.neighbors?.[relation];
+      const neighborSeat = label ? seatByLabel.get(label) : undefined;
+      const neighborOccupant = neighborSeat
+        ? occupants.get(neighborSeat.id)
+        : undefined;
+      if (
+        neighborOccupant &&
+        neighborOccupant.enrollmentId !== occupant.enrollmentId
+      ) {
+        hasOccupiedAdjacentSeat = true;
+        break;
+      }
+    }
+    return deriveSeatRing({
+      verified: occupant.verified,
+      professorConfirmed: occupant.professorConfirmed,
+      deniedCount: occupant.deniedCount,
+      hasOccupiedAdjacentSeat,
     });
   }
 
@@ -435,10 +592,21 @@ export function CheckInLive({
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          {mySeat ? (
+          {mySeat && myCheckIn ? (
             <Badge>
               Your seat: {mySeat.label}
-              {myCheckIn?.verified ? " · verified" : " · awaiting a neighbor"}
+              {(() => {
+                switch (ringFor(mySeat, myCheckIn)) {
+                  case "confirmed":
+                    return " · confirmed";
+                  case "denied":
+                    return " · seat disputed — are you in the right seat?";
+                  case "unconfirmable":
+                    return " · no neighbors yet";
+                  default:
+                    return " · awaiting a neighbor";
+                }
+              })()}
             </Badge>
           ) : (
             <Badge variant="secondary">Tap an open seat to check in</Badge>
@@ -447,7 +615,7 @@ export function CheckInLive({
         </div>
         {!live && (
           <Badge variant="secondary" className="animate-pulse">
-            Reconnecting — updates every 5s
+            Reconnecting — updates every few seconds
           </Badge>
         )}
       </div>
@@ -538,6 +706,29 @@ export function CheckInLive({
                 ? "Front of room (behind you)"
                 : "Front of room"
           }
+          hoverContent={
+            canReassign && sessionId
+              ? (seat, state) => {
+                  const occupant = occupants.get(seat.id);
+                  if (!occupant) return null;
+                  const seatInfo = seatByLabel.get(seat.label);
+                  return (
+                    <SeatActionCard
+                      name={state.name ?? null}
+                      photoUrl={state.photoUrl ?? null}
+                      seatLabel={seat.label}
+                      ring={ringFor(seatInfo, occupant)}
+                      deniedCount={occupant.deniedCount}
+                      busy={confirmBusy || pendingSeat !== null}
+                      onConfirm={() =>
+                        confirmAttendance({ id: seat.id, label: seat.label })
+                      }
+                      onFree={() => freeSeat({ id: seat.id, label: seat.label })}
+                    />
+                  );
+                }
+              : undefined
+          }
           stateFor={(seat) => {
             const occupant = occupants.get(seat.id);
             const isMine = occupant?.enrollmentId === myEnrollmentId;
@@ -550,6 +741,14 @@ export function CheckInLive({
                     ? "verified"
                     : "taken"
                   : "empty",
+              // The confirmation ring — the public answer to "has anyone
+              // vouched for this person?", on every screen including the
+              // projection. Session only: without one there is nothing to
+              // confirm.
+              ring:
+                occupant && !isMine && sessionId
+                  ? ringFor(seatByLabel.get(seat.label), occupant)
+                  : undefined,
               name: entry?.name ?? (occupant ? "A classmate" : null),
               // Pinned so a re-signed URL from a page refresh doesn't make
               // the avatar flash while the browser refetches the same face.
@@ -595,62 +794,39 @@ export function CheckInLive({
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-3 w-3 rounded-sm bg-primary" /> You
           </span>
+          {sessionId && (
+            <>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-sm bg-muted-foreground/20 ring-2 ring-green-500/80" />{" "}
+                Confirmed
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-sm bg-muted-foreground/20 ring-2 ring-red-500/80" />{" "}
+                Awaiting confirm
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-sm bg-muted-foreground/20 ring-2 ring-amber-500/80" />{" "}
+                No neighbor yet
+              </span>
+              {canReassign && (
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-3 w-3 animate-pulse rounded-sm bg-muted-foreground/20 ring-2 ring-red-600/80" />{" "}
+                  Reported absent from seat
+                </span>
+              )}
+            </>
+          )}
         </div>
       </div>
 
-      {mySeat && neighborPrompts.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Confirm your neighbors</CardTitle>
-            <CardDescription>
-              Verify the people around you are actually here — and say hi
-              while you&apos;re at it.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            {neighborPrompts.map(({ relation, seat, occupant, entry }) => (
-              <div
-                key={occupant.enrollmentId}
-                className="flex items-center justify-between gap-3 rounded-lg border p-3"
-              >
-                <div className="flex items-center gap-3">
-                  <Avatar className="h-10 w-10">
-                    {entry?.photoUrl && (
-                      <AvatarImage
-                        src={stablePhotoUrl(entry.photoUrl) ?? entry.photoUrl}
-                        alt={entry?.name ?? ""}
-                      />
-                    )}
-                    <AvatarFallback>
-                      {initials(entry?.name ?? "?")}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <p className="text-sm font-medium">
-                      {entry?.name ?? "A classmate"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {relation === "front"
-                        ? "In front of you"
-                        : relation === "back"
-                          ? "Behind you"
-                          : relation === "left"
-                            ? "To your left"
-                            : "To your right"}{" "}
-                      · seat {seat.label}
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => handleVerify(occupant.enrollmentId, relation)}
-                >
-                  They&apos;re here
-                </Button>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+      {mySeat && (
+        <NeighborPrompts
+          rows={neighborPrompts}
+          socialEndsAt={socialEndsAt}
+          aloneInRoom={occupants.size <= 1}
+          onVerify={handleVerify}
+          onDeny={handleDeny}
+        />
       )}
 
       {mySeat && (
@@ -661,6 +837,50 @@ export function CheckInLive({
             </Link>
           </Button>
         </div>
+      )}
+
+      {/* Professor: the tapped seat's action card — the touch path to
+          confirm/free, and the deliberate step in front of releasing. */}
+      {canReassign && (
+        <Dialog
+          open={actionSeatId !== null}
+          onOpenChange={(open) => {
+            if (!open) setActionSeatId(null);
+          }}
+        >
+          <DialogContent className="max-w-xs">
+            {(() => {
+              if (!actionSeatId) return null;
+              const occupant = occupants.get(actionSeatId);
+              const seatInfo = seats.find((s) => s.id === actionSeatId);
+              if (!occupant || !seatInfo) return null;
+              const entry = directory[occupant.enrollmentId];
+              return (
+                <>
+                  <DialogTitle className="sr-only">
+                    Seat {seatInfo.label}
+                  </DialogTitle>
+                  <div className="flex justify-center">
+                    <SeatActionCard
+                      name={entry?.name ?? null}
+                      photoUrl={stablePhotoUrl(entry?.photoUrl)}
+                      seatLabel={seatInfo.label}
+                      ring={ringFor(seatInfo, occupant)}
+                      deniedCount={occupant.deniedCount}
+                      busy={confirmBusy || pendingSeat !== null}
+                      onConfirm={() =>
+                        confirmAttendance({ id: seatInfo.id, label: seatInfo.label })
+                      }
+                      onFree={() =>
+                        freeSeat({ id: seatInfo.id, label: seatInfo.label })
+                      }
+                    />
+                  </div>
+                </>
+              );
+            })()}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
