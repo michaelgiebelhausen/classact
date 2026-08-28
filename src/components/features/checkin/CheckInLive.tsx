@@ -22,9 +22,11 @@ import {
 } from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
+import { stablePhotoUrl } from "@/lib/photopin";
 import type { TableFootprint } from "@/lib/roomlayout";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
 import Link from "next/link";
+import { Dices } from "lucide-react";
 
 export interface SeatInfo {
   id: string;
@@ -113,6 +115,19 @@ export function CheckInLive({
    * match the map to the room in front of them.
    */
   const [studentFlipped, setStudentFlipped] = useState(false);
+  /**
+   * Cold call: the last random pick, keyed by student (not seat) so the ring
+   * follows a reassignment and vanishes if they leave. The session id rides
+   * along so a pick never outlives the class it was made in.
+   */
+  const [spotlight, setSpotlight] = useState<{
+    sessionId: string;
+    enrollmentId: string;
+  } | null>(null);
+  const spotlightId =
+    spotlight && spotlight.sessionId === sessionId
+      ? spotlight.enrollmentId
+      : null;
   const unknownEnrollment = useRef(false);
 
   const seatByLabel = useMemo(() => {
@@ -402,6 +417,20 @@ export function CheckInLive({
     });
   }
 
+  // Every click is an independent draw — repeats included. Students who've
+  // already answered stay in the pool on purpose: knowing they could be
+  // called again is what keeps the room paying attention.
+  function handleColdCall() {
+    if (!sessionId) return;
+    const present = Array.from(occupants.values());
+    if (present.length === 0) return;
+    const pick = present[Math.floor(Math.random() * present.length)];
+    setSpotlight({ sessionId, enrollmentId: pick.enrollmentId });
+    const name = directory[pick.enrollmentId]?.name ?? "A student";
+    const label = seats.find((s) => s.id === pick.seatId)?.label;
+    toast.success(label ? `${name} — seat ${label}` : name);
+  }
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -477,7 +506,22 @@ export function CheckInLive({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-lg border p-4">
+      <div className="relative overflow-x-auto rounded-lg border p-4">
+        {canReassign && sessionId && (
+          <Button
+            variant="outline"
+            size="sm"
+            // z-30 clears the designer table handles (z-20); the professor map
+            // uses `fit`, so this container never actually scrolls and the
+            // button stays pinned to the visible corner.
+            className="absolute right-2 top-2 z-30 h-7 gap-1 px-2 text-xs"
+            disabled={occupants.size === 0}
+            onClick={handleColdCall}
+          >
+            <Dices className="h-3.5 w-3.5" />
+            Random student
+          </Button>
+        )}
         <RoomMap
           seats={seats}
           onSeatTap={handleSeatTap}
@@ -485,6 +529,7 @@ export function CheckInLive({
           flipped={canReassign || studentFlipped}
           perspective={canReassign}
           fit={canReassign}
+          photoZoom={canReassign}
           podium
           frontLabel={
             canReassign
@@ -506,7 +551,9 @@ export function CheckInLive({
                     : "taken"
                   : "empty",
               name: entry?.name ?? (occupant ? "A classmate" : null),
-              photoUrl: entry?.photoUrl ?? null,
+              // Pinned so a re-signed URL from a page refresh doesn't make
+              // the avatar flash while the browser refetches the same face.
+              photoUrl: stablePhotoUrl(entry?.photoUrl),
               pending: pendingSeat === seat.id,
               // The professor taps an occupied seat to free it, so an empty
               // one does nothing. Students tap open seats — a check-in first,
@@ -523,6 +570,10 @@ export function CheckInLive({
                   !myCheckIn &&
                   Boolean(myEnrollmentId) &&
                   !mySeatSet.has(seat.id),
+              spotlight:
+                canReassign &&
+                spotlightId !== null &&
+                occupant?.enrollmentId === spotlightId,
             };
           }}
         />
@@ -565,7 +616,10 @@ export function CheckInLive({
                 <div className="flex items-center gap-3">
                   <Avatar className="h-10 w-10">
                     {entry?.photoUrl && (
-                      <AvatarImage src={entry.photoUrl} alt={entry?.name ?? ""} />
+                      <AvatarImage
+                        src={stablePhotoUrl(entry.photoUrl) ?? entry.photoUrl}
+                        alt={entry?.name ?? ""}
+                      />
                     )}
                     <AvatarFallback>
                       {initials(entry?.name ?? "?")}

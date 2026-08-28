@@ -14,7 +14,16 @@ import {
 /**
  * Dev gallery: every room preset rendered through the real geometry +
  * RoomMap pipeline. No data, no auth — a visual test bench for layouts.
+ * Professor mode seats a mock roster so hover photo-zoom and the random
+ * student picker can be exercised without a live class.
  */
+
+const FIRST = ["Ava", "Ben", "Cody", "Dana", "Eli", "Farah", "Gus", "Hana", "Ivan", "Jade", "Kofi", "Lena", "Mia", "Noor", "Omar", "Priya"];
+const LAST = ["Adams", "Baker", "Chen", "Diaz", "Evans", "Ford", "Gray", "Hill", "Iqbal", "Jones", "Khan", "Lopez", "Mason", "Ng", "Ortiz", "Patel"];
+
+function mockName(i: number): string {
+  return `${FIRST[i % FIRST.length]} ${LAST[(i * 7) % LAST.length]}`;
+}
 
 const SAMPLES: Array<{ title: string; params: PresetParams }> = [
   {
@@ -128,6 +137,17 @@ function PresetPreview({
       tableFootprint: p.tableId ? footprints.get(p.tableId) : undefined,
     }));
   }, [params]);
+  // Mock roster: roughly two thirds of seats occupied, deterministic per
+  // preset so reloads look the same. Names only — the initials fallback is
+  // exactly what a student without a photo renders.
+  const occupied = useMemo(() => {
+    const m = new Map<string, string>();
+    seats.forEach((s, i) => {
+      if (i % 3 !== 0) m.set(s.id, mockName(i));
+    });
+    return m;
+  }, [seats]);
+  const [spotlightSeatId, setSpotlightSeatId] = useState<string | null>(null);
   return (
     <section className="grid gap-2">
       <h2 className="text-sm font-semibold">
@@ -136,11 +156,28 @@ function PresetPreview({
       <div
         className={
           professor
-            ? "rounded-lg border bg-muted/20 p-4"
+            ? "relative rounded-lg border bg-muted/20 p-4"
             : "overflow-x-auto rounded-lg border bg-muted/20 p-4"
         }
-        style={professor ? { height: 420 } : undefined}
+        // minHeight, not height: a fixed 420 let a tall fitted room bleed
+        // under the NEXT card's transparent SVG, which then swallowed hovers
+        // on the front rows. Production containers auto-size, so this was a
+        // bench-only artifact.
+        style={professor ? { minHeight: 420 } : undefined}
       >
+        {professor && (
+          <button
+            type="button"
+            className="absolute right-2 top-2 z-30 rounded-md border bg-background px-2 py-1 text-xs font-medium shadow-sm hover:border-primary hover:text-primary"
+            onClick={() => {
+              const ids = Array.from(occupied.keys());
+              if (ids.length === 0) return;
+              setSpotlightSeatId(ids[Math.floor(Math.random() * ids.length)]);
+            }}
+          >
+            Random student
+          </button>
+        )}
         <RoomMap
           seats={seats}
           ariaLabel={title}
@@ -148,8 +185,29 @@ function PresetPreview({
           flipped={professor}
           perspective={professor}
           fit={professor}
+          photoZoom={professor}
           podium
           frontLabel={professor ? "You are here — front of room" : "Front of room"}
+          onSeatTap={professor ? () => {} : undefined}
+          stateFor={
+            professor
+              ? (seat) => {
+                  const name = occupied.get(seat.id);
+                  if (!name) return { kind: "empty", tappable: false };
+                  const kind = name.length % 2 === 0 ? "verified" : "taken";
+                  return {
+                    kind,
+                    name,
+                    // "Taken" seats are tappable like the live professor map;
+                    // "verified" ones are deliberately left non-tappable to
+                    // exercise the LastSessionMap-style hover-only path.
+                    tappable: kind === "taken",
+                    caption: name.split(" ")[0],
+                    spotlight: seat.id === spotlightSeatId,
+                  };
+                }
+              : undefined
+          }
         />
       </div>
     </section>

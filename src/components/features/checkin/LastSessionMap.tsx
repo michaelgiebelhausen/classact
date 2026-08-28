@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/card";
 import { RoomMap } from "@/components/features/rooms/RoomMap";
 import type { RoomMapSeat } from "@/components/features/rooms/RoomMap";
+import { stablePhotoUrl } from "@/lib/photopin";
 
 export interface LastSessionOccupant {
   seatId: string;
@@ -26,7 +27,9 @@ export interface LastSessionOccupant {
  *
  * Rendered flat and small on purpose: no perspective, no fit, no taps. This is
  * a reference, not the thing being projected, and making it look like the live
- * map would invite someone to try to correct a seat in it.
+ * map would invite someone to try to correct a seat in it. Hovering a student
+ * does enlarge their photo (photoZoom) — that's how a professor puts a name to
+ * a face from last time — but clicking still does nothing.
  *
  * A client component because it hands `stateFor` — a function — to RoomMap,
  * and functions cannot cross the server/client boundary. As a server component
@@ -65,13 +68,16 @@ export function LastSessionMap({
             captions
             flipped
             podium
+            photoZoom
             frontLabel="Front of room"
             stateFor={(seat) => {
               const who = bySeat.get(seat.id);
               return {
                 kind: who ? "taken" : "empty",
                 name: who?.name ?? null,
-                photoUrl: who?.photoUrl ?? null,
+                // Pinned so the periodic page refresh (which re-signs photo
+                // URLs) doesn't make last class's faces blink out and back.
+                photoUrl: stablePhotoUrl(who?.photoUrl),
                 caption: who?.name?.split(/\s+/)[0] ?? undefined,
                 tappable: false,
               };

@@ -2,6 +2,12 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { TableFootprint } from "@/lib/roomlayout";
 import {
   depthScale,
@@ -51,6 +57,8 @@ export interface RoomMapSeatState {
   caption?: string;
   /** Needs attention (red ring) — e.g. the student is currently tabbed away. */
   alert?: boolean;
+  /** The cold-call pick: a big primary ring so the whole room can find them. */
+  spotlight?: boolean;
 }
 
 interface Props {
@@ -85,6 +93,11 @@ interface Props {
   fit?: boolean;
   /** Mark where the professor stands, at the front, centre. */
   podium?: boolean;
+  /**
+   * Hovering a seated student pops a larger photo — the on-seat avatar is too
+   * small to recognise a face, especially in the shrunken back rows.
+   */
+  photoZoom?: boolean;
 }
 
 const UNIT = 44; // px per seat unit — tap-target sized
@@ -121,6 +134,7 @@ export function RoomMap({
   perspective = false,
   fit = false,
   podium = false,
+  photoZoom = false,
 }: Props) {
   // Live pixel offset of the table being dragged, before it's committed.
   const [drag, setDrag] = useState<{
@@ -458,7 +472,11 @@ export function RoomMap({
             aria-hidden="true"
             className={[
               "pointer-events-none absolute truncate text-center text-[9px] font-medium leading-tight",
-              state.alert ? "text-destructive" : "text-muted-foreground",
+              state.alert
+                ? "text-destructive"
+                : state.spotlight
+                  ? "text-primary font-semibold"
+                  : "text-muted-foreground",
             ].join(" ")}
             style={{
               left: geo.px(seat.x) - geo.hu / 2 + 2,
@@ -485,13 +503,25 @@ export function RoomMap({
                 : state.highlight
                   ? "empty — you haven't sat here yet"
                   : "empty";
-        return (
-          <Fragment key={seat.id}>
+        // A seat with a hover photo card must stay hoverable (and focusable)
+        // even when tapping it does nothing — the last-class map, say — and a
+        // disabled button fires no pointer events at all. So zoomable seats
+        // stay enabled and the CLICK is what's gated on tappable. Do not
+        // "simplify" the onClick back to unconditional: that guard is what
+        // keeps an enabled-but-inert seat inert.
+        const zoomable = Boolean(
+          photoZoom &&
+            (state.kind === "taken" || state.kind === "verified") &&
+            state.name
+        );
+        const seatButton = (
           <button
             type="button"
-            aria-label={`Seat ${seat.label}, ${stateLabel}`}
-            disabled={!tappable}
-            onClick={() => onSeatTap?.(seat)}
+            aria-label={`Seat ${seat.label}, ${stateLabel}${
+              state.spotlight ? ", cold call pick" : ""
+            }`}
+            disabled={!tappable && !zoomable}
+            onClick={tappable ? () => onSeatTap?.(seat) : undefined}
             className={[
               "absolute flex items-center justify-center rounded-md border text-[10px] font-medium transition-colors",
               "focus-visible:ring-3 focus-visible:ring-ring/50 outline-none",
@@ -509,6 +539,10 @@ export function RoomMap({
                           : "bg-card hover:border-primary hover:text-primary"
                         : "bg-card text-muted-foreground/60",
               state.pending ? "animate-pulse" : "",
+              state.spotlight
+                ? "z-10 border-primary ring-4 ring-primary/70 ring-offset-2 shadow-lg"
+                : "",
+              // Alert is listed after spotlight so its red ring wins if both apply.
               state.alert
                 ? "border-destructive ring-2 ring-destructive/70 ring-offset-1"
                 : "",
@@ -551,6 +585,29 @@ export function RoomMap({
               />
             )}
           </button>
+        );
+        // The tooltip content is portalled, so the big photo escapes the
+        // overflow-hidden `fit` shell that would clip an in-place zoom.
+        return (
+          <Fragment key={seat.id}>
+          {zoomable ? (
+            <Tooltip>
+              <TooltipTrigger asChild>{seatButton}</TooltipTrigger>
+              <TooltipContent side="top" sideOffset={6} className="flex-col p-2">
+                <Avatar className="h-24 w-24">
+                  {state.photoUrl && (
+                    <AvatarImage src={state.photoUrl} alt={state.name ?? ""} />
+                  )}
+                  <AvatarFallback className="text-2xl">
+                    {initials(state.name ?? "")}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="text-xs font-medium">{state.name}</span>
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            seatButton
+          )}
           {caption}
           </Fragment>
         );
@@ -656,7 +713,16 @@ export function RoomMap({
     </div>
   );
 
-  if (!fit) return room;
+  // Provider is context-only (no DOM). A short delay keeps the photo cards
+  // from flickering while the mouse crosses the room; skipDelay makes
+  // sweeping seat-to-seat feel instant after the first hover.
+  const wrapped = (
+    <TooltipProvider delayDuration={200} skipDelayDuration={100}>
+      {room}
+    </TooltipProvider>
+  );
+
+  if (!fit) return wrapped;
 
   // The shell owns the available space; the room scales down inside it.
   //
@@ -670,7 +736,7 @@ export function RoomMap({
       className="w-full overflow-hidden"
       style={scale !== 1 ? { height: geo.height * scale } : undefined}
     >
-      {room}
+      {wrapped}
     </div>
   );
 }
