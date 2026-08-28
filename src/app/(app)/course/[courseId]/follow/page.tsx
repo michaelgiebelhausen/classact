@@ -313,12 +313,12 @@ export default async function FollowAlongPage({
     );
   }
 
-  const { data: note } = await supabase
-    .from("lecture_notes")
-    .select("content")
+  const { data: noteEntries } = await supabase
+    .from("lecture_note_entries")
+    .select("id, page, content, created_at")
     .eq("lecture_id", lecture.id)
     .eq("enrollment_id", myEnrollment.id)
-    .maybeSingle();
+    .order("created_at", { ascending: true });
 
   const { data: myFocusEvents } = await supabase
     .from("focus_events")
@@ -399,7 +399,12 @@ export default async function FollowAlongPage({
         deckKind={deck.kind}
         fileUrl={fileUrl}
         embedUrl={deck.embed_url}
-        initialNotes={note?.content ?? ""}
+        initialEntries={(noteEntries ?? []).map((e) => ({
+          id: e.id,
+          page: e.page,
+          content: e.content,
+          createdAt: e.created_at,
+        }))}
         initialAwayCount={myFocus.awayCount}
         initialAwayMs={myFocus.awayMs}
         initialPauses={lecture.pauses ?? []}

@@ -6,8 +6,6 @@ import { DECK_BUCKET } from "@/lib/storage";
 import type { ActionResult } from "@/server/actions/auth";
 import type { LecturePause } from "@/types/db";
 
-const MAX_NOTE_CHARS = 100_000;
-
 /** Only published Google Slides embed links are accepted. */
 function isGoogleSlidesUrl(url: string): boolean {
   try {
@@ -320,28 +318,6 @@ export async function endLecture(
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't end the lecture." };
   revalidatePath(`/course/${courseId}/follow`);
-  return { ok: true };
-}
-
-/** Student: autosave private lecture notes (upsert per lecture). */
-export async function saveLectureNotes(
-  courseId: string,
-  lectureId: string,
-  content: string
-): Promise<ActionResult> {
-  const { supabase, error, enrollmentId } = await requireEnrollment(courseId);
-  if (error || !enrollmentId) return { ok: false, error: error ?? "No enrollment." };
-
-  const { error: upsertError } = await supabase.from("lecture_notes").upsert(
-    {
-      lecture_id: lectureId,
-      enrollment_id: enrollmentId,
-      content: content.slice(0, MAX_NOTE_CHARS),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "lecture_id,enrollment_id" }
-  );
-  if (upsertError) return { ok: false, error: "Couldn't save your notes." };
   return { ok: true };
 }
 

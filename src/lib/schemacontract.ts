@@ -72,6 +72,11 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
     columns: ["body"],
     migration: "0037_speed_grader.sql",
   },
+  {
+    table: "lecture_note_entries",
+    columns: [],
+    migration: "0038_note_entries.sql",
+  },
 ];
 
 /**

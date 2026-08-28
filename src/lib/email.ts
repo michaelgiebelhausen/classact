@@ -181,6 +181,51 @@ export async function sendAbsenceAppealNotification(input: {
   }
 }
 
+/**
+ * A student's own notes, sent wherever they keep things.
+ *
+ * Unlike the courtesy notifications around it, this one reports failure to the
+ * caller instead of swallowing it: the student pressed send and is waiting to
+ * hear, and "it quietly didn't go" is exactly the doubt that had them keeping
+ * a private copy in Word.
+ *
+ * The Markdown rides as both the body and an attachment — the body so it is
+ * readable on a phone without opening anything, the file so it can be dropped
+ * straight into a notes vault.
+ */
+export async function sendNotesExport(input: {
+  to: string;
+  courseName: string;
+  filename: string;
+  markdown: string;
+}): Promise<{ sent: boolean; error?: string }> {
+  if (!isConfigured.email) {
+    return { sent: false, error: "Email isn't set up yet — download instead." };
+  }
+  try {
+    const resend = new Resend(env.resendApiKey);
+    const { error } = await resend.emails.send({
+      from: env.emailFrom,
+      to: input.to,
+      subject: `Your ${input.courseName} notes`,
+      text: input.markdown,
+      attachments: [
+        {
+          filename: input.filename,
+          content: Buffer.from(input.markdown, "utf8").toString("base64"),
+        },
+      ],
+    });
+    if (error) return { sent: false, error: error.message };
+    return { sent: true };
+  } catch (err) {
+    return {
+      sent: false,
+      error: err instanceof Error ? err.message : "Send failed.",
+    };
+  }
+}
+
 export async function sendFeedbackNotification(input: {
   to: string[];
   kind: string;

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Eye, NotebookPen, Pause, Radio, Sparkles } from "lucide-react";
+import { AlertTriangle, Eye, Pause, Radio, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,9 @@ import {
 } from "@/components/ui/card";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
-import { recordFocusEvent, saveLectureNotes } from "@/server/actions/lectures";
+import { NoteFeed } from "@/components/features/follow/NoteFeed";
+import type { NoteEntryData } from "@/components/features/notes/NoteEntryItem";
+import { recordFocusEvent } from "@/server/actions/lectures";
 import { submitPollAnswer } from "@/server/actions/polls";
 import {
   effectiveAwayMs,
@@ -50,7 +52,8 @@ interface Props {
   deckKind: "pdf" | "google_slides";
   fileUrl: string | null;
   embedUrl: string | null;
-  initialNotes: string;
+  /** Notes this student already took in this lecture, oldest first. */
+  initialEntries: NoteEntryData[];
   /** Prior focus tally for this lecture (survives refreshes). */
   initialAwayCount: number;
   initialAwayMs: number;
@@ -62,8 +65,6 @@ interface Props {
   initialMyAnswers: Array<{ phase: PollPhase; choice: number }>;
   initialPartnerIds: string[];
 }
-
-type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
 function initials(name: string): string {
   return name
@@ -84,7 +85,7 @@ export function StudentFollow({
   deckKind,
   fileUrl,
   embedUrl,
-  initialNotes,
+  initialEntries,
   initialAwayCount,
   initialAwayMs,
   initialPauses,
@@ -96,8 +97,6 @@ export function StudentFollow({
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
   const [live, setLive] = useState(true);
-  const [notes, setNotes] = useState(initialNotes);
-  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [awayCount, setAwayCount] = useState(initialAwayCount);
   const [awayMs, setAwayMs] = useState(initialAwayMs);
   const [warning, setWarning] = useState<{ durationMs: number } | null>(null);
@@ -121,10 +120,8 @@ export function StudentFollow({
   const [voting, setVoting] = useState(false);
   const roundIdRef = useRef<string | null>(initialRound?.id ?? null);
 
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAwayRef = useRef(false);
   const awayStartRef = useRef<number | null>(null);
-  const notesRef = useRef(initialNotes);
 
   // ---- Slide sync: realtime on the lecture row, 5s polling fallback ----
   useEffect(() => {
@@ -428,39 +425,6 @@ export function StudentFollow({
     };
   }, [courseId, lectureId]);
 
-  // ---- Notes autosave (1.5s after typing stops) ----
-  const scheduleSave = useCallback(() => {
-    setSaveState("dirty");
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaveState("saving");
-      const result = await saveLectureNotes(
-        courseId,
-        lectureId,
-        notesRef.current
-      );
-      setSaveState(result.ok ? "saved" : "error");
-      if (!result.ok) toast.error(result.error);
-    }, 1500);
-  }, [courseId, lectureId]);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, []);
-
-  const saveLabel =
-    saveState === "saving"
-      ? "Saving…"
-      : saveState === "saved"
-        ? "Saved"
-        : saveState === "dirty"
-          ? "Unsaved changes"
-          : saveState === "error"
-            ? "Save failed — keep a copy!"
-            : "Notes are private to you";
-
   // ---- Poll card (pops into the rail while a round is live) ----
   const canVote = round?.stage === "think" || round?.stage === "revote";
   const selection =
@@ -607,26 +571,12 @@ export function StudentFollow({
           />
         ) : null}
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <NotebookPen className="size-4" /> My notes
-            </CardTitle>
-            <CardDescription>{saveLabel}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <textarea
-              value={notes}
-              onChange={(e) => {
-                setNotes(e.target.value);
-                notesRef.current = e.target.value;
-                scheduleSave();
-              }}
-              placeholder="Type your lecture notes here — they save automatically."
-              className="min-h-40 w-full resize-y rounded-lg border bg-background p-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </CardContent>
-        </Card>
+        <NoteFeed
+          courseId={courseId}
+          lectureId={lectureId}
+          page={page}
+          initialEntries={initialEntries}
+        />
       </div>
 
       <div className="grid content-start gap-4">

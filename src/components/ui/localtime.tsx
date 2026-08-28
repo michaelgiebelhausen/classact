@@ -29,7 +29,9 @@ export type LocalTimeVariant =
   /** Aug 26, 11:59 PM — compact, for dense lists and rosters. */
   | "short"
   /** August 26, 2026 — no clock time. */
-  | "date";
+  | "date"
+  /** 11:59 PM — clock only, for things stamped within a single sitting. */
+  | "time";
 
 const FORMATS: Record<LocalTimeVariant, Intl.DateTimeFormatOptions | undefined> = {
   full: undefined,
@@ -40,6 +42,7 @@ const FORMATS: Record<LocalTimeVariant, Intl.DateTimeFormatOptions | undefined> 
     minute: "2-digit",
   },
   date: { year: "numeric", month: "long", day: "numeric" },
+  time: { hour: "numeric", minute: "2-digit" },
 };
 
 interface Props {

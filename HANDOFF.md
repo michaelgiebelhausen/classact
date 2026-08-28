@@ -306,6 +306,63 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Notes students can actually keep (0038)
+
+**Run `supabase/migrations/0038_note_entries.sql` BEFORE deploying.** Deploy
+order is safe in the sense that nothing breaks either way — the old build
+writes freeform blobs the new table ignores, and the new build's reads simply
+come back empty — but running it first is what keeps a student from typing a
+note and being told "Couldn't save that note." The schema guard lists
+`lecture_note_entries` in `SCHEMA_CONTRACT`, so an unmigrated database
+announces itself at boot rather than quietly showing an empty notebook.
+
+**Re-run the import if a lecture was live during the window.** The migration
+ends with an `insert … select` that imports each old freeform blob as one
+unstamped entry. It is idempotent — it skips any student who already has an
+unstamped entry for that lecture — so if class was in session between running
+the migration and the deploy landing, paste that one statement again
+afterwards and it will catch the stragglers without duplicating anyone.
+
+**Why this exists.** Students were typing notes into ClassAct and then pasting
+them into a Word document, because nothing told them what became of the text.
+The text was always being saved; it was simply unreachable the moment the
+lecture ended, which from the student's side is indistinguishable from being
+thrown away.
+
+**What this ships.**
+
+- **Notes are a running log, not a box.** Each thought is committed with Enter
+  (Shift+Enter for a new line) and stamped with the slide that was on screen
+  when they *started typing it* — not wherever the professor has moved on to
+  by the time they finish. Entries can be edited or deleted afterwards.
+- **A Notes page per course**, next to Follow Along in the sidebar. Every
+  lecture's notes, grouped and dated, still private.
+- **Export that survives leaving.** Download as a Markdown file, or email it
+  anywhere — their own inbox, or an assistant that reads Markdown. The email
+  carries the notes as both the body and a `.md` attachment. Limit is 5 sends
+  per hour per person, in memory, so it resets on redeploy (same tradeoff as
+  invites).
+- **A draft is hard to lose.** Navigating away in-app commits it; closing the
+  tab mirrors it to `localStorage` and it comes back on the next visit.
+
+**Privacy is enforced by RLS, not by the UI.** The only policy on
+`lecture_note_entries` is the author's own, copied word for word from the old
+`lecture_notes` policy. The professor has no read path — the Notes page shows
+them a card saying exactly that. This matters more than it looks: a student
+who suspects the professor can read their notes keeps the real thinking
+somewhere else, which is the behavior this whole change exists to end.
+
+**`lecture_notes` is now legacy**, like `profiles.role` after 0035 — nothing
+writes to it, its contents have been imported, and it is droppable once the
+import is confirmed in production.
+
+**Smoke test (3 minutes).** Start a lecture, open the student view, type a
+note and press Enter — it appears with a slide badge. Advance the deck and
+add another; the badges differ. Reload: both are still there. Open Notes from
+the sidebar, download the `.md`, and confirm the slide headings. Send one
+email to yourself. As the professor, open the same course's Notes page and
+confirm you see the privacy card and no notes.
+
 ## The professor's order, and what it's worth (0037)
 
 **Run `supabase/migrations/0037_speed_grader.sql` BEFORE deploying.** NOT
