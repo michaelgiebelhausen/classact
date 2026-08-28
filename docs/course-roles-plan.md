@@ -51,95 +51,69 @@ marks work; they are not handed a dossier on the person who submitted it.
 
 ### Observer
 
-**Their reputation metrics are not impacted by the class.**
+**An observer's activity in this course contributes nothing to their My
+Metrics. Full stop.**
 
 Worth flagging because this is *not* what Observer means in Canvas. There, an
 observer is usually a parent or advisor watching a particular student. Here it
 is someone sitting in on the class themselves — a visiting colleague, an
-auditor — who participates like a student but under different expectations.
+auditor.
 
-**Why this matters more than it looks.** My Metrics is not a usage report. In
-Mike's words it is "sort of a reflection of your character as a member of the
-classroom community" — it reads shows-up-regularly, on-time, networks with
-people, answers questions, turns work in, and reports them back as
-Dependability, Initiative, Collaboration, Coachability. It makes a claim about
-who you are.
+**Why the rule exists.** My Metrics is not a usage report. In Mike's words it
+is "sort of a reflection of your character as a member of the classroom
+community" — it reads shows-up-regularly, on-time, networks with people,
+answers questions, turns work in, and reports them back as Dependability,
+Initiative, Collaboration, Coachability. It makes a claim about who you are.
 
 An observer's attendance is erratic and their participation partial. For an
 observer **that is the role working correctly, not a character defect.** Score
-them on student expectations and the metric doesn't just read low — it says
-something false about the person. That is the harm to avoid.
+them on student expectations and the metric doesn't merely read low — it says
+something false about the person. That is the harm the rule prevents, and
+excluding the course entirely prevents it completely.
 
-**So the rule is asymmetric, and this is the part to get right.** Mike's words
-are "shouldn't *negatively* impact" — not "shouldn't count". Those differ:
+**The observer's tab stays visible, and says why.** Not a blank screen and not
+a hidden nav item — a plain line: *"You're observing this class — nothing here
+counts toward your record."* An observer is likely wondering exactly that, and
+this is now always the answer.
 
-- What an observer **does** do is real evidence of character and should count
-  for them. If they show up and network and answer questions, that happened.
-- What they **don't** do must not count against them.
+**One-way: observers count for students, never for themselves.** An observer is
+a real body in the room. They appear on the seat map and in the name games, and
+a student who meets them or verifies them as a neighbour gets full credit for
+it — from the student's side they met a person, which is true. The exclusion
+runs in one direction only. (This also settles what used to be an open
+question here: yes, observers appear on the roster and seat map.)
 
-That rules out the obvious implementation. Excluding the course wholesale from
-their aggregation is wrong in the generous direction — it throws away the good
-along with the bad, and an observer who engages well ends up with nothing to
-show for it.
+**The pattern already exists in the codebase.** `saveNameGameScore`
+(`src/server/actions/games.ts:36`) does exactly this today: someone with no
+active enrollment can play the name games, and the score simply isn't
+recorded — *"Professor or observer: let them play, just don't score it."*
+Participate freely, nothing recorded about you. That is the observer rule in
+miniature, and it's the idiom to follow.
 
-**Mechanically it is the denominators.** The scores are ratios over what the
-course expected of you:
+**But note where it would need changing.** It keys on *absence of an active
+enrollment*. An observer under a `course_staff` model may well hold an
+enrollment row, at which point this check would start scoring them. Any
+implementation has to sweep for "no enrollment ⇒ don't record" checks like
+this one and make them role-aware, not just add an exclusion filter to the
+employability aggregation.
 
-```
-attendanceRate = sessionsAttended / sessionsHeld        // employability.ts:140
-verifiedRate   = verifiedAttendances / sessionsAttended // :142
-```
+**Considered and rejected — don't re-derive it.** An earlier draft of this note
+built something more elaborate: count an observer's numerators but not the
+course's denominators, so a committed observer could still earn a portrait,
+gated behind an activity threshold so the modal observer got no portrait at
+all rather than a faint one. It works, and it was dropped on purpose.
 
-`sessionsHeld` is "every class this course ran", which is the right
-expectation for an enrolled student and the wrong one for an observer. Same
-shape for `peerPairsAssigned` vs `peerPairsDone`, and for assignments. **Count
-an observer's numerators; don't hold them to the course's denominators.**
-Non-participation should read as "no signal here", which the code already
-models — `hasSignal` and the `null`-able means exist precisely for
-"nothing to read yet" — rather than as a zero, which reads as a failing.
+Mike, 2026-08-28: *"I would rather have a system that works for the people who
+are actually students than to design something around the one or two outliers
+(less than 1% of the users who are observers who actually contribute)."*
 
-**The real distribution, from Mike (2026-08-28).** This is what the design has
-to fit, and the two ends pull in opposite directions:
-
-- **The modal observer** has some interest in the course, shows up once or
-  twice, and disappears. This is the common case, and it must not be punished.
-- **The committed observer** comes to most classes and does the assignments.
-  Mike has had these. That effort should be rewarded.
-
-**So the mechanism is a ratchet: the floor is silence, the ceiling is open.**
-Activity can only ever add. Absence is never evidence against them.
-
-That resolves a trap in the numerators-only rule as I first wrote it. Strip the
-denominators and the modal observer still lands at a low raw count — which
-`levelFor()` renders as **"getting started"**, a displayed level, and still a
-mild claim about their character. For someone who attended twice and left,
-that claim is not true; they didn't start anything and weren't trying to.
-
-The correct output for the modal observer is **no portrait at all**, not a
-faint one. The code already has the concept: `hasSignal: false` means "there's
-essentially no activity to read yet." An observer's metrics should stay behind
-that gate until their own activity clears a threshold — and then be built
-from what they actually did.
-
-Practically:
-
-- **Below the threshold — no metrics, and say why.** Not an empty state that
-  reads as failure. Something honest and non-judgmental: *you're observing
-  this class; nothing here is counting toward your record.* That is genuinely
-  useful information to an observer, who may well be wondering.
-- **Above it — a real portrait**, earned, from numerators only.
-
-The threshold itself is a tuning question for whenever this is built, not a
-decision to make now.
-
-**Consequence to write down before someone trips on it:** observer metrics are
-therefore not comparable to student metrics, because they are measured against
-a different set of expectations. Never rank them together, and never put an
-observer in a class-wide comparison or leaderboard.
-
-Open sub-question: does an observer still appear on the professor's roster and
-seat map? Probably yes — they're physically in the room and the seat map is a
-spatial tool — but that hasn't been decided.
+**What that costs, stated plainly so it doesn't look like an oversight:** the
+committed observer who attends most classes and does the assignments earns
+nothing for it. That is real, and it is under 1% of observers, who are
+themselves a small minority. The price buys a rule that is one sentence long,
+has no threshold to tune, and cannot be got subtly wrong — which the ratchet
+very much could. If observers ever stop being rare, revisit; until then this
+is the right trade.
 
 ### Not specified
 
@@ -159,10 +133,10 @@ re-labelling accounts:
   sufficient role" — roughly twenty call sites currently comparing
   `professor_id` directly, plus the course-scoped `requireProfessor(courseId)`
   helpers in `exercises.ts`, `lectures.ts`, `participation.ts` and friends.
-- Employability aggregation learns *role-aware denominators* for observers —
-  count their numerators, don't hold them to the course's expectations. Not a
-  course-exclusion filter; see the Observer section for why that's the wrong
-  shape.
+- Employability aggregation gains a course-exclusion filter for observers:
+  their rows in this course simply don't feed their own work-readiness signals.
+  It stays one-way — their presence still counts toward the *students'*
+  metrics, seat map and name games.
 
 **No account, course, or enrollment migrates. Nobody re-picks anything.** That
 is the whole benefit of having removed the global flag first, and it is why
@@ -178,5 +152,4 @@ A product question, not a technical one, and Mike's call:
    with a staff code? (Self-join re-opens the "anyone can claim authority"
    problem that 0035 just closed — lean toward invitation.)
 2. Can a TA see the roster and contact details, or only submissions?
-3. Does an observer show on the roster and seat map?
-4. Can a second professor delete the course, or remove the first professor?
+3. Can a second professor delete the course, or remove the first professor?
