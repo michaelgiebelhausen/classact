@@ -98,6 +98,40 @@ Non-participation should read as "no signal here", which the code already
 models — `hasSignal` and the `null`-able means exist precisely for
 "nothing to read yet" — rather than as a zero, which reads as a failing.
 
+**The real distribution, from Mike (2026-08-28).** This is what the design has
+to fit, and the two ends pull in opposite directions:
+
+- **The modal observer** has some interest in the course, shows up once or
+  twice, and disappears. This is the common case, and it must not be punished.
+- **The committed observer** comes to most classes and does the assignments.
+  Mike has had these. That effort should be rewarded.
+
+**So the mechanism is a ratchet: the floor is silence, the ceiling is open.**
+Activity can only ever add. Absence is never evidence against them.
+
+That resolves a trap in the numerators-only rule as I first wrote it. Strip the
+denominators and the modal observer still lands at a low raw count — which
+`levelFor()` renders as **"getting started"**, a displayed level, and still a
+mild claim about their character. For someone who attended twice and left,
+that claim is not true; they didn't start anything and weren't trying to.
+
+The correct output for the modal observer is **no portrait at all**, not a
+faint one. The code already has the concept: `hasSignal: false` means "there's
+essentially no activity to read yet." An observer's metrics should stay behind
+that gate until their own activity clears a threshold — and then be built
+from what they actually did.
+
+Practically:
+
+- **Below the threshold — no metrics, and say why.** Not an empty state that
+  reads as failure. Something honest and non-judgmental: *you're observing
+  this class; nothing here is counting toward your record.* That is genuinely
+  useful information to an observer, who may well be wondering.
+- **Above it — a real portrait**, earned, from numerators only.
+
+The threshold itself is a tuning question for whenever this is built, not a
+decision to make now.
+
 **Consequence to write down before someone trips on it:** observer metrics are
 therefore not comparable to student metrics, because they are measured against
 a different set of expectations. Never rank them together, and never put an
