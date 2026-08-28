@@ -362,7 +362,22 @@ way the migration is idempotent. Two client-side realtime bugs rode along:
 freed seats now disappear from other students' maps without a reload, and a
 student who moves seats no longer shows up in two places.
 
-**Smoke test, two browsers (~3 min):** student checks in → red ring on the
+**The database half is automated.** `npx tsx --env-file=.env.local
+scripts/smoketest-neighbors.ts` builds a throwaway course, exercises all
+eighteen behaviours (the triggers, the deny/confirm invariant the ring
+precedence rests on, the professor RPC's authorization, and the RLS
+policies), and deletes everything including the synthetic users. It is safe
+against production — every write is scoped to ids it created, cleanup runs
+on SIGINT as well as on failure, and a sweep at startup reclaims anything a
+killed run stranded. Run it after any change to 0036's triggers.
+
+One thing a green run does NOT prove: nothing in the database validates
+`relation` against the room's geometry. Adjacency is enforced only by the
+server actions, so do not read a pass as "a student cannot deny someone
+across the room."
+
+**Smoke test, two browsers (~3 min) — still worth doing by hand,** because
+none of the above touches the browser: student checks in → red ring on the
 projected map within ~2s. Second student sits adjacent → first student gets
 the say-hi toast (before the scheduled start) — try it from the games page.
 Toast's "They're here" → both rings green, live. "Report it" from the card →
