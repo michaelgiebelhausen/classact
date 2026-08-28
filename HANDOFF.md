@@ -263,6 +263,27 @@ identity for a future Canvas gradebook CSV export, which is spec'd but not
 built. Only `canvas_user_id` is populated, by the roster sync, for free on
 every resync. See `docs/canvas-assignment-fields-plan.md`.
 
+## The user.md file on a profile (0034)
+
+**Run `supabase/migrations/0034_profile_documents.sql`.** Unlike 0030–0032
+this one is deploy-order safe: without the table the profile page still
+renders ("Nothing uploaded yet") and only an upload fails.
+
+Any account — student or professor — can attach one Markdown file to their
+profile from Profile → Your file. Uploading again replaces it; there is no
+in-app editor, so the copy on their machine stays the original. Markdown
+only, 64 KB, enforced in the browser, in the server action, and by a CHECK
+constraint.
+
+Its own table rather than a column on `profiles`, because `getProfile()` does
+`select("*")` and runs on nearly every authenticated page — a 64 KB column
+there would ride along on every check-in render, for every student, all class.
+
+**Currently owner-only under RLS.** Nobody but the person who uploaded it can
+read it, including their professor. That is deliberate until it is decided who
+should: widening access later is a policy change, narrowing it after the fact
+is an apology.
+
 ## A student's school email vs their login (0032)
 
 **Run `supabase/migrations/0032_school_email.sql` BEFORE deploying** — the

@@ -14,6 +14,8 @@ import { DeleteDataButton } from "@/components/features/profile/DeleteDataButton
 import { AboutMeForm } from "@/components/features/profile/AboutMeForm";
 import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
 import { BecomeStudentButton } from "@/components/features/profile/BecomeStudentButton";
+import { UserDocUpload } from "@/components/features/profile/UserDocUpload";
+import { getMyUserDoc } from "@/server/actions/profile";
 import { icebreakersByKey, DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
 import type { PhotoKind } from "@/types/db";
 
@@ -41,6 +43,9 @@ export default async function ProfilePage() {
   // to hang per-course answers on) — the questions are the union of what
   // they ask across their own courses.
   const isProfessor = profile.role === "professor";
+  // Its own table and its own query — deliberately not on `profiles`, which
+  // getProfile() pulls in full on nearly every page.
+  const userDoc = await getMyUserDoc();
   let aboutFields: ReturnType<typeof icebreakersByKey> = [];
   let aboutAnswers: Record<string, string> = {};
   if (isProfessor) {
@@ -138,6 +143,20 @@ export default async function ProfilePage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Your file</CardTitle>
+          <CardDescription>
+            A Markdown file about you — however you like to describe yourself.
+            Replace it any time by uploading another; there&apos;s no editor
+            here on purpose, so the copy on your machine stays the original.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <UserDocUpload current={userDoc} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

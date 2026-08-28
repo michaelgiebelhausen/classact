@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { normalizeLinkedInUrl } from "@/lib/linkedin";
 import { canLeaveProfessorRole } from "@/lib/rolechange";
+import { validateUserDoc, byteLength } from "@/lib/usermd";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -187,4 +188,104 @@ export async function saveLinkedInUrl(
 
   revalidatePath("/profile");
   return { ok: true, data: { url } };
+}
+
+export interface UserDocView {
+  filename: string;
+  bytes: number;
+  updatedAt: string;
+  content: string;
+}
+
+/**
+ * The Markdown file on your own profile, if you've uploaded one.
+ *
+ * Read through RLS, so this can only ever return your own — there is no
+ * `profileId` parameter on purpose. Whoever eventually gets to read somebody
+ * else's is a decision to make deliberately, not one to leave open by
+ * accident.
+ */
+export async function getMyUserDoc(): Promise<UserDocView | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data } = await supabase
+    .from("profile_documents")
+    .select("filename, content, content_bytes, updated_at")
+    .eq("profile_id", user.id)
+    .maybeSingle();
+  if (!data) return null;
+
+  return {
+    filename: data.filename,
+    bytes: data.content_bytes,
+    updatedAt: data.updated_at,
+    content: data.content,
+  };
+}
+
+/**
+ * Upload — or replace — the Markdown file on your profile.
+ *
+ * One row per person, so an upload is an upsert: the new file simply becomes
+ * the file. There is no in-app editing by design; the copy on their machine
+ * stays the one they wrote.
+ *
+ * Validated here as well as in the browser. The client check is a courtesy so
+ * someone learns their file is too big before waiting for an upload; this one
+ * is the rule, because a server action is an HTTP endpoint that anybody can
+ * call with anything.
+ */
+export async function saveUserDoc(input: {
+  filename: string;
+  content: string;
+}): Promise<ActionResult<{ bytes: number }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const filename = input.filename.trim();
+  const verdict = validateUserDoc({ filename, content: input.content });
+  if (!verdict.ok) return { ok: false, error: verdict.error };
+
+  const bytes = byteLength(input.content);
+  const { error } = await supabase.from("profile_documents").upsert(
+    {
+      profile_id: user.id,
+      filename,
+      content: input.content,
+      content_bytes: bytes,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "profile_id" }
+  );
+  if (error) {
+    return { ok: false, error: "Couldn't save that file. Try again." };
+  }
+
+  revalidatePath("/profile");
+  return { ok: true, data: { bytes } };
+}
+
+/** Remove it. Their data, their call — the same principle as the photos. */
+export async function deleteUserDoc(): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { error } = await supabase
+    .from("profile_documents")
+    .delete()
+    .eq("profile_id", user.id);
+  if (error) return { ok: false, error: "Couldn't remove it. Try again." };
+
+  revalidatePath("/profile");
+  return { ok: true };
 }

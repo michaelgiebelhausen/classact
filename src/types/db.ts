@@ -58,6 +58,16 @@ export type ProfessorAiRow = {
   updated_at: string
 }
 
+/** The Markdown file a person attaches to their own profile (0034). Owner-only
+ *  under RLS; kept off `profiles` because getProfile() selects every column. */
+export type ProfileDocumentRow = {
+  profile_id: string
+  filename: string
+  content: string
+  content_bytes: number
+  updated_at: string
+}
+
 /** Profile-level icebreaker answer (professors; students answer per course). */
 export type ProfileAnswerRow = {
   profile_id: string
@@ -691,6 +701,7 @@ export type Database = {
       rooms: TableShape<RoomRow>
       enrollments: TableShape<EnrollmentRow>
       profile_photos: TableShape<ProfilePhotoRow>
+      profile_documents: TableShape<ProfileDocumentRow>
       student_answers: TableShape<StudentAnswerRow>
       class_sessions: TableShape<ClassSessionRow>
       check_ins: TableShape<CheckInRow>
