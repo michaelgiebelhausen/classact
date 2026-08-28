@@ -3,13 +3,25 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { getSignedPhotoUrls, resolveEnrollmentPhotos } from "@/lib/storage";
+import {
+  getSignedPhotoUrls,
+  resolveEnrollmentPhotosByKind,
+} from "@/lib/storage";
 import { flashcardHintFields } from "@/lib/icebreakers";
+import { getCourseDirectory } from "@/lib/coursedirectory";
+import { loadCourseSeats, type CourseSeat } from "@/server/courseseats";
+import {
+  isScheduleComplete,
+  sessionDateFor,
+  type CourseSchedule,
+} from "@/lib/schedule";
 import {
   NameGames,
   type GamePlayer,
   type RosterPerson,
 } from "@/components/features/games/NameGames";
+import type { LastSessionOccupant } from "@/components/features/checkin/LastSessionMap";
+import type { PhotoKind } from "@/types/db";
 
 const MIN_PLAYERS = 6;
 
@@ -26,7 +38,9 @@ export default async function GamesPage({
   // RLS membership gate.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, icebreaker_fields, professor_id")
+    .select(
+      "id, name, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, term_start, term_end"
+    )
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -48,7 +62,10 @@ export default async function GamesPage({
     const candidates = (enrollments ?? []).filter(
       (e) => e.profile_id !== profile.id
     );
-    const photoMap = await resolveEnrollmentPhotos(admin, candidates);
+    // By kind, so the roster can offer "show me everyone's headshot" — a face
+    // is easier to learn from more than one angle, and people don't always
+    // look like their campus ID photo.
+    const photoMap = await resolveEnrollmentPhotosByKind(admin, candidates);
 
     // Pronunciation guides + LinkedIn, keyed by profile (activated students).
     const phoneticByProfile = new Map<string, string>();
@@ -112,7 +129,7 @@ export default async function GamesPage({
         await Promise.all([
           admin
             .from("profile_photos")
-            .select("storage_path")
+            .select("storage_path, kind")
             .eq("profile_id", course.professor_id)
             .order("kind"),
           admin
@@ -130,6 +147,21 @@ export default async function GamesPage({
       const urls = paths
         .map((p) => urlMap[p])
         .filter((u): u is string => Boolean(u));
+      const profByKind: Partial<Record<PhotoKind, string>> = {};
+      for (const p of profPhotos ?? []) {
+        const url = urlMap[p.storage_path];
+        if (url) profByKind[p.kind] = url;
+      }
+      const profFacts: Array<{ label: string; value: string }> = [];
+      {
+        const answerByKey = new Map(
+          (profAnswers ?? []).map((a) => [a.field_key, a.value])
+        );
+        for (const f of hintFields) {
+          const value = answerByKey.get(f.key);
+          if (value) profFacts.push({ label: f.label, value });
+        }
+      }
       // Only with a real name: professors who signed up with a password
       // never set full_name, and a card reading "Your professor" would file
       // under a fabricated surname with fabricated initials.
@@ -138,31 +170,27 @@ export default async function GamesPage({
           enrollmentId: `professor:${course.professor_id}`,
           name: prof.full_name,
           photoUrl: urls[0] ?? null,
+          photosByKind: profByKind,
+          rosterPhotoUrl: null,
           phonetic: prof.name_phonetic ?? null,
+          hints: profFacts,
         });
       }
       if (urls.length > 0) {
-        const answerByKey = new Map(
-          (profAnswers ?? []).map((a) => [a.field_key, a.value])
-        );
-        const facts: Array<{ label: string; value: string }> = [];
-        for (const f of hintFields) {
-          const value = answerByKey.get(f.key);
-          if (value) facts.push({ label: f.label, value });
-        }
         players.push({
           enrollmentId: `professor:${course.professor_id}`,
           name: prof?.full_name ?? "Your professor",
           photoUrls: urls,
           phonetic: prof?.name_phonetic ?? null,
-          hints: facts,
+          hints: profFacts,
           linkedinUrl: prof?.linkedin_url ?? null,
         });
       }
     }
 
     for (const e of candidates) {
-      const urls = photoMap.get(e.id) ?? [];
+      const photos = photoMap.get(e.id);
+      const urls = photos?.urls ?? [];
       const phonetic =
         (e.profile_id ? phoneticByProfile.get(e.profile_id) : null) ??
         e.roster_name_phonetic ??
@@ -171,7 +199,12 @@ export default async function GamesPage({
         enrollmentId: e.id,
         name: e.roster_name,
         photoUrl: urls[0] ?? null,
+        photosByKind: photos?.byKind ?? {},
+        rosterPhotoUrl: photos?.rosterUrl ?? null,
         phonetic,
+        // The same facts the flash cards reveal — so tapping a face on the
+        // roster tells you what you'd have learned by playing.
+        hints: hintsByEnrollment.get(e.id) ?? [],
       });
       if (urls.length > 0) {
         players.push({
@@ -185,6 +218,70 @@ export default async function GamesPage({
             : null,
         });
       }
+    }
+  }
+
+  // Where everyone sat last time. The professor has had this on the check-in
+  // page all along; it belongs here too, because "who was sitting near me"
+  // is exactly the memory a student is trying to attach a name to. Every
+  // query below is readable by any course member under RLS — the gate on the
+  // check-in page was a product decision, not a permission.
+  let seats: CourseSeat[] = [];
+  let lastSession: { date: string; occupants: LastSessionOccupant[] } | null =
+    null;
+  {
+    const schedule: CourseSchedule | null = isScheduleComplete({
+      days: course.meeting_days,
+      start: course.meeting_start,
+      end: course.meeting_end,
+      timezone: course.timezone,
+    })
+      ? {
+          days: course.meeting_days as number[],
+          start: course.meeting_start as string,
+          end: course.meeting_end as string,
+          timezone: course.timezone as string,
+          termStart: course.term_start,
+          termEnd: course.term_end,
+        }
+      : null;
+    const now = new Date();
+    const today = schedule
+      ? sessionDateFor(schedule, now)
+      : now.toISOString().slice(0, 10);
+
+    const { data: priorSessions } = await supabase
+      .from("class_sessions")
+      .select("id, session_date")
+      .eq("course_id", courseId)
+      .lt("session_date", today)
+      .order("session_date", { ascending: false })
+      .limit(8);
+
+    for (const prior of priorSessions ?? []) {
+      const { data: rows } = await supabase
+        .from("check_ins")
+        .select("enrollment_id, seat_id")
+        .eq("session_id", prior.id);
+      // A cancelled or unopened day would render as an empty room and read
+      // as a class nobody came to, so keep looking back.
+      if ((rows ?? []).length === 0) continue;
+      const directory = isConfigured.supabaseAdmin
+        ? await getCourseDirectory(createAdminClient(), courseId)
+        : {};
+      lastSession = {
+        date: prior.session_date,
+        occupants: (rows ?? []).map((r) => ({
+          seatId: r.seat_id,
+          name: directory[r.enrollment_id]?.name ?? null,
+          photoUrl: directory[r.enrollment_id]?.photoUrl ?? null,
+          enrollmentId: r.enrollment_id,
+        })),
+      };
+      break;
+    }
+    if (lastSession) {
+      seats = await loadCourseSeats(supabase, courseId, course.room_id);
     }
   }
 
@@ -202,6 +299,8 @@ export default async function GamesPage({
         rosterAvailable={isConfigured.supabaseAdmin}
         courseId={courseId}
         minPlayers={MIN_PLAYERS}
+        seats={seats}
+        lastSession={lastSession}
       />
     </div>
   );

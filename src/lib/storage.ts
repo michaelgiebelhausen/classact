@@ -201,3 +201,82 @@ export async function resolveEnrollmentPhotos(
   }
   return result
 }
+
+/** Photos for one person, with each upload still labelled by its kind. */
+export interface EnrollmentPhotoSet {
+  /** Own uploads, keyed by kind — the roster photo is deliberately absent. */
+  byKind: Partial<Record<PhotoKind, string>>
+  /** Same URLs the flat resolver returns: uploads, else the roster photo. */
+  urls: string[]
+  /** The seeded (e.g. Canvas) photo, whether or not it's being used. */
+  rosterUrl: string | null
+}
+
+/**
+ * The same resolution as `resolveEnrollmentPhotos`, but keeping the labels.
+ *
+ * Students are asked for three photos on purpose — a selfie, a headshot, and
+ * something from an adventure — because people don't always look like their
+ * campus ID picture, and a face is easier to learn from more than one angle.
+ * The flat resolver throws the labels away, which is all its callers need,
+ * but anything that lets a viewer CHOOSE which kind to look at needs to know
+ * which is which.
+ *
+ * Precedence matches the flat resolver exactly: a person's own uploads
+ * replace the seeded roster photo entirely rather than mixing with it, so a
+ * student's own choices are what classmates see once they've made any.
+ */
+export async function resolveEnrollmentPhotosByKind(
+  client: SupabaseClient<Database>,
+  enrollments: EnrollmentPhotoInput[]
+): Promise<Map<string, EnrollmentPhotoSet>> {
+  const profileIds = enrollments
+    .map((e) => e.profile_id)
+    .filter((id): id is string => Boolean(id))
+
+  const { data: uploaded } =
+    profileIds.length > 0
+      ? await client
+          .from("profile_photos")
+          .select("profile_id, storage_path, kind")
+          .in("profile_id", profileIds)
+          .order("kind")
+      : { data: [] as { profile_id: string; storage_path: string; kind: PhotoKind }[] }
+
+  const allPaths = [
+    ...(uploaded ?? []).map((p) => p.storage_path),
+    ...enrollments
+      .map((e) => e.roster_photo_path)
+      .filter((p): p is string => Boolean(p)),
+  ]
+  const urlMap = await getSignedPhotoUrls(client, allPaths)
+
+  const byProfile = new Map<string, Partial<Record<PhotoKind, string>>>()
+  for (const p of uploaded ?? []) {
+    const url = urlMap[p.storage_path]
+    if (!url) continue
+    const set = byProfile.get(p.profile_id) ?? {}
+    set[p.kind] = url
+    byProfile.set(p.profile_id, set)
+  }
+
+  const result = new Map<string, EnrollmentPhotoSet>()
+  for (const e of enrollments) {
+    const byKind = (e.profile_id ? byProfile.get(e.profile_id) : undefined) ?? {}
+    const rosterUrl =
+      e.roster_photo_path && urlMap[e.roster_photo_path]
+        ? urlMap[e.roster_photo_path]
+        : null
+    // Kind order, not insertion order, so "the first photo" is the same one
+    // every render even after someone re-uploads a single kind.
+    const own = (["adventure", "candid", "professional"] as PhotoKind[])
+      .map((k) => byKind[k])
+      .filter((u): u is string => Boolean(u))
+    result.set(e.id, {
+      byKind,
+      urls: own.length > 0 ? own : rosterUrl ? [rosterUrl] : [],
+      rosterUrl,
+    })
+  }
+  return result
+}

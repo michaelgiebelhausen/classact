@@ -44,7 +44,7 @@ import { timed } from "@/server/loadmetrics";
  * function would be killed before the fetch could give up gracefully.
  */
 export const maxDuration = 90;
-import { tableFootprint, type RoomLayout, type TableFootprint } from "@/lib/roomlayout";
+import { loadCourseSeats } from "@/server/courseseats";
 
 export default async function CheckInPage({
   params,
@@ -162,43 +162,13 @@ async function renderCheckIn(courseId: string) {
     sessionOpenedAt
   );
 
-  // Seats with geometry. Pre-migration rows without x/y fall back to their
-  // grid coords so the map never comes up blank.
-  const { data: seatRows } = await supabase
-    .from("seats")
-    .select("id, label, row_index, col_index, x, y, section, table_id, neighbors")
-    .eq("course_id", courseId);
-  // Table furniture lives in the room's layout, not on the seat rows —
-  // without it every table draws as an oval however it was designed, and a
-  // table against a wall draws centered on its chairs instead of on the wall.
-  const tableShapes = new Map<string, "rect" | "oval" | "ushape">();
-  const tableFootprints = new Map<string, TableFootprint>();
-  if (course.room_id) {
-    const { data: room } = await supabase
-      .from("rooms")
-      .select("layout")
-      .eq("id", course.room_id)
-      .maybeSingle();
-    const layout = room?.layout as unknown as RoomLayout | null;
-    for (const section of layout?.sections ?? []) {
-      if (section.kind !== "table") continue;
-      tableShapes.set(section.id, section.shape);
-      const footprint = tableFootprint(section);
-      if (footprint) tableFootprints.set(section.id, footprint);
-    }
-  }
-
-  const seats: SeatInfo[] = (seatRows ?? []).map((s) => ({
-    id: s.id,
-    label: s.label,
-    x: s.x ?? s.col_index ?? 0,
-    y: s.y ?? (s.row_index ?? 0) * 1.25,
-    section: s.section ?? "main",
-    tableId: s.table_id ?? null,
-    tableShape: s.table_id ? tableShapes.get(s.table_id) : undefined,
-    tableFootprint: s.table_id ? tableFootprints.get(s.table_id) : undefined,
-    neighbors: s.neighbors ?? {},
-  }));
+  // Seats with geometry and adjacency, shared with every other page that
+  // draws this room.
+  const seats: SeatInfo[] = await loadCourseSeats(
+    supabase,
+    courseId,
+    course.room_id
+  );
 
   // Occupants + my enrollment + my score + who I've verified today.
   let initialOccupants: OccupantInfo[] = [];

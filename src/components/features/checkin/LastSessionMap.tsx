@@ -15,6 +15,8 @@ export interface LastSessionOccupant {
   seatId: string;
   name: string | null;
   photoUrl: string | null;
+  /** Who it was — lets a caller open that person's card from their seat. */
+  enrollmentId?: string;
 }
 
 /**
@@ -25,11 +27,15 @@ export interface LastSessionOccupant {
  * enough to push the absence list below the fold, so a projected screen shows
  * two seating charts rather than one student's private business.
  *
- * Rendered flat and small on purpose: no perspective, no fit, no taps. This is
- * a reference, not the thing being projected, and making it look like the live
+ * Rendered flat and small on purpose: no perspective, no fit. This is a
+ * reference, not the thing being projected, and making it look like the live
  * map would invite someone to try to correct a seat in it. Hovering a student
- * does enlarge their photo (photoZoom) — that's how a professor puts a name to
- * a face from last time — but clicking still does nothing.
+ * enlarges their photo (photoZoom) — that's how you put a name to a face from
+ * last time.
+ *
+ * Defaults are the professor's check-in view: front of room at the bottom,
+ * seats inert. The name-games copy of this map overrides both — a student
+ * reads the room front-at-top, and taps a face to see whose it is.
  *
  * A client component because it hands `stateFor` — a function — to RoomMap,
  * and functions cannot cross the server/client boundary. As a server component
@@ -39,17 +45,31 @@ export function LastSessionMap({
   seats,
   occupants,
   date,
+  flipped = true,
+  tappable = false,
+  onSeatTap,
+  hoverContent,
+  title = "Last class",
+  frontLabel = "Front of room",
 }: {
   seats: RoomMapSeat[];
   occupants: LastSessionOccupant[];
   date: string;
+  /** Front of room at the bottom (the professor's view). */
+  flipped?: boolean;
+  /** Let occupied seats be clicked — pair with `onSeatTap`. */
+  tappable?: boolean;
+  onSeatTap?: (seat: RoomMapSeat) => void;
+  hoverContent?: React.ComponentProps<typeof RoomMap>["hoverContent"];
+  title?: string;
+  frontLabel?: string;
 }) {
   const bySeat = new Map(occupants.map((o) => [o.seatId, o]));
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Last class</CardTitle>
+        <CardTitle className="text-base">{title}</CardTitle>
         <CardDescription>
           {new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
             weekday: "long",
@@ -66,10 +86,12 @@ export function LastSessionMap({
             seats={seats}
             ariaLabel={`Seat map for the class on ${date}`}
             captions
-            flipped
+            flipped={flipped}
             podium
             photoZoom
-            frontLabel="Front of room"
+            frontLabel={frontLabel}
+            onSeatTap={onSeatTap}
+            hoverContent={hoverContent}
             stateFor={(seat) => {
               const who = bySeat.get(seat.id);
               return {
@@ -79,7 +101,7 @@ export function LastSessionMap({
                 // URLs) doesn't make last class's faces blink out and back.
                 photoUrl: stablePhotoUrl(who?.photoUrl),
                 caption: who?.name?.split(/\s+/)[0] ?? undefined,
-                tappable: false,
+                tappable: tappable && Boolean(who),
               };
             }}
           />

@@ -5,7 +5,7 @@ import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { getSignedDeckUrl, resolveEnrollmentPhotos } from "@/lib/storage";
 import { summarizeFocus, summarizeFocusByEnrollment } from "@/lib/focus";
-import { tableFootprint, type RoomLayout, type TableFootprint } from "@/lib/roomlayout";
+import { loadCourseSeats } from "@/server/courseseats";
 import {
   Card,
   CardDescription,
@@ -164,11 +164,8 @@ export default async function FollowAlongPage({
 
     // Room geometry + today's check-ins so the presenter can show the class
     // as a seat map. Missing either just falls back to the roster list.
-    const [{ data: seatRows }, { data: liveSession }] = await Promise.all([
-      supabase
-        .from("seats")
-        .select("id, label, row_index, col_index, x, y, section, table_id")
-        .eq("course_id", courseId),
+    const [seats, { data: liveSession }] = await Promise.all([
+      loadCourseSeats(supabase, courseId, course.room_id),
       supabase
         .from("class_sessions")
         .select("id")
@@ -178,35 +175,6 @@ export default async function FollowAlongPage({
         .limit(1)
         .maybeSingle(),
     ]);
-    // Furniture lives in the layout, not on the seat rows — without it the
-    // presenter draws every table as an oval, and a table against a wall
-    // drifts off it.
-    const tableShapes = new Map<string, "rect" | "oval" | "ushape">();
-    const tableFootprints = new Map<string, TableFootprint>();
-    if (course.room_id) {
-      const { data: room } = await supabase
-        .from("rooms")
-        .select("layout")
-        .eq("id", course.room_id)
-        .maybeSingle();
-      const layout = room?.layout as unknown as RoomLayout | null;
-      for (const section of layout?.sections ?? []) {
-        if (section.kind !== "table") continue;
-        tableShapes.set(section.id, section.shape);
-        const footprint = tableFootprint(section);
-        if (footprint) tableFootprints.set(section.id, footprint);
-      }
-    }
-    const seats = (seatRows ?? []).map((s) => ({
-      id: s.id,
-      label: s.label,
-      x: s.x ?? s.col_index ?? 0,
-      y: s.y ?? (s.row_index ?? 0) * 1.25,
-      section: s.section ?? "main",
-      tableId: s.table_id ?? null,
-      tableShape: s.table_id ? tableShapes.get(s.table_id) : undefined,
-      tableFootprint: s.table_id ? tableFootprints.get(s.table_id) : undefined,
-    }));
     const occupants: Record<string, string> = {};
     if (liveSession) {
       const { data: checkIns } = await supabase

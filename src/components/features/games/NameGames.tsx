@@ -6,10 +6,20 @@ import { ExternalLink, Shuffle, Type, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { recordGameScore } from "@/server/actions/games";
 import { capture } from "@/lib/analytics";
 import { initialsOf, sortByLastName } from "@/lib/names";
-import type { GameType } from "@/types/db";
+import {
+  ClassmateCard,
+  type ClassmateCardData,
+} from "@/components/features/games/ClassmateCard";
+import {
+  LastSessionMap,
+  type LastSessionOccupant,
+} from "@/components/features/checkin/LastSessionMap";
+import type { RoomMapSeat } from "@/components/features/rooms/RoomMap";
+import type { GameType, PhotoKind } from "@/types/db";
 
 export interface GamePlayer {
   enrollmentId: string;
@@ -640,7 +650,38 @@ export interface RosterPerson {
   enrollmentId: string;
   name: string;
   photoUrl: string | null;
+  /** Their own uploads, still labelled, so the grid can show one kind. */
+  photosByKind?: Partial<Record<PhotoKind, string>>;
+  /** The seeded (Canvas) photo, used when they've uploaded nothing. */
+  rosterPhotoUrl?: string | null;
   phonetic?: string | null;
+  hints?: Array<{ label: string; value: string }>;
+}
+
+/**
+ * Which face the roster shows.
+ *
+ * Students are asked for three photos because people don't always look like
+ * their campus ID picture — a classmate you'd recognise from a night out is
+ * a stranger in a headshot, and the other way round. "Any" is the everyday
+ * view; the three kinds are for studying one particular look, and each shows
+ * a coverage count so the tabs double as a read on who still owes a photo.
+ */
+const PHOTO_VIEWS = [
+  { key: "any", label: "Any" },
+  { key: "candid", label: "Selfie" },
+  { key: "professional", label: "Headshot" },
+  { key: "adventure", label: "Adventure" },
+] as const;
+type PhotoView = (typeof PHOTO_VIEWS)[number]["key"];
+
+/** The photo to draw for one person under the current view. */
+function photoFor(p: RosterPerson, view: PhotoView): string | null {
+  if (view === "any") return p.photoUrl;
+  // A kind that person hasn't uploaded shows as initials rather than
+  // borrowing a different photo — otherwise "everyone's headshot" quietly
+  // becomes "everyone's something", and the coverage count would lie.
+  return p.photosByKind?.[view] ?? null;
 }
 
 /**
@@ -652,9 +693,11 @@ export interface RosterPerson {
 function Roster({
   people,
   available,
+  onOpen,
 }: {
   people: RosterPerson[];
   available: boolean;
+  onOpen: (person: RosterPerson) => void;
 }) {
   // Unlike the games, a reference sheet shouldn't reshuffle or swap faces
   // under you — sorted once, same photo every time.
@@ -663,6 +706,7 @@ function Roster({
   // left open, a stale URL should fall back to initials rather than paint
   // a grid of broken-image icons.
   const [broken, setBroken] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<PhotoView>("any");
 
   if (!available) {
     return (
@@ -682,45 +726,100 @@ function Roster({
   }
 
   const withPhotos = sorted.filter((p) => p.photoUrl).length;
+  const shownCount = sorted.filter((p) => photoFor(p, view)).length;
   return (
     <div className="grid gap-4">
-      <p className="text-sm text-muted-foreground">
-        {sorted.length} {sorted.length === 1 ? "person" : "people"}, by last
-        name
-        {withPhotos < sorted.length
-          ? ` · ${sorted.length - withPhotos} without a photo yet`
-          : ""}
-        .
-      </p>
-      <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {sorted.map((p) => (
-          <li key={p.enrollmentId} className="grid justify-items-center gap-2">
-            {p.photoUrl && !broken.has(p.enrollmentId) ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={p.photoUrl}
-                alt={p.name}
-                onError={() =>
-                  setBroken((b) => new Set(b).add(p.enrollmentId))
-                }
-                className="aspect-square w-full rounded-lg object-cover"
-              />
-            ) : (
-              <div
-                aria-hidden
-                className="grid aspect-square w-full place-items-center rounded-lg border border-dashed bg-muted text-xl font-semibold text-muted-foreground"
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          {sorted.length} {sorted.length === 1 ? "person" : "people"}, by last
+          name
+          {withPhotos < sorted.length
+            ? ` · ${sorted.length - withPhotos} without a photo yet`
+            : ""}
+          .
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {PHOTO_VIEWS.map((v) => {
+            const count =
+              v.key === "any"
+                ? withPhotos
+                : sorted.filter((p) => p.photosByKind?.[v.key]).length;
+            return (
+              <Button
+                key={v.key}
+                type="button"
+                size="sm"
+                variant={view === v.key ? "default" : "outline"}
+                className="h-7 px-2 text-xs"
+                onClick={() => setView(v.key)}
               >
-                {initialsOf(p.name)}
-              </div>
-            )}
-            <div className="text-center">
-              <p className="text-sm font-medium leading-tight">{p.name}</p>
-              {p.phonetic && (
-                <p className="text-xs text-muted-foreground">{p.phonetic}</p>
-              )}
-            </div>
-          </li>
-        ))}
+                {v.label}{" "}
+                <span
+                  className={
+                    view === v.key
+                      ? "opacity-80"
+                      : "text-muted-foreground"
+                  }
+                >
+                  {count}/{sorted.length}
+                </span>
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+      {view !== "any" && shownCount < sorted.length && (
+        <p className="text-xs text-muted-foreground">
+          {sorted.length - shownCount} haven&apos;t added
+          {view === "candid"
+            ? " a selfie"
+            : view === "professional"
+              ? " a headshot"
+              : " an adventure photo"}{" "}
+          — they show as initials rather than borrowing another photo.
+        </p>
+      )}
+      <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+        {sorted.map((p) => {
+          const url = photoFor(p, view);
+          return (
+            <li key={p.enrollmentId}>
+              <button
+                type="button"
+                onClick={() => onOpen(p)}
+                aria-label={`View ${p.name}`}
+                className="grid w-full justify-items-center gap-2 rounded-lg text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {url && !broken.has(p.enrollmentId + view) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={url}
+                    alt={p.name}
+                    onError={() =>
+                      setBroken((b) => new Set(b).add(p.enrollmentId + view))
+                    }
+                    className="aspect-square w-full rounded-lg object-cover transition-opacity hover:opacity-90"
+                  />
+                ) : (
+                  <div
+                    aria-hidden
+                    className="grid aspect-square w-full place-items-center rounded-lg border border-dashed bg-muted text-xl font-semibold text-muted-foreground"
+                  >
+                    {initialsOf(p.name)}
+                  </div>
+                )}
+                <div className="text-center">
+                  <p className="text-sm font-medium leading-tight">{p.name}</p>
+                  {p.phonetic && (
+                    <p className="text-xs text-muted-foreground">
+                      {p.phonetic}
+                    </p>
+                  )}
+                </div>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -732,14 +831,63 @@ export function NameGames({
   rosterAvailable,
   courseId,
   minPlayers,
+  seats = [],
+  lastSession = null,
 }: {
   players: GamePlayer[];
   roster: RosterPerson[];
   rosterAvailable: boolean;
   courseId: string;
   minPlayers: number;
+  seats?: RoomMapSeat[];
+  lastSession?: {
+    date: string;
+    occupants: LastSessionOccupant[];
+  } | null;
 }) {
-  const [game, setGame] = useState<GameType | "roster">("matching");
+  const [game, setGame] = useState<GameType | "roster" | "last_class">(
+    "matching"
+  );
+  /**
+   * The map opens in the professor's orientation — front of the room at the
+   * bottom — because that is how the class saw it projected, and a student
+   * matching this map against their memory of the room is matching against
+   * that image. The button turns it around for anyone who'd rather read it
+   * from their own seat.
+   */
+  const [mapFlipped, setMapFlipped] = useState(true);
+  /** The classmate whose card is open, by enrollment id. */
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  // Roster rows carry name/phonetic/hints for everyone; player rows carry the
+  // extra photos. Merging by enrollment id means a card shows everything the
+  // page already knows about a person, whether they were opened from the
+  // grid or from a seat.
+  const cardFor = useMemo(() => {
+    const byId = new Map<string, ClassmateCardData>();
+    for (const p of roster) {
+      byId.set(p.enrollmentId, {
+        name: p.name,
+        phonetic: p.phonetic,
+        photoUrl: p.photoUrl,
+        hints: p.hints ?? [],
+      });
+    }
+    for (const p of players) {
+      const existing = byId.get(p.enrollmentId);
+      const primary = existing?.photoUrl ?? p.photoUrls[0] ?? null;
+      byId.set(p.enrollmentId, {
+        name: existing?.name ?? p.name,
+        phonetic: existing?.phonetic ?? p.phonetic,
+        photoUrl: primary,
+        otherPhotoUrls: p.photoUrls.filter((u) => u !== primary),
+        hints: existing?.hints?.length ? existing.hints : p.hints,
+      });
+    }
+    return byId;
+  }, [roster, players]);
+
+  const openCard = openId ? cardFor.get(openId) ?? null : null;
   // Per-game round counters: bumping one remounts that game via its key,
   // which deals a fresh board (boards are dealt once per mount).
   const [rounds, setRounds] = useState<Record<GameType, number>>({
@@ -763,13 +911,14 @@ export function NameGames({
   return (
     <Tabs
       value={game}
-      onValueChange={(v) => setGame(v as GameType | "roster")}
+      onValueChange={(v) => setGame(v as GameType | "roster" | "last_class")}
     >
       <TabsList>
         <TabsTrigger value="matching">Matching</TabsTrigger>
         <TabsTrigger value="memory_tiles">Memory tiles</TabsTrigger>
         <TabsTrigger value="flash_cards">Flash cards</TabsTrigger>
         <TabsTrigger value="roster">Roster</TabsTrigger>
+        <TabsTrigger value="last_class">Last class</TabsTrigger>
       </TabsList>
       <TabsContent value="matching">
         <Card>
@@ -823,10 +972,79 @@ export function NameGames({
       <TabsContent value="roster">
         <Card>
           <CardContent className="pt-6">
-            <Roster people={roster} available={rosterAvailable} />
+            <Roster
+              people={roster}
+              available={rosterAvailable}
+              onOpen={(p) => setOpenId(p.enrollmentId)}
+            />
           </CardContent>
         </Card>
       </TabsContent>
+      {/* Where everyone sat last time — the seating chart is a memory aid in
+          its own right, because "the guy who sits behind me" is how people
+          actually index their classmates. */}
+      <TabsContent value="last_class">
+        {lastSession && seats.length > 0 ? (
+          <div className="grid gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+              <span>
+                The{" "}
+                <span className="font-medium text-foreground">
+                  front of the room
+                </span>{" "}
+                is at the {mapFlipped ? "bottom" : "top"} of this map.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setMapFlipped((v) => !v)}
+              >
+                Turn the map around
+              </Button>
+            </div>
+            <LastSessionMap
+              seats={seats}
+              occupants={lastSession.occupants}
+              date={lastSession.date}
+              flipped={mapFlipped}
+              frontLabel={
+                mapFlipped ? "Front of room" : "Front of room (behind you)"
+              }
+              tappable
+              onSeatTap={(seat) => {
+                const who = lastSession.occupants.find(
+                  (o) => o.seatId === seat.id
+                );
+                if (who?.enrollmentId) setOpenId(who.enrollmentId);
+              }}
+            />
+          </div>
+        ) : (
+          <Card>
+            <CardContent className="py-12 text-center text-muted-foreground">
+              No class has met yet — once everyone checks in, the seating
+              chart shows up here.
+            </CardContent>
+          </Card>
+        )}
+      </TabsContent>
+
+      <Dialog
+        open={openId !== null}
+        onOpenChange={(open) => {
+          if (!open) setOpenId(null);
+        }}
+      >
+        <DialogContent className="max-w-xs">
+          {openCard && (
+            <>
+              <DialogTitle className="sr-only">{openCard.name}</DialogTitle>
+              <ClassmateCard {...openCard} />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </Tabs>
   );
 }
