@@ -352,9 +352,16 @@ them a card saying exactly that. This matters more than it looks: a student
 who suspects the professor can read their notes keeps the real thinking
 somewhere else, which is the behavior this whole change exists to end.
 
-**`lecture_notes` is now legacy**, like `profiles.role` after 0035 — nothing
-writes to it, its contents have been imported, and it is droppable once the
-import is confirmed in production.
+**`lecture_notes` is gone as of 0039.** The import was confirmed against
+production on 2026-08-28 — 24 non-empty blobs, 24 imported — so the table was
+dropped. Run `supabase/migrations/0039_drop_lecture_notes.sql` in the SQL
+editor; it re-counts before dropping and refuses if anything is unimported,
+naming the fix (re-run the `insert…select` at the bottom of 0038). Deploy
+order does not matter: no code has read or written that table since 0038
+shipped. It does, however, foreclose rolling back to a build older than 0038 —
+that code writes notes to a table that no longer exists. The notes themselves
+are safe in `lecture_note_entries`; a rollback would stop note-taking, not
+lose it.
 
 **Smoke test (3 minutes).** Start a lecture, open the student view, type a
 note and press Enter — it appears with a slide badge. Advance the deck and

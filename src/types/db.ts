@@ -544,18 +544,6 @@ export type LectureRow = {
   pauses: LecturePause[]
 }
 
-/**
- * @deprecated Legacy as of migration 0038. The freeform blob was imported into
- * `lecture_note_entries`; nothing writes here any more.
- */
-export type LectureNoteRow = {
-  id: string
-  lecture_id: string
-  enrollment_id: string
-  content: string
-  updated_at: string
-}
-
 export type LectureNoteEntryRow = {
   id: string
   lecture_id: string
@@ -771,7 +759,6 @@ export type Database = {
       name_game_scores: TableShape<NameGameScoreRow>
       lecture_decks: TableShape<LectureDeckRow>
       lectures: TableShape<LectureRow>
-      lecture_notes: TableShape<LectureNoteRow>
       lecture_note_entries: TableShape<LectureNoteEntryRow>
       focus_events: TableShape<FocusEventRow>
       deck_questions: TableShape<DeckQuestionRow>
