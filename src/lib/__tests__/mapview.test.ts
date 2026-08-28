@@ -4,6 +4,7 @@ import {
   flipX,
   flipY,
   fitScale,
+  offsetDirection,
   FRONT_SCALE,
   BACK_SCALE,
 } from "@/lib/mapview";
@@ -87,5 +88,17 @@ describe("fitScale", () => {
 
   test("copes with a container that hasn't been measured yet", () => {
     expect(fitScale(500, 500, 0, 0)).toBe(1);
+  });
+});
+
+describe("offsetDirection", () => {
+  test("reverses a room-space offset when the map is turned around", () => {
+    // A table footprint nudges the surface away from its seats. On a rotated
+    // map that nudge has to reverse, or the table lands on the students.
+    expect(offsetDirection(true)).toBe(-1);
+  });
+
+  test("leaves it alone on the student's map", () => {
+    expect(offsetDirection(false)).toBe(1);
   });
 });

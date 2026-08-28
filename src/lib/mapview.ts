@@ -88,3 +88,17 @@ export function fitScale(
   if (contentW <= 0 || contentH <= 0) return 1;
   return Math.min(1, containerW / contentW, containerH / contentH);
 }
+
+/**
+ * Which way a room-space offset points once the map is turned around.
+ *
+ * Table footprints carry a correction vector — "step back from the seat
+ * centroid" — expressed in room space, while the renderer adds it to
+ * already-flipped screen pixels. Rotating the room reverses both axes, so the
+ * vector must reverse with them. Added unchanged it moves the table by twice
+ * the correction in the wrong direction and parks it on top of the students
+ * sitting around it, which is exactly how it shipped.
+ */
+export function offsetDirection(flipped: boolean): 1 | -1 {
+  return flipped ? -1 : 1;
+}

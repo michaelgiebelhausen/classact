@@ -3,7 +3,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { TableFootprint } from "@/lib/roomlayout";
-import { depthScale, fitScale, flipX, flipY } from "@/lib/mapview";
+import {
+  depthScale,
+  fitScale,
+  flipX,
+  flipY,
+  offsetDirection,
+} from "@/lib/mapview";
 
 /**
  * The one seat-map renderer: professor preview, designer, and student
@@ -184,8 +190,18 @@ export function RoomMap({
       // A bare edge pulls every chair to one side, so the ring of seats no
       // longer straddles the table — when the layout says where the table
       // really is, believe it over the seats.
-      const cx = footprint ? mean(xs) + footprint.dx * hu : (Math.min(...xs) + Math.max(...xs)) / 2;
-      const cy = footprint ? mean(ys) + footprint.dy * vu : (Math.min(...ys) + Math.max(...ys)) / 2;
+      // The footprint offset is a direction in ROOM space — "step back from
+      // the seat centroid" — while xs/ys are already screen pixels. Turning
+      // the room around reverses both axes, so the offset has to reverse with
+      // them; added unchanged it pushes the table the wrong way by twice the
+      // correction and parks it on top of the students sitting there.
+      const dir = offsetDirection(flipped);
+      const cx = footprint
+        ? mean(xs) + dir * footprint.dx * hu
+        : (Math.min(...xs) + Math.max(...xs)) / 2;
+      const cy = footprint
+        ? mean(ys) + dir * footprint.dy * vu
+        : (Math.min(...ys) + Math.max(...ys)) / 2;
       const rx = footprint
         ? Math.max(footprint.rx * hu - inset, UNIT * 0.3)
         : Math.max((Math.max(...xs) - Math.min(...xs)) / 2 - inset, UNIT * 0.45);
