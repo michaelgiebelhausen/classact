@@ -37,6 +37,27 @@ function fail(reason: CallbackReason, next: string) {
 }
 
 /**
+ * Answer HEAD without touching the token.
+ *
+ * University mail security fetches every link in an email before the person
+ * does. Next.js answers a HEAD by running the GET handler, so those probes
+ * were calling `verifyOtp` — which CONSUMES the one-time token — and the
+ * student's real click, arriving about a second later, found an expired link.
+ *
+ * The production logs are unambiguous: nearly every student GET of this route
+ * is preceded by a HEAD one second earlier, each returning 307 because the GET
+ * handler ran. Some HEADs have no GET behind them at all: a link burned by a
+ * scanner for a student who never even clicked.
+ *
+ * This is what survived the PKCE fix, the token_hash templates, and turning
+ * off email confirmation. Every one of those changed WHICH link we send; none
+ * of them changed who opens it first.
+ */
+export async function HEAD(): Promise<Response> {
+  return new Response(null, { status: 200 });
+}
+
+/**
  * Finish an email auth link.
  *
  * Two shapes arrive here, and only one of them survives leaving the device:

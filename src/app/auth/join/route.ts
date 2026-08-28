@@ -7,6 +7,27 @@ import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import { emailAliasOf } from "@/lib/emailalias";
 
 /**
+ * Answer HEAD without touching the token.
+ *
+ * University mail security fetches every link in an email before the person
+ * does. Next.js answers a HEAD by running the GET handler, so those probes
+ * were calling `verifyOtp` — which CONSUMES the one-time token — and the
+ * student's real click, arriving about a second later, found an expired link.
+ *
+ * The production logs are unambiguous: nearly every student GET of this route
+ * is preceded by a HEAD one second earlier, each returning 307 because the GET
+ * handler ran. Some HEADs have no GET behind them at all: a link burned by a
+ * scanner for a student who never even clicked.
+ *
+ * This is what survived the PKCE fix, the token_hash templates, and turning
+ * off email confirmation. Every one of those changed WHICH link we send; none
+ * of them changed who opens it first.
+ */
+export async function HEAD(): Promise<Response> {
+  return new Response(null, { status: 200 });
+}
+
+/**
  * Post-auth landing for students joining by code:
  * 1. Look up the course by join code.
  * 2. Match the authed email to a roster row -> link + activate.
