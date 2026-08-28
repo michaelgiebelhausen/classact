@@ -17,6 +17,26 @@ export const FRONT_SCALE = 1.3;
 export const BACK_SCALE = 0.78;
 
 /**
+ * Mirror a seat across the room's width, so the student on the professor's
+ * right is drawn on the right of their screen.
+ *
+ * This is the other half of turning around. Facing the class is a 180-degree
+ * ROTATION, which flips depth *and* width; flipping only depth gives a mirror
+ * image, with everyone on the wrong side. Shipped that way once — the
+ * professor spotted it from the room, holding a seating chart that had two
+ * students swapped.
+ */
+export function flipX(
+  x: number,
+  minX: number,
+  maxX: number,
+  flipped = true
+): number {
+  if (!flipped) return x;
+  return maxX - (x - minX);
+}
+
+/**
  * Mirror a seat's depth so the front of the room lands at the bottom.
  *
  * Returns a coordinate in the same space, so everything downstream — tables,

@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { depthScale, flipY, fitScale, FRONT_SCALE, BACK_SCALE } from "@/lib/mapview";
+import {
+  depthScale,
+  flipX,
+  flipY,
+  fitScale,
+  FRONT_SCALE,
+  BACK_SCALE,
+} from "@/lib/mapview";
 
 describe("flipY", () => {
   test("puts the front row at the bottom for the professor", () => {
@@ -15,6 +22,25 @@ describe("flipY", () => {
 
   test("handles a single-row room without dividing by zero", () => {
     expect(flipY(2, 2, 2)).toBe(2);
+  });
+});
+
+describe("flipX", () => {
+  test("swaps left and right when the room is turned around", () => {
+    // Turning to face the class is a 180-degree rotation, and a rotation
+    // flips BOTH axes. Flipping only the depth axis gives a mirror image:
+    // the student on the professor's right renders on the screen's left.
+    expect(flipX(0, 0, 7)).toBe(7);
+    expect(flipX(7, 0, 7)).toBe(0);
+    expect(flipX(2, 0, 7)).toBe(5);
+  });
+
+  test("leaves coordinates alone when not flipped", () => {
+    expect(flipX(2, 0, 7, false)).toBe(2);
+  });
+
+  test("handles a single-column room without dividing by zero", () => {
+    expect(flipX(3, 3, 3)).toBe(3);
   });
 });
 

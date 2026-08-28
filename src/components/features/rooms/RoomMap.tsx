@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { TableFootprint } from "@/lib/roomlayout";
-import { depthScale, fitScale, flipY } from "@/lib/mapview";
+import { depthScale, fitScale, flipX, flipY } from "@/lib/mapview";
 
 /**
  * The one seat-map renderer: professor preview, designer, and student
@@ -150,9 +150,11 @@ export function RoomMap({
     const maxY = Math.max(...seats.map((s) => s.y));
     const width = (maxX - minX + PAD_L + PAD_R) * hu;
     const height = (maxY - minY + PAD_T + PAD_B) * vu;
-    const px = (x: number) => (x - minX + PAD_L) * hu;
-    // Flipping here rather than at each call site means tables, row letters
-    // and the balcony divider all turn over with the seats.
+    // Both axes, because turning to face the class is a rotation rather than
+    // a mirror. Flipping here rather than at each call site means tables, row
+    // letters and the balcony divider all turn over with the seats.
+    const px = (x: number) =>
+      (flipX(x, minX, maxX, flipped) - minX + PAD_L) * hu;
     const py = (y: number) =>
       (flipY(y, minY, maxY, flipped) - minY + PAD_T) * vu;
 
@@ -206,7 +208,10 @@ export function RoomMap({
       byRow.set(key, list);
     }
     for (const [key, members] of byRow) {
-      const leftmost = members.reduce((a, b) => (a.x <= b.x ? a : b));
+      // Leftmost after the flip, not lowest x: mirroring the room turns the
+      // first seat in a row into the last one on screen, and the label would
+      // otherwise land on top of the seats instead of beside them.
+      const leftmost = members.reduce((a, b) => (px(a.x) <= px(b.x) ? a : b));
       rowMarks.push({
         x: px(leftmost.x) - SEAT / 2 - 12,
         y: py(leftmost.y),
