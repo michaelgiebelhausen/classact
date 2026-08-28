@@ -79,13 +79,34 @@ export async function GET(request: NextRequest) {
     }
   } else {
     // Off-roster joiner: pending row the professor can approve (Open Q6).
-    await admin.from("enrollments").insert({
-      course_id: course.id,
-      profile_id: user.id,
-      roster_name: (user.user_metadata?.full_name as string) ?? email,
-      roster_email: email,
-      status: "invited",
-    });
+    //
+    // Unless they are already in this course under another address. The match
+    // above is by roster_email, so a student whose row carries their Canvas
+    // address while they sign in with a personal one finds nothing — and used
+    // to get a SECOND row, pending approval, sitting beside the one holding
+    // their attendance. That happened to a real student the day after her two
+    // rows were merged by hand: she used the join code again and the merge
+    // undid itself.
+    //
+    // Anyone who already has a row here has already joined, whatever it is
+    // named. Re-using the code is then a no-op rather than a duplicate.
+    const { data: alreadyIn } = await admin
+      .from("enrollments")
+      .select("id")
+      .eq("course_id", course.id)
+      .eq("profile_id", user.id)
+      .neq("status", "dropped")
+      .maybeSingle();
+
+    if (!alreadyIn) {
+      await admin.from("enrollments").insert({
+        course_id: course.id,
+        profile_id: user.id,
+        roster_name: (user.user_metadata?.full_name as string) ?? email,
+        roster_email: email,
+        status: "invited",
+      });
+    }
   }
 
   // The roster just changed — without this a student who joins mid-class
