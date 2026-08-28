@@ -28,6 +28,7 @@ export type AnalyticsEvent =
   | "poll_launched"
   | "poll_answered"
   | "poll_revealed"
+  | "exercise_started"
   | "project_uploaded"
   | "project_tasks_generated";
 

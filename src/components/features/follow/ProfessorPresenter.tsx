@@ -36,6 +36,15 @@ import { ClassroomAttention } from "@/components/features/follow/ClassroomAttent
 import type { RoomMapSeat } from "@/components/features/rooms/RoomMap";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { QuickPollDialog } from "@/components/features/follow/QuickPollDialog";
+import { PollCommandStrip } from "@/components/features/follow/PollCommandStrip";
+import { PollOfferStrip } from "@/components/features/follow/PollOfferStrip";
+import { PollStageStepper } from "@/components/features/follow/PollStageStepper";
+import { RunActivityControl } from "@/components/features/follow/RunActivityControl";
+import {
+  ExerciseLaunchDialog,
+  type StartedExercise,
+} from "@/components/features/follow/ExerciseLaunchDialog";
+import { ExerciseStatusCard } from "@/components/features/follow/ExerciseStatusCard";
 import {
   endLecture,
   pauseLecture,
@@ -56,6 +65,7 @@ import {
   type PauseInterval,
 } from "@/lib/focus";
 import { firstVoteGuidance, tallyVotes } from "@/lib/participate";
+import { decideNavigation } from "@/lib/presenternav";
 import {
   lectureChannelName,
   stagePath,
@@ -135,12 +145,32 @@ interface Props {
   initialRound: ActiveRound | null;
   /** Votes already recorded on the open round. */
   initialVotes: PresenterVote[];
+  /** A group exercise already running when the page loads. */
+  initialExercise: PresenterExercise | null;
+}
+
+/** A live one-minute paper, as the presenter tracks it. */
+export interface PresenterExercise {
+  roundId: string;
+  prompt: string;
+  groupCount: number;
+  /** Groups that have written something so far. */
+  answered: number;
 }
 
 interface FocusState {
   awayCount: number;
   awayMs: number;
   awaySince: number | null;
+}
+
+/** A question boundary the professor has been asked about but not answered. */
+interface PollOffer {
+  /** Slide the question is pinned after. */
+  position: number;
+  questionIds: string[];
+  /** The stage window already moved on; this is an after-the-fact offer. */
+  alreadyAdvanced: boolean;
 }
 
 
@@ -163,6 +193,7 @@ export function ProfessorPresenter({
   ranQuestionIds,
   initialRound,
   initialVotes,
+  initialExercise,
 }: Props) {
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
@@ -190,6 +221,7 @@ export function ProfessorPresenter({
   const [now, setNow] = useState<number | null>(null);
   const pageRef = useRef(initialPage);
   const channelRef = useRef<BroadcastChannel | null>(null);
+  const exerciseCardRef = useRef<HTMLDivElement | null>(null);
 
   // ---- Think-pair-share round state ----
   const [round, setRound] = useState<ActiveRound | null>(initialRound);
@@ -211,6 +243,39 @@ export function ProfessorPresenter({
     }
   );
   const [pollBusy, setPollBusy] = useState(false);
+  // Mirrored so goTo can see it without being rebuilt on every toggle — a
+  // keypress must never race a launch that's already in flight.
+  const pollBusyRef = useRef(false);
+  const setBusy = useCallback((value: boolean) => {
+    pollBusyRef.current = value;
+    setPollBusy(value);
+  }, []);
+
+  // A queued question waiting at a slide boundary, asking to be run. Nothing
+  // reaches the projector until the professor answers this.
+  const [offer, setOffer] = useState<PollOffer | null>(null);
+  const offerRef = useRef<PollOffer | null>(null);
+  const applyOffer = useCallback((next: PollOffer | null) => {
+    offerRef.current = next;
+    setOffer(next);
+  }, []);
+  // Boundaries the professor has chosen to walk past; we don't ask twice.
+  const skippedRef = useRef<Set<number>>(new Set());
+
+  // Overlays that own the keyboard while they're up, so arrow keys don't
+  // flip slides behind an open menu or dialog.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [quickPollOpen, setQuickPollOpen] = useState(false);
+  const [exerciseDialogOpen, setExerciseDialogOpen] = useState(false);
+
+  // A group exercise running alongside the lecture.
+  const [exercise, setExercise] = useState<StartedExercise | null>(
+    initialExercise
+  );
+  const [exerciseAnswered, setExerciseAnswered] = useState(
+    initialExercise?.answered ?? 0
+  );
+
   // Quick polls launched this session — not in the server-fetched bank yet.
   const [localQuestions, setLocalQuestions] = useState<PresenterQuestion[]>([]);
   const allQuestions = useMemo(
@@ -245,13 +310,15 @@ export function ProfessorPresenter({
 
   const launchQuestion = useCallback(
     async (question: PresenterQuestion, advanceOnResume = false) => {
-      setPollBusy(true);
+      setBusy(true);
       const result = await launchPollRound(courseId, lectureId, question.id);
-      setPollBusy(false);
+      setBusy(false);
       if (!result.ok || !result.data) {
         toast.error(result.ok ? "Couldn't launch the poll." : result.error);
         return;
       }
+      // The offer has been answered; don't let it linger behind the poll.
+      applyOffer(null);
       advanceOnResumeRef.current = advanceOnResume;
       ranRef.current.add(question.id);
       setRan(new Set(ranRef.current));
@@ -267,38 +334,63 @@ export function ProfessorPresenter({
       });
       capture("poll_launched", {});
     },
-    [applyRound, courseId, lectureId]
+    [applyRound, applyOffer, courseId, lectureId, setBusy]
   );
 
   const goTo = useCallback(
     (next: number) => {
-      // While a poll is open it owns the room — slides stay put.
-      if (roundRef.current) return;
-      const clamped = Math.max(1, totalPages ? Math.min(next, totalPages) : next);
-      if (clamped === pageRef.current) return;
-      // Advancing one slide forward runs any queued question first — the
-      // poll inserts itself between the slides.
-      if (clamped === pageRef.current + 1) {
-        const queued = allQuestions.find(
-          (q) =>
-            q.positionAfterPage === pageRef.current && !ranRef.current.has(q.id)
-        );
-        if (queued) {
-          void launchQuestion(queued, true);
-          return;
+      // Every rule about what a keypress means lives in decideNavigation, so
+      // it can be tested without a browser. This is just the side effects.
+      const decision = decideNavigation({
+        requested: next,
+        current: pageRef.current,
+        totalPages,
+        pollOpen: Boolean(roundRef.current),
+        busy: pollBusyRef.current,
+        offerArmedAt: offerRef.current?.position ?? null,
+        skipped: skippedRef.current,
+        ran: ranRef.current,
+        questions: allQuestions,
+      });
+
+      if (decision.kind === "none") return;
+
+      if (decision.kind === "blocked") {
+        // Silence here is what cost a lecture: the professor pressed the key
+        // repeatedly and the room never told them why nothing moved.
+        if (decision.reason === "poll") {
+          toast.info(
+            "A poll is on screen — slides are paused. End the poll to keep moving.",
+            { id: "poll-nav" }
+          );
         }
+        return;
       }
-      pageRef.current = clamped;
-      setPage(clamped);
+
+      if (decision.kind === "offer") {
+        applyOffer({
+          position: decision.position,
+          questionIds: decision.questionIds,
+          alreadyAdvanced: false,
+        });
+        return;
+      }
+
+      if (decision.crossedPosition !== null) {
+        skippedRef.current.add(decision.crossedPosition);
+      }
+      applyOffer(null);
+      pageRef.current = decision.page;
+      setPage(decision.page);
       channelRef.current?.postMessage({
         type: "page",
-        page: clamped,
+        page: decision.page,
       } satisfies LectureSyncMessage);
-      void setLecturePage(courseId, lectureId, clamped).then((result) => {
+      void setLecturePage(courseId, lectureId, decision.page).then((result) => {
         if (!result.ok) toast.error(result.error);
       });
     },
-    [courseId, lectureId, totalPages, allQuestions, launchQuestion]
+    [courseId, lectureId, totalPages, allQuestions, applyOffer]
   );
 
   // Instant sync with the projector stage window (same browser).
@@ -311,23 +403,41 @@ export function ProfessorPresenter({
         const previous = pageRef.current;
         pageRef.current = e.data.page;
         setPage(e.data.page);
-        // The stage window doesn't know about queued questions — if its
-        // advance crossed one, launch it now (the poll overlays the slide,
-        // so no extra advance on resume).
+        // The stage window doesn't know about queued questions. If its
+        // advance crossed one, mention it here rather than seizing the
+        // projector the professor is presenting from.
         if (!roundRef.current && e.data.page === previous + 1) {
-          const queued = allQuestions.find(
+          const waiting = allQuestions.filter(
             (q) =>
-              q.positionAfterPage === previous && !ranRef.current.has(q.id)
+              q.positionAfterPage === previous &&
+              !ranRef.current.has(q.id) &&
+              !skippedRef.current.has(previous)
           );
-          if (queued) void launchQuestion(queued);
+          if (waiting.length > 0) {
+            applyOffer({
+              position: previous,
+              questionIds: waiting.map((q) => q.id),
+              alreadyAdvanced: true,
+            });
+          }
         }
+      }
+      // The projector closed the poll (Esc over there). Catch up without
+      // rebroadcasting — it already told everyone.
+      if (
+        e.data?.type === "poll-closed" &&
+        roundRef.current?.id === e.data.roundId
+      ) {
+        roundRef.current = null;
+        setRound(null);
+        advanceOnResumeRef.current = false;
       }
     };
     return () => {
       channelRef.current = null;
       channel.close();
     };
-  }, [lectureId, allQuestions, launchQuestion]);
+  }, [lectureId, allQuestions, applyOffer]);
 
   function openStage() {
     void (async () => {
@@ -365,6 +475,9 @@ export function ProfessorPresenter({
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
+      // An open menu or dialog owns the arrows; moving the deck underneath it
+      // is never what the keypress meant.
+      if (menuOpen || quickPollOpen) return;
       if (e.key === "ArrowRight" || e.key === " ") {
         e.preventDefault();
         goTo(page + 1);
@@ -375,7 +488,7 @@ export function ProfessorPresenter({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [page, goTo]);
+  }, [page, goTo, menuOpen, quickPollOpen]);
 
   // Live attention roster from focus_events inserts.
   useEffect(() => {
@@ -509,9 +622,9 @@ export function ProfessorPresenter({
 
   async function advanceStage(stage: "pair" | "revote") {
     if (!roundRef.current) return;
-    setPollBusy(true);
+    setBusy(true);
     const result = await setPollStage(courseId, roundRef.current.id, stage);
-    setPollBusy(false);
+    setBusy(false);
     if (!result.ok) {
       toast.error(result.error);
       return;
@@ -521,9 +634,9 @@ export function ProfessorPresenter({
 
   async function revealResults() {
     if (!roundRef.current) return;
-    setPollBusy(true);
+    setBusy(true);
     const result = await revealPollResults(courseId, roundRef.current.id);
-    setPollBusy(false);
+    setBusy(false);
     if (!result.ok) {
       toast.error(result.error);
       return;
@@ -573,19 +686,82 @@ export function ProfessorPresenter({
   }
 
   async function closeRound(advance: boolean) {
-    if (!roundRef.current) return;
-    setPollBusy(true);
-    const result = await closePollRound(courseId, roundRef.current.id);
-    setPollBusy(false);
+    const closing = roundRef.current;
+    if (!closing) return;
+    setBusy(true);
+    const result = await closePollRound(courseId, closing.id);
+    setBusy(false);
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
+    const wasAdvanceOnResume = advanceOnResumeRef.current;
     applyRound(null);
-    // Advance only when the poll inserted itself between slides (goTo
-    // re-checks queued questions, so a second one at the same slide runs
-    // next instead of being skipped).
-    if (advance && advanceOnResumeRef.current) goTo(pageRef.current + 1);
+
+    if (advance && wasAdvanceOnResume) {
+      // Step off the boundary the poll was holding. A second question pinned
+      // to the same slide now *offers* itself rather than snapping open,
+      // which used to read as "I closed it and it came back".
+      goTo(pageRef.current + 1);
+      return;
+    }
+
+    // Ended early. The question is marked as run, so it has just vanished
+    // from the queue — leave a way back in case the exit was a mis-click.
+    const question = allQuestions.find((q) => q.id === closing.questionId);
+    if (question) {
+      toast.success("Poll ended — back to slides.", {
+        action: {
+          label: "Relaunch",
+          onClick: () => void launchQuestion(question, wasAdvanceOnResume),
+        },
+      });
+    } else {
+      toast.success("Poll ended — back to slides.");
+    }
+  }
+
+  // Escape is the reflex people reach for when something has taken over the
+  // screen. It had no meaning here at all, which is how a lecture ended up
+  // being shut down to get out of a question.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
+      if (roundRef.current) {
+        e.preventDefault();
+        void closeRound(false);
+      } else if (offerRef.current) {
+        e.preventDefault();
+        dismissOffer();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  /** Run the question waiting at the current boundary. */
+  function runOffer() {
+    const current = offerRef.current;
+    if (!current) return;
+    const question = allQuestions.find((q) => q.id === current.questionIds[0]);
+    if (!question) {
+      applyOffer(null);
+      return;
+    }
+    // Closing the poll should step off the boundary only if we're still
+    // holding it — a stage-driven advance already moved past.
+    void launchQuestion(question, !current.alreadyAdvanced);
+  }
+
+  /** Walk past the boundary without running anything. */
+  function dismissOffer() {
+    const current = offerRef.current;
+    if (!current) return;
+    skippedRef.current.add(current.position);
+    applyOffer(null);
+    if (!current.alreadyAdvanced) goTo(pageRef.current + 1);
   }
 
   async function togglePause() {
@@ -729,13 +905,33 @@ export function ProfessorPresenter({
         class to look something up: paused time never counts against
         anyone&apos;s focus score.
       </span>
+      <span className="block">
+        <span className="font-medium">Think-Pair-Share</span> questions offer
+        themselves as you reach their slide — nothing goes on the projector
+        until you press Run question. Press → again to skip one.
+      </span>
+      <span className="block">
+        <span className="font-medium">While a poll is up</span> the slides
+        wait. Its controls stay in this bar, and{" "}
+        <span className="font-medium">End poll &amp; show slides</span> (or
+        Esc, here or on the projector) puts the slides back.
+      </span>
     </span>
   );
 
+  const offerQuestions = offer
+    ? allQuestions.filter((q) => offer.questionIds.includes(q.id))
+    : [];
+
   return (
     <div className="grid gap-4">
-      {/* Controls run across the top so the room below gets the space. */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2.5">
+      {/*
+        Controls run across the top so the room below gets the space — and
+        they stay pinned there, because during a live poll the professor is
+        looking at the room, not scrolling a dashboard.
+      */}
+      <div className="sticky top-16 z-20 grid gap-2 rounded-xl border bg-card p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="mr-auto min-w-0 pl-1">
           <p className="truncate text-sm font-semibold">{deckTitle}</p>
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -744,7 +940,36 @@ export function ProfessorPresenter({
             {deckKind === "google_slides" && " · slides unsynced (embed)"}
           </p>
         </div>
-        <Button size="sm" onClick={openStage}>
+        <RunActivityControl
+          queued={queued}
+          pollOpen={Boolean(round)}
+          exerciseOpen={Boolean(exercise)}
+          busy={pollBusy}
+          courseId={courseId}
+          onLaunchQuestion={(q) => void launchQuestion(q, false)}
+          onWriteQuestion={() => setQuickPollOpen(true)}
+          onStartExercise={() => setExerciseDialogOpen(true)}
+          onOpenChange={setMenuOpen}
+        />
+        {exercise && (
+          <button
+            type="button"
+            onClick={() =>
+              exerciseCardRef.current?.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+              })
+            }
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--flame,#e0552f)]/40 bg-[var(--flame,#e0552f)]/10 px-3 py-1 text-xs"
+          >
+            <span
+              aria-hidden
+              className="inline-block size-1.5 animate-pulse rounded-full bg-[var(--flame,#e0552f)]"
+            />
+            One-minute paper · {exerciseAnswered}/{exercise.groupCount} writing
+          </button>
+        )}
+        <Button size="sm" variant="outline" onClick={openStage}>
           <MonitorUp className="mr-2 size-4" /> Project slides
         </Button>
         <Button
@@ -790,6 +1015,25 @@ export function ProfessorPresenter({
         </TooltipProvider>
       </div>
 
+      {round && pollStats && (
+        <PollCommandStrip
+          prompt={round.prompt}
+          stage={round.stage}
+          answered={
+            round.stage === "revote" || round.stage === "reveal"
+              ? pollStats.revoteCount
+              : pollStats.thinkCount
+          }
+          total={rosterCount}
+          busy={pollBusy}
+          onAdvanceStage={(stage) => void advanceStage(stage)}
+          onReveal={() => void revealResults()}
+          onResume={() => void closeRound(true)}
+          onEndPoll={() => void closeRound(false)}
+        />
+      )}
+      </div>
+
       {paused && (
         <p className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
           <span className="font-medium">Paused.</span> Students can browse
@@ -816,30 +1060,75 @@ export function ProfessorPresenter({
         ) : null}
 
         {deckKind === "pdf" && (
-          <div className="flex items-center justify-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => goTo(page - 1)}
-              disabled={page <= 1}
-              aria-label="Previous slide"
-            >
-              <ChevronLeft className="size-4" />
-            </Button>
-            <span className="min-w-24 text-center text-sm tabular-nums text-muted-foreground">
-              Slide {page}
-              {totalPages ? ` of ${totalPages}` : ""}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => goTo(page + 1)}
-              disabled={totalPages !== null && page >= totalPages}
-              aria-label="Next slide"
-            >
-              <ChevronRight className="size-4" />
-            </Button>
-          </div>
+          <TooltipProvider>
+            <div className="flex items-center justify-center gap-3">
+              {/*
+                Dimmed rather than truly disabled: a click still reaches goTo,
+                which says out loud why the slides aren't moving. An inert
+                button that looked clickable is what made the room feel broken.
+              */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goTo(page - 1)}
+                    disabled={page <= 1}
+                    aria-disabled={Boolean(round) || undefined}
+                    className={round ? "opacity-50" : undefined}
+                    aria-label="Previous slide"
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                {round && (
+                  <TooltipContent side="top">
+                    Slides wait while the poll is up — end it to keep moving.
+                  </TooltipContent>
+                )}
+              </Tooltip>
+              <span className="min-w-24 text-center text-sm tabular-nums text-muted-foreground">
+                Slide {page}
+                {totalPages ? ` of ${totalPages}` : ""}
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goTo(page + 1)}
+                    disabled={totalPages !== null && page >= totalPages}
+                    aria-disabled={Boolean(round) || undefined}
+                    className={round ? "opacity-50" : undefined}
+                    aria-label="Next slide"
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                {round && (
+                  <TooltipContent side="top">
+                    Slides wait while the poll is up — end it to keep moving.
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </div>
+          </TooltipProvider>
+        )}
+
+        {/*
+          Lives outside the pdf-only block on purpose: embedded decks get
+          offered their questions too, even though their slides don't sync.
+        */}
+        {offer && offerQuestions.length > 0 && !round && (
+          <PollOfferStrip
+            prompt={offerQuestions[0].prompt}
+            count={offerQuestions.length}
+            alreadyAdvanced={offer.alreadyAdvanced}
+            nextPage={offer.position + 1}
+            busy={pollBusy}
+            onRun={runOffer}
+            onSkip={dismissOffer}
+          />
         )}
 
         <Card
@@ -857,13 +1146,14 @@ export function ProfessorPresenter({
                   ? "Reveal — opinion question; this is how the class voted."
                   : stageLabel[round.stage]
                 : queued.length > 0
-                  ? `${queued.length} approved ${queued.length === 1 ? "question pops" : "questions pop"} in automatically as you pass ${queued.length === 1 ? "its" : "their"} slide.`
+                  ? `${queued.length} approved ${queued.length === 1 ? "question offers" : "questions offer"} to run as you reach ${queued.length === 1 ? "its" : "their"} slide — nothing starts until you say so.`
                   : "Approve or add questions on your deck to run them live."}
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             {round && pollStats ? (
               <>
+                <PollStageStepper stage={round.stage} />
                 <p className="text-sm font-medium">{round.prompt}</p>
                 <p className="text-xs text-muted-foreground">
                   {round.stage === "revote" || round.stage === "reveal"
@@ -950,6 +1240,11 @@ export function ProfessorPresenter({
                       <Play className="mr-2 size-4" /> Resume lecture
                     </Button>
                   )}
+                  {/*
+                    A quieter twin of the strip's exit, for professors already
+                    reading the tallies down here. At reveal nothing is being
+                    cancelled — the question ran.
+                  */}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -957,50 +1252,62 @@ export function ProfessorPresenter({
                     onClick={() => void closeRound(false)}
                     disabled={pollBusy}
                   >
-                    <X className="mr-1 size-4" /> Cancel poll
+                    <X className="mr-1 size-4" />
+                    {round.stage === "reveal" ? "Close poll" : "Cancel poll"}
                   </Button>
                 </div>
               </>
             ) : (
               <>
+                {/*
+                  Read-only now. Launching lives in Run activity up top, so
+                  there's one place to start a question rather than two that
+                  can tell different stories about what's running.
+                */}
+                {queued.length > 0 && (
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Up next
+                  </p>
+                )}
                 {queued.slice(0, 4).map((q) => (
-                  <div key={q.id} className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm" title={q.prompt}>
-                        {q.prompt}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        After slide {q.positionAfterPage}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void launchQuestion(q)}
-                      disabled={pollBusy}
-                      aria-label={`Launch: ${q.prompt.slice(0, 60)}`}
-                    >
-                      <Play className="size-4" />
-                    </Button>
+                  <div key={q.id} className="min-w-0">
+                    <p className="truncate text-sm" title={q.prompt}>
+                      {q.prompt}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      After slide {q.positionAfterPage}
+                    </p>
                   </div>
                 ))}
                 {queued.length === 0 && (
                   <p className="text-xs text-muted-foreground">
-                    Nothing queued. Questions are managed on your deck in
-                    Follow Along (or the Participate page) — approve some
-                    before class.
+                    Nothing queued for this deck. Use{" "}
+                    <span className="font-medium">Run activity</span> above to
+                    write a question on the spot, or open the question bank in
+                    a new tab to generate and approve some.
                   </p>
                 )}
-                <QuickPollDialog
-                  courseId={courseId}
-                  lectureId={lectureId}
-                  disabled={pollBusy}
-                  onLaunched={handleQuickLaunched}
-                />
               </>
             )}
           </CardContent>
         </Card>
+
+        {exercise && (
+          <div ref={exerciseCardRef}>
+            <ExerciseStatusCard
+              courseId={courseId}
+              roundId={exercise.roundId}
+              prompt={exercise.prompt}
+              groupCount={exercise.groupCount}
+              initialAnswered={exerciseAnswered}
+              onClosed={() => {
+                setExercise(null);
+                setExerciseAnswered(0);
+              }}
+              onProgress={setExerciseAnswered}
+            />
+          </div>
+        )}
       </div>
 
       {/* The room: who's here, where they're sitting, who's drifted. */}
@@ -1012,6 +1319,29 @@ export function ProfessorPresenter({
           paused={paused}
         />
       </div>
+
+      {/*
+        Mounted once, outside the card, so Run activity can reach it whatever
+        the card happens to be showing.
+      */}
+      <QuickPollDialog
+        courseId={courseId}
+        lectureId={lectureId}
+        disabled={pollBusy}
+        onLaunched={handleQuickLaunched}
+        open={quickPollOpen}
+        onOpenChange={setQuickPollOpen}
+        hideTrigger
+      />
+      <ExerciseLaunchDialog
+        courseId={courseId}
+        open={exerciseDialogOpen}
+        onOpenChange={setExerciseDialogOpen}
+        onStarted={(started) => {
+          setExercise(started);
+          setExerciseAnswered(0);
+        }}
+      />
       </div>
     </div>
   );

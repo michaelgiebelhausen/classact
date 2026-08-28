@@ -2,8 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
-import { AlertTriangle, Eye, Pause, Radio, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  Eye,
+  Pause,
+  PencilLine,
+  Radio,
+  Sparkles,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +72,8 @@ interface Props {
   initialRound: StudentRound | null;
   initialMyAnswers: Array<{ phase: PollPhase; choice: number }>;
   initialPartnerIds: string[];
+  /** Prompt of a group exercise running right now, if any. */
+  initialExercisePrompt?: string | null;
 }
 
 function initials(name: string): string {
@@ -93,6 +103,7 @@ export function StudentFollow({
   initialRound,
   initialMyAnswers,
   initialPartnerIds,
+  initialExercisePrompt = null,
 }: Props) {
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
@@ -119,6 +130,13 @@ export function StudentFollow({
   const [partnerIds, setPartnerIds] = useState<string[]>(initialPartnerIds);
   const [voting, setVoting] = useState(false);
   const roundIdRef = useRef<string | null>(initialRound?.id ?? null);
+
+  // ---- Group exercise ----
+  // The professor can start one from the presenter now, so students sitting
+  // on this page need to hear about it without being told out loud.
+  const [exercisePrompt, setExercisePrompt] = useState<string | null>(
+    initialExercisePrompt
+  );
 
   const isAwayRef = useRef(false);
   const awayStartRef = useRef<number | null>(null);
@@ -353,6 +371,34 @@ export function StudentFollow({
     };
   }, [lectureId, courseId, enrollmentId]);
 
+  // ---- Group exercise: appear/disappear as the professor starts and ends one ----
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`exercises:${courseId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "exercise_rounds",
+          filter: `course_id=eq.${courseId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            prompt?: string;
+            stage?: string;
+          } | null;
+          if (!rec) return;
+          setExercisePrompt(rec.stage === "open" ? (rec.prompt ?? null) : null);
+        }
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [courseId]);
+
   async function vote(choice: number) {
     if (!round || voting) return;
     const phase: PollPhase | null =
@@ -580,6 +626,28 @@ export function StudentFollow({
       </div>
 
       <div className="grid content-start gap-4">
+        {/*
+          A group exercise is started from the professor's presenter but is
+          answered over on Participate — without this, it would begin with
+          nobody on this page knowing it had.
+        */}
+        {exercisePrompt && (
+          <Card className="border-[var(--flame,#e0552f)]">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <PencilLine className="size-4" /> Group exercise started
+              </CardTitle>
+              <CardDescription>{exercisePrompt}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild size="sm" className="w-full">
+                <Link href={`/course/${courseId}/participate`}>
+                  Join your group
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
         {pollCard}
         <Card>
           <CardHeader className="pb-3">

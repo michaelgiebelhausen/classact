@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { Plus, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,11 @@ interface Props {
   disabled?: boolean;
   /** The poll is live — hand the round + question back to the presenter. */
   onLaunched: (round: ActiveRound, question: PresenterQuestion) => void;
+  /** Drive the dialog from outside (the presenter's Run activity menu). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Hide the built-in button when something else opens this. */
+  hideTrigger?: boolean;
 }
 
 /**
@@ -39,8 +44,19 @@ export function QuickPollDialog({
   lectureId,
   disabled,
   onLaunched,
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger,
 }: Props) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      setUncontrolledOpen(next);
+      onOpenChange?.(next);
+    },
+    [onOpenChange]
+  );
   const [prompt, setPrompt] = useState("");
   const [options, setOptions] = useState<string[]>(["", ""]);
   const [correct, setCorrect] = useState<number[]>([]);
@@ -116,15 +132,17 @@ export function QuickPollDialog({
 
   return (
     <>
-      <Button
-        variant="outline"
-        size="sm"
-        className="w-full"
-        onClick={() => setOpen(true)}
-        disabled={disabled}
-      >
-        <Zap className="mr-2 size-4" /> Quick poll
-      </Button>
+      {!hideTrigger && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full"
+          onClick={() => setOpen(true)}
+          disabled={disabled}
+        >
+          <Zap className="mr-2 size-4" /> Quick poll
+        </Button>
+      )}
       <Dialog
         open={open}
         onOpenChange={(next) => {

@@ -26,6 +26,43 @@ import {
   StudentFollow,
   type StudentRound,
 } from "@/components/features/follow/StudentFollow";
+import type { PresenterExercise } from "@/components/features/follow/ProfessorPresenter";
+
+/**
+ * The one-minute paper running right now, if any. Exercises live on the
+ * course rather than the lecture, so a professor can start one from the
+ * presenter and it survives a reload of either side.
+ */
+async function loadOpenExercise(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  courseId: string
+): Promise<PresenterExercise | null> {
+  const { data: round } = await supabase
+    .from("exercise_rounds")
+    .select("id, prompt")
+    .eq("course_id", courseId)
+    .eq("stage", "open")
+    .maybeSingle();
+  if (!round) return null;
+
+  const { data: groups } = await supabase
+    .from("exercise_groups")
+    .select("id")
+    .eq("round_id", round.id);
+  const { data: responses } = await supabase
+    .from("exercise_responses")
+    .select("group_id, content")
+    .eq("round_id", round.id);
+
+  return {
+    roundId: round.id,
+    prompt: round.prompt,
+    groupCount: groups?.length ?? 0,
+    answered: (responses ?? []).filter(
+      (r) => (r.content ?? "").trim().length > 0
+    ).length,
+  };
+}
 
 export default async function FollowAlongPage({
   params,
@@ -242,6 +279,10 @@ export default async function FollowAlongPage({
       }));
     }
 
+    // A group exercise may already be running — a reload mid-activity should
+    // land back on it rather than pretending nothing is happening.
+    const initialExercise = await loadOpenExercise(supabase, courseId);
+
     return (
       <div className="grid gap-6">
         {header}
@@ -266,6 +307,7 @@ export default async function FollowAlongPage({
             .filter((id): id is string => Boolean(id))}
           initialRound={initialRound}
           initialVotes={initialVotes}
+          initialExercise={initialExercise}
         />
       </div>
     );
@@ -412,6 +454,9 @@ export default async function FollowAlongPage({
         initialRound={initialRound}
         initialMyAnswers={initialMyAnswers}
         initialPartnerIds={initialPartnerIds}
+        initialExercisePrompt={
+          (await loadOpenExercise(supabase, courseId))?.prompt ?? null
+        }
       />
     </div>
   );

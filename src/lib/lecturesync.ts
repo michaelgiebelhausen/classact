@@ -20,6 +20,8 @@ export type LectureSyncMessage =
   | { type: "page"; page: number }
   | { type: "poll"; poll: PollBroadcast | null }
   | { type: "pause"; paused: boolean }
+  /** The projector closed the poll itself (Esc); tell the presenter to catch up. */
+  | { type: "poll-closed"; roundId: string }
   | { type: "ended" };
 
 export function lectureChannelName(lectureId: string): string {

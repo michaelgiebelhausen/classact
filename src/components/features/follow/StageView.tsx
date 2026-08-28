@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/browser";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { setLecturePage } from "@/server/actions/lectures";
+import { closePollRound } from "@/server/actions/polls";
 import {
   lectureChannelName,
   type LectureSyncMessage,
@@ -53,6 +54,11 @@ export function StageView({
   const [paused, setPaused] = useState(initialPaused);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [poll, setPoll] = useState<PollBroadcast | null>(initialPoll);
+  // Brief on-screen answer to "why isn't the slide moving?".
+  const [nudge, setNudge] = useState(false);
+  const nudgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards a double-Esc while the close request is still in flight.
+  const closingRef = useRef(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const pageRef = useRef(initialPage);
   const pollRef = useRef<PollBroadcast | null>(initialPoll);
@@ -205,7 +211,13 @@ export function StageView({
   const goTo = useCallback(
     (next: number) => {
       // While a poll is on, the poll owns the projector — slides stay put.
-      if (pollRef.current) return;
+      // Say so, briefly, instead of swallowing the keypress in silence.
+      if (pollRef.current) {
+        setNudge(true);
+        if (nudgeTimer.current) clearTimeout(nudgeTimer.current);
+        nudgeTimer.current = setTimeout(() => setNudge(false), 4000);
+        return;
+      }
       const clamped = Math.max(1, pageCount ? Math.min(next, pageCount) : next);
       if (clamped === pageRef.current) return;
       pageRef.current = clamped;
@@ -228,11 +240,36 @@ export function StageView({
       } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
         e.preventDefault();
         goTo(pageRef.current - 1);
+      } else if (e.key === "Escape" && pollRef.current && !closingRef.current) {
+        // The professor is standing at the projector, not the laptop. Give
+        // them a way out from here rather than making them go find it.
+        // Not preventDefault'd: Esc also leaves fullscreen, which we can't
+        // suppress anyway, and double-click restores it.
+        const roundId = pollRef.current.roundId;
+        closingRef.current = true;
+        void closePollRound(courseId, roundId).then((result) => {
+          closingRef.current = false;
+          // Anyone but the professor is rejected here; realtime keeps their
+          // screen honest, so a failure just means nothing happens.
+          if (!result.ok) return;
+          channelRef.current?.postMessage({
+            type: "poll-closed",
+            roundId,
+          } satisfies LectureSyncMessage);
+          applyPoll(null);
+        });
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [goTo]);
+  }, [goTo, applyPoll, courseId]);
+
+  useEffect(
+    () => () => {
+      if (nudgeTimer.current) clearTimeout(nudgeTimer.current);
+    },
+    []
+  );
 
   // Track fullscreen so the hint button hides while projecting.
   useEffect(() => {
@@ -337,6 +374,23 @@ export function StageView({
               </p>
             )}
           </div>
+
+          {/*
+            Faint enough that the room won't read it, present enough that the
+            professor standing here has an answer when the arrow key does
+            nothing. It brightens when they press one.
+          */}
+          <p
+            className={
+              nudge
+                ? "absolute bottom-4 left-1/2 -translate-x-1/2 text-sm text-white/80 transition-all"
+                : "absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-white/25 transition-all"
+            }
+          >
+            {nudge
+              ? "A poll is on screen — press Esc to return to the slides"
+              : "Esc returns to slides"}
+          </p>
         </div>
       )}
 
