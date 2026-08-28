@@ -269,7 +269,12 @@ export type TasteFileRow = {
   course_id: string
   /** Null = the professor's optional benchmark taste file. */
   enrollment_id: string | null
+  /** Free-flowing taste, in the author's own words. Null = a legacy
+   *  structured row — read it through tasteProse(), never raw. */
+  body: string | null
+  /** Legacy structured criteria, kept for rows written before 0037. */
   criteria: TasteCriterion[]
+  /** Legacy. */
   bar_statement: string
   is_default_untouched: boolean
   first_edit_at: string | null
@@ -340,7 +345,15 @@ export type RankingRow = {
   course_id: string
   submission_id: string
   bt_score: number
+  /** The model's draft order — recomputed on every verdict. */
   rank: number
+  /** The professor's materialized order, set when peer review closes and
+   *  never overwritten by a recompute. Null until then; read as
+   *  `final_rank ?? rank`. */
+  final_rank: number | null
+  /** Written only at publish, from the order and the bands. */
+  points_awarded: number | null
+  /** The band's label at publish ("A", "Excellent", or none). */
   letter: string | null
   updated_at: string
 }

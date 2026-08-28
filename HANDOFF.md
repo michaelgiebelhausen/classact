@@ -306,6 +306,54 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## The professor's order, and what it's worth (0037)
+
+**Run `supabase/migrations/0037_speed_grader.sql` BEFORE deploying.** NOT
+deploy-order safe: the grading cockpit and the student report select
+`rankings.final_rank` and `rankings.points_awarded`, and the taste editor
+selects `taste_files.body`. Deployed code against an unmigrated database
+fails those pages with a 42703. The schema guard above catches it at boot in
+development and shows the "database is behind" card in production, but the
+fix is the same — run the migration, reload, no redeploy.
+
+**What this ships.** Grading finally ends in a number the professor chose:
+
+- **A ranked list, not just a histogram.** The cockpit shows every submission
+  in order, best at top. Click a row to read the work with its AI summary and
+  theme scores beside it — that's the "speed" in speed grader.
+- **Cut points became lines between rows.** A band is a slice of the *list*
+  now, not of the 0–100 score axis, so it survives the professor dragging
+  someone to a new position. Each line carries a label and a value.
+- **Drag to reorder, after peer review closes.** When the peer window closes
+  the model's order *materializes* into `final_rank` — from then on it is the
+  professor's list, and no recompute touches it. Before that, the order still
+  refines as votes arrive. A professor comparison after materialization is a
+  local move (the loser drops just below the winner), not a global refit.
+- **Points.** `assignments.points` finally does something. Stepped mode gives
+  every row in a band the band's value ("only 4s and 5s, no 4.5s"); linear
+  mode interpolates across the band's rows up to the next band, with rank 1
+  earning full marks. Values are in the assignment's own scale — a percent
+  grader sets points to 100.
+- **Taste files are prose.** One box: "What makes this assignment good?" —
+  dictated or pasted, no grid. The professor writes one too (private, on the
+  assignment form), which joins the rubric corpus tagged `[PROFESSOR]` and
+  *is* the rubric in ai_only mode.
+
+**What the migration did to existing data.** Old `settings.cutPoints` letters
+became band labels with no values attached, on both assignments and course
+defaults — so an assignment mid-flight keeps the bands it had, and grading
+without point values still works exactly as before. Where the *lines* fall is
+not backfilled: it depends on the live score distribution, so the app derives
+it from the old thresholds on first render and saves it on the first change.
+Any `settings.gradingInstructions` became the professor's taste file row.
+Taste files written in the old grid keep their criteria and are read back as
+prose — nothing was converted, nothing was lost.
+
+**Smoke test (3 minutes).** Open an already-published assignment: the student
+report reads as before. Open one mid-flight: the list appears in ranked order
+with the old letters as band labels. Drag a line, save, and the publish
+preview shows the points each student would earn.
+
 ## Neighbors can say no, and the professor can say yes (0036)
 
 **Run `supabase/migrations/0036_neighbor_denials.sql` BEFORE deploying.** This

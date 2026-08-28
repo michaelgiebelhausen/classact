@@ -22,7 +22,7 @@ import {
   submitWork,
 } from "@/server/actions/assignments";
 import { classifySubmissionFile } from "@/lib/submissionfile";
-import type { TasteCriterion } from "@/types/db";
+import type { TasteRequirement } from "@/lib/tastegrading";
 
 /**
  * Student, before the deadline: sharpen the taste file (the standard you
@@ -37,9 +37,12 @@ interface Props {
   assignmentId: string;
   enrollmentId: string;
   deadline: string;
-  initialCriteria: TasteCriterion[];
-  initialBar: string;
+  /** The taste file as prose — free-flowing text, or a legacy grid already
+   *  rendered as prose by the page. */
+  initialTaste: string;
   tasteIsDefault: boolean;
+  /** Whether a taste file is part of what gets handed in. */
+  tasteRequirement?: TasteRequirement;
   submittedAt: string | null;
   submissionNote: string;
   /** Short-lived signed URL for the student's own submitted file, so they
@@ -57,9 +60,9 @@ export function SubmissionEditor({
   assignmentId,
   enrollmentId,
   deadline,
-  initialCriteria,
-  initialBar,
+  initialTaste,
   tasteIsDefault,
+  tasteRequirement = "optional",
   submittedAt,
   submissionNote,
   submittedFileUrl = null,
@@ -69,12 +72,7 @@ export function SubmissionEditor({
 }: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [criteria, setCriteria] = useState<TasteCriterion[]>(
-    initialCriteria.length > 0
-      ? initialCriteria
-      : [{ name: "", standard: "" }]
-  );
-  const [bar, setBar] = useState(initialBar);
+  const [taste, setTaste] = useState(initialTaste);
   const [savingTaste, setSavingTaste] = useState(false);
   const [note, setNote] = useState(submissionNote);
   const [uploading, setUploading] = useState(false);
@@ -95,13 +93,12 @@ export function SubmissionEditor({
 
   const noteChanged = note !== submissionNote;
 
-  function setCriterion(i: number, patch: Partial<TasteCriterion>) {
-    setCriteria((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)));
-  }
+  // Nothing of their own on the page yet — either blank or still the draft.
+  const tasteUnwritten = !taste.trim() || (tasteIsDefault && taste === initialTaste);
 
   async function saveTaste() {
     setSavingTaste(true);
-    const result = await saveTasteFile(assignmentId, criteria, bar);
+    const result = await saveTasteFile(assignmentId, taste);
     setSavingTaste(false);
     if (result.ok) {
       toast.success("Taste file saved — that's the standard you'll be judged by.");
@@ -117,6 +114,15 @@ export function SubmissionEditor({
     // always going to be refused.
     if (new Date(deadline).getTime() < Date.now()) {
       toast.error("The deadline has passed — this can't be submitted now.");
+      return;
+    }
+
+    // Same reason: the server refuses this too, but only after the file has
+    // already gone up.
+    if (mode === "tasty" && tasteRequirement === "required" && tasteUnwritten) {
+      toast.error(
+        "Write your taste file first — it's part of what you're handing in."
+      );
       return;
     }
 
@@ -189,77 +195,44 @@ export function SubmissionEditor({
           )}
         </Card>
       )}
-      {mode === "tasty" && (
+      {mode === "tasty" && tasteRequirement !== "off" && (
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
-            Your taste file
+            What makes this assignment good?
             {tasteIsDefault && (
               <Badge variant="secondary">AI draft — make it yours</Badge>
             )}
+            {tasteRequirement === "required" && (
+              <Badge variant="outline">Part of the deliverable</Badge>
+            )}
           </CardTitle>
           <CardDescription>
-            The standard you hold this work to — your class&apos;s taste files
-            together become the rubric everyone is graded by. Sharpening it
-            (and meeting it) feeds your &ldquo;holds a high standard&rdquo;
-            statistic. Locks at the deadline.
+            Think out loud — no grid, no criteria to fill in. What would make
+            this work genuinely good, and what&apos;s the bar you&apos;d be
+            proud to clear? Your class&apos;s answers together become the
+            rubric everyone is graded by, so write it your way. Dictate it,
+            paste it, ramble a little. Locks at the deadline.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="bar">My bar</Label>
-            <Input
-              id="bar"
-              value={bar}
-              onChange={(e) => setBar(e.target.value)}
-              placeholder="I won't turn in anything I wouldn't show an employer."
-            />
-          </div>
-          <div className="grid gap-3">
-            {criteria.map((c, i) => (
-              <div key={i} className="grid gap-2 rounded-lg border p-3">
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={c.name}
-                    onChange={(e) => setCriterion(i, { name: e.target.value })}
-                    placeholder="Criterion (e.g. Evidence)"
-                    className="max-w-xs font-medium"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      setCriteria((prev) => prev.filter((_, j) => j !== i))
-                    }
-                    aria-label="Remove criterion"
-                  >
-                    Remove
-                  </Button>
-                </div>
-                <textarea
-                  value={c.standard}
-                  onChange={(e) => setCriterion(i, { standard: e.target.value })}
-                  placeholder="What does excellent look like, concretely?"
-                  rows={2}
-                  className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                />
-              </div>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() =>
-                setCriteria((prev) => [...prev, { name: "", standard: "" }])
-              }
-            >
-              Add criterion
-            </Button>
+        <CardContent className="grid gap-3">
+          <textarea
+            value={taste}
+            onChange={(e) => setTaste(e.target.value)}
+            placeholder="Good work here would…"
+            rows={10}
+            aria-label="What makes this assignment good?"
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          />
+          <div className="flex flex-wrap items-center gap-2">
             <Button onClick={saveTaste} disabled={savingTaste}>
               {savingTaste ? "Saving…" : "Save taste file"}
             </Button>
+            {tasteRequirement === "required" && tasteUnwritten && (
+              <span className="text-sm text-muted-foreground">
+                Needed before you can hand in the work.
+              </span>
+            )}
           </div>
         </CardContent>
       </Card>

@@ -1,6 +1,6 @@
 import "server-only";
 import { env } from "@/lib/env";
-import type { TasteCriterion, ThemeProvenance } from "@/types/db";
+import type { ThemeProvenance } from "@/types/db";
 
 /**
  * Tasty Grading's AI layer (OpenRouter, same account/model as question
@@ -131,24 +131,13 @@ function parseJson<T>(text: string, label: string): T | null {
 // Default taste file (on assignment publish)
 // ---------------------------------------------------------------------------
 
+/**
+ * The drafted seed. `body` is the prose a student edits; the older
+ * `criteria`/`barStatement` shape still turns up in assignments opened before
+ * taste files became free-flowing, and draftBody() reads both.
+ */
 export interface TasteDraft {
-  criteria: TasteCriterion[];
-  barStatement: string;
-}
-
-function cleanCriteria(raw: unknown, max = 10): TasteCriterion[] {
-  if (!Array.isArray(raw)) return [];
-  const out: TasteCriterion[] = [];
-  for (const item of raw) {
-    if (typeof item !== "object" || item === null) continue;
-    const c = item as Record<string, unknown>;
-    const name = typeof c.name === "string" ? c.name.trim().slice(0, 80) : "";
-    const standard =
-      typeof c.standard === "string" ? c.standard.trim().slice(0, 500) : "";
-    if (name && standard) out.push({ name, standard });
-    if (out.length >= max) break;
-  }
-  return out;
+  body: string;
 }
 
 /** AI-drafted starting taste file — the student's to sharpen, not to keep. */
@@ -164,11 +153,11 @@ export async function generateDefaultTaste(
   creds: AiCallCreds
 ): Promise<AiResult<TasteDraft>> {
   const system = [
-    "You draft a starting 'taste file' for a college assignment: the standards a student will hold their own work to.",
-    "Write 5-7 criteria. Each: a short name and 1-2 sentences describing what EXCELLENT looks like for this specific assignment — concrete and checkable, not platitudes.",
-    "Also write a one-sentence 'bar statement' in first person (the student's personal bar).",
-    "Keep it deliberately solid-but-generic: students are scored on how far they push BEYOND this default.",
-    'Reply with ONLY JSON: {"criteria":[{"name":string,"standard":string}],"barStatement":string}',
+    "You draft a starting 'taste file' for a college assignment: what a student thinks makes work on it genuinely good.",
+    "Write 150-250 words of FLOWING PROSE in the student's first-person voice — not a list, not headings, not a rubric grid. Short paragraphs are fine.",
+    "Name 4-6 concrete, checkable qualities for THIS specific assignment (not platitudes), and end with one sentence stating the personal bar: what would make them proud to hand it in.",
+    "Keep it deliberately solid-but-generic: students are scored on how far they push BEYOND this default, and it should read like an invitation to argue with it.",
+    'Reply with ONLY JSON: {"seed":string}',
   ].join("\n");
   const instructions = (input.instructions ?? "").trim();
   const content: unknown[] = [
@@ -195,24 +184,13 @@ Draft the default taste file.`
     creds
   );
   if (!result.ok) return result;
-  const parsed = parseJson<{ criteria?: unknown; barStatement?: unknown }>(
-    result.data,
-    "tastegen"
-  );
-  const criteria = cleanCriteria(parsed?.criteria);
-  if (criteria.length === 0) {
+  const parsed = parseJson<{ seed?: unknown }>(result.data, "tastegen");
+  const body =
+    typeof parsed?.seed === "string" ? parsed.seed.trim().slice(0, 4000) : "";
+  if (!body) {
     return { ok: false, error: "Couldn't draft the taste file — try again." };
   }
-  return {
-    ok: true,
-    data: {
-      criteria,
-      barStatement:
-        typeof parsed?.barStatement === "string"
-          ? parsed.barStatement.trim().slice(0, 300)
-          : "",
-    },
-  };
+  return { ok: true, data: { body } };
 }
 
 // ---------------------------------------------------------------------------
@@ -232,8 +210,9 @@ export async function emergeRubric(
     /** enrollmentId null = the professor's benchmark materials. */
     tasteFiles: Array<{
       enrollmentId: string | null;
-      criteria: TasteCriterion[];
-      barStatement: string;
+      /** The taste file as prose — free-flowing text, or a legacy grid
+       *  rendered as prose by tasteProse(). */
+      text: string;
     }>;
   },
   creds: AiCallCreds
@@ -241,10 +220,7 @@ export async function emergeRubric(
   const corpus = input.tasteFiles
     .map((tf, i) => {
       const who = tf.enrollmentId === null ? "PROFESSOR" : `S${i}`;
-      const lines = tf.criteria
-        .map((c) => `- ${c.name}: ${c.standard}`)
-        .join("\n");
-      return `[${who}]\n${lines}${tf.barStatement ? `\nBar: ${tf.barStatement}` : ""}`;
+      return `[${who}]\n${tf.text}`;
     })
     .join("\n\n");
   const idByTag = new Map<string, string | null>();
@@ -253,7 +229,8 @@ export async function emergeRubric(
   });
 
   const system = [
-    "You are performing a grounded-theory analysis of a class's 'taste files' — each student's own criteria for excellent work on the same assignment.",
+    "You are performing a grounded-theory analysis of a class's 'taste files' — each person's own free-form writing about what makes work on this assignment good.",
+    "They wrote in prose, in their own voice and at their own length; read for what they MEAN, not for structure, and treat a rambling entry as seriously as a tidy one.",
     "Extract 4-8 emergent THEMES (latent constructs, like scales in psychometrics). Each theme is evidenced by ITEMS: near-verbatim quotes of the best sentences students actually wrote, each tagged with its author tag (S3, PROFESSOR, ...).",
     "Prefer themes several voices support. If a PROFESSOR taste file is present, its themes are seeds that must survive (provenance 'professor', or 'both' when the class echoes them). Themes only the class raised get provenance 'class'.",
     "Theme names: short and vivid. Descriptions: 1-2 sentences defining the construct.",
@@ -370,7 +347,8 @@ export async function scoreSubmission(
     assignmentTitle: string;
     submission: DocInput;
     themes: Array<{ id: string; name: string; description: string; itemQuotes: string[] }>;
-    ownTaste: { criteria: TasteCriterion[]; barStatement: string } | null;
+    /** The student's own taste file as prose. */
+    ownTaste: { text: string } | null;
     baselines: string[];
   },
   creds: AiCallCreds
@@ -381,10 +359,7 @@ export async function scoreSubmission(
         `${i + 1}. ${t.name} [id:${t.id}] — ${t.description}\n   Items: ${t.itemQuotes.slice(0, 4).join(" | ")}`
     )
     .join("\n");
-  const ownTasteText = input.ownTaste
-    ? input.ownTaste.criteria.map((c) => `- ${c.name}: ${c.standard}`).join("\n") +
-      (input.ownTaste.barStatement ? `\nBar: ${input.ownTaste.barStatement}` : "")
-    : "(none submitted)";
+  const ownTasteText = input.ownTaste?.text.trim() || "(none submitted)";
   const baselineText = input.baselines
     .map((b, i) => `--- Generic answer ${i + 1} ---\n${b.slice(0, 3000)}`)
     .join("\n\n");

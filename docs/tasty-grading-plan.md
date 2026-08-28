@@ -193,16 +193,64 @@ a single PDF when it's really one deliverable. No multi-file upload.
 
 ## AI-only grading mode (decision, Mike 2026-07-24)
 
+*(Superseded in part by the speed grader below: the instructor's criteria now
+live in the professor's `taste_files` row, not `settings.gradingInstructions`.)*
+
 For objective work (quiz-score screenshots, checklists), assignments can be
 created in **AI-only mode** (`settings.gradingMode = "ai_only"`): no student
-taste files, no peer round. The instructor's criteria
-(`settings.gradingInstructions`, the "instructor taste file") are **required
+taste files, no peer round. The instructor's taste file is **required
 at creation** (even one sentence — "count the questions marked correct,
 score proportionally") and are the whole rubric corpus; the pipeline skips baselines/distinctiveness and peer-pair
 assignment, landing directly in `finalizing` for the professor's cockpit
 review + publish. Submissions additionally accept **PNG/JPEG images**
 (screenshots) in every mode — images ride to the model as image parts and
 render in an image pane in the comparison viewer.
+
+## The speed grader (decisions, Mike 2026-08-28 — built, migration 0037)
+
+Four things changed shape. Where this document and the list disagree, the
+list is what shipped.
+
+**Cut points became lines in a list, not thresholds on an axis.** A band is
+a slice of the ranked list — `settings.dividers` counts the rows above each
+line — so a band survives the professor dragging someone into it. The old
+`{letter, min}` cut points are still read for assignments graded before the
+change (letters become band labels; line positions are derived from the live
+score distribution once, then saved). The avatar histogram survives as a
+read-only companion with markers derived from the lines.
+
+**Grades are numbers now.** Each band carries an optional label and a value
+in the assignment's own points scale (`assignments.points`, finally read).
+`settings.scoreMode` picks how a band's value spreads: `stepped` gives every
+row in the band the same number ("only 4s and 5s, no 4.5s"), `linear`
+interpolates across the band's rows up to the next band, with rank 1 earning
+full marks. `settings.scoreVisibility` decides what students see — score,
+label, or both — because some instructors grade in labels on purpose and
+keep the numbers to themselves. The rank is always shown. Points are written
+to `rankings.points_awarded` **only at publish**, from the durable inputs;
+everything before that is a preview from the same pure function
+(`src/lib/bands.ts`).
+
+**The professor owns the order once peer review ends.** At that moment the
+Bradley–Terry order *materializes* into `rankings.final_rank` and
+`recomputeRanking` stops being able to touch it — enforced by column shape,
+not call-site discipline. Before it, the order still refines as votes
+arrive and rows are not draggable; after it, a professor comparison is a
+**local move** (the loser drops just below the winner) rather than a global
+refit, so a verdict can never undo a drag. Clicking a row opens the work
+beside its AI summary and theme scores.
+
+**Taste files are prose.** One box — "What makes this assignment good?" —
+dictated or pasted, no grid; the AI's draft is a prose seed. Taste files
+written under the structured editor keep their criteria and are rendered
+back as prose (`src/lib/tasteprose.ts`), so nothing was migrated or lost.
+The professor writes one too: a single private field on the assignment form
+that becomes the benchmark `taste_files` row (`enrollment_id null`) the
+rubric corpus has always read as `[PROFESSOR]` and nothing ever wrote. It is
+the whole rubric in `ai_only` mode, which retires
+`settings.gradingInstructions`. `settings.tasteRequirement` decides whether
+students are asked for one: `required` (blocked at submission — it is part
+of the deliverable), `optional` (default), or `off`.
 
 ## Known edges (accepted for v1)
 

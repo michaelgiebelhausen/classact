@@ -10,7 +10,9 @@ import {
   getSignedSubmissionUrl,
   resolveEnrollmentPhotos,
 } from "@/lib/storage";
-import { resolveSettings } from "@/lib/tastegrading";
+import { readDividers, resolveSettings } from "@/lib/tastegrading";
+import { dividersFromThresholds, normalizeDividers } from "@/lib/bands";
+import { draftBody, tasteProse } from "@/lib/tasteprose";
 import { judgingStats, type DecidedComparison } from "@/lib/tastestats";
 import { Card, CardContent } from "@/components/ui/card";
 import { SubmissionEditor } from "@/components/features/assignments/SubmissionEditor";
@@ -29,7 +31,7 @@ import {
   type SubmissionRosterRow,
 } from "@/components/features/assignments/SubmissionRoster";
 import { AssignmentEdit } from "@/components/features/assignments/AssignmentEdit";
-import type { TasteCriterion, ThemeScore } from "@/types/db";
+import type { ThemeScore } from "@/types/db";
 
 /**
  * Tasty Grading — one assignment, routed by role and lifecycle state:
@@ -276,7 +278,7 @@ export default async function AssignmentPage({
       await Promise.all([
         supabase
           .from("rankings")
-          .select("submission_id, bt_score, rank, letter")
+          .select("submission_id, bt_score, rank, final_rank, letter")
           .eq("assignment_id", assignmentId),
         supabase
           .from("submissions")
@@ -329,7 +331,8 @@ export default async function AssignmentPage({
           name: person?.name ?? "Student",
           photoUrl: person?.photoUrl ?? null,
           score: Number(r.bt_score),
-          rank: r.rank,
+          // The professor's order once they own it, the model's until then.
+          rank: r.final_rank ?? r.rank,
           letter: r.letter,
           comparisons: touch.get(r.submission_id) ?? 0,
         };
@@ -373,7 +376,27 @@ export default async function AssignmentPage({
           }
           peerCloseAt={assignment.peer_close_at}
           students={students}
-          initialCutPoints={settings.cutPoints}
+          initialBands={settings.bands}
+          // Assignments graded before the list existed carry 0–100
+          // thresholds instead of line positions; map them onto this class's
+          // scores so the professor opens on the bands they already had.
+          // normalizeDividers is not decoration: the derived thresholds come
+          // from whatever cut points resolved, which is the five-letter
+          // default when an assignment carries bands but no legacy letters —
+          // four lines for three bands, which the cockpit rightly refuses to
+          // publish. One line fewer than there are bands, always.
+          initialDividers={normalizeDividers(
+            readDividers(assignment.settings) ??
+              dividersFromThresholds(
+                students.map((s) => s.score),
+                settings.cutPoints.map((c) => c.min)
+              ),
+            students.length,
+            settings.bands.length
+          )}
+          scoreMode={settings.scoreMode}
+          scoreVisibility={settings.scoreVisibility}
+          points={assignment.points === null ? null : Number(assignment.points)}
           similarPairs={similarPairs}
           decidedPeerVotes={decidedPeerVotes}
           totalPeerPairs={totalPeerPairs}
@@ -401,7 +424,7 @@ export default async function AssignmentPage({
     const [{ data: taste }, { data: submission }] = await Promise.all([
       supabase
         .from("taste_files")
-        .select("criteria, bar_statement, is_default_untouched")
+        .select("body, criteria, bar_statement, is_default_untouched")
         .eq("assignment_id", assignmentId)
         .eq("enrollment_id", enrollmentId)
         .maybeSingle(),
@@ -420,11 +443,34 @@ export default async function AssignmentPage({
       : null;
     const submittedFileExt =
       submission?.storage_path?.split(".").pop()?.toLowerCase() ?? null;
-    const defaultTaste = (
-      assignment.settings as {
-        defaultTaste?: { criteria: TasteCriterion[]; barStatement: string };
-      }
-    ).defaultTaste;
+    // Their own words if they've written any; the AI's draft if not. A taste
+    // file written under the old structured editor is read back as prose, so
+    // nobody has to re-enter what they already said.
+    const written = tasteProse(taste);
+    const seed = draftBody(
+      (assignment.settings as { defaultTaste?: unknown }).defaultTaste
+    );
+
+    // AI-only grading has no emergent rubric, so students are shown what
+    // they ARE graded against. That text now lives in the professor's taste
+    // row, which RLS hides from students — hence the admin read. Deliberately
+    // ai_only: in tasty mode the professor's taste is one private voice in
+    // the corpus, not an announcement.
+    const isAiOnly =
+      (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only";
+    let instructorTaste =
+      (assignment.settings as { gradingInstructions?: string })
+        .gradingInstructions ?? "";
+    if (isAiOnly && isConfigured.supabaseAdmin) {
+      const admin = createAdminClient();
+      const { data: professorTaste } = await admin
+        .from("taste_files")
+        .select("body, criteria, bar_statement")
+        .eq("assignment_id", assignmentId)
+        .is("enrollment_id", null)
+        .maybeSingle();
+      instructorTaste = tasteProse(professorTaste) || instructorTaste;
+    }
     return (
       <div className="grid gap-6">
         {header}
@@ -433,13 +479,9 @@ export default async function AssignmentPage({
           assignmentId={assignmentId}
           enrollmentId={enrollmentId}
           deadline={assignment.deadline}
-          initialCriteria={
-            (taste?.criteria as TasteCriterion[] | undefined) ??
-            defaultTaste?.criteria ??
-            []
-          }
-          initialBar={taste?.bar_statement ?? defaultTaste?.barStatement ?? ""}
+          initialTaste={written || seed}
           tasteIsDefault={taste ? taste.is_default_untouched : true}
+          tasteRequirement={settings.tasteRequirement}
           submittedAt={submission?.submitted_at ?? null}
           submissionNote={submission?.note ?? ""}
           submittedFileUrl={submittedFileUrl}
@@ -450,10 +492,7 @@ export default async function AssignmentPage({
               ? "ai_only"
               : "tasty"
           }
-          instructorCriteria={
-            (assignment.settings as { gradingInstructions?: string })
-              .gradingInstructions ?? ""
-          }
+          instructorCriteria={instructorTaste}
         />
       </div>
     );
@@ -569,7 +608,7 @@ export default async function AssignmentPage({
   ] = await Promise.all([
     supabase
       .from("rankings")
-      .select("rank, letter")
+      .select("rank, final_rank, points_awarded, letter")
       .eq("submission_id", mySubmission.id)
       .maybeSingle(),
     supabase
@@ -643,9 +682,16 @@ export default async function AssignmentPage({
     <div className="grid gap-6">
       {header}
       <StudentReport
-        rank={myRanking?.rank ?? 0}
+        rank={myRanking?.final_rank ?? myRanking?.rank ?? 0}
         total={totalRanked ?? 0}
         letter={myRanking?.letter ?? null}
+        pointsAwarded={
+          myRanking?.points_awarded === null || myRanking?.points_awarded === undefined
+            ? null
+            : Number(myRanking.points_awarded)
+        }
+        pointsPossible={assignment.points === null ? null : Number(assignment.points)}
+        visibility={settings.scoreVisibility}
         summary={myScore?.summary ?? ""}
         themeScores={themeScores}
         ownBar={

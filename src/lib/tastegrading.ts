@@ -7,12 +7,29 @@
  * axis (left → right = low → high, like every axis in the product).
  */
 
+import type { Band, ScoreMode } from "@/lib/bands";
+
+/**
+ * Legacy: a grade boundary on the score axis. Bands replaced these — the
+ * professor now draws lines between rows of the ranked list — but the shape
+ * is still read so assignments graded before the switch keep their letters.
+ */
 export interface CutPoint {
   /** "A", "A-", "B+", … */
   letter: string;
   /** Minimum normalized score (0–100) to earn this letter. */
   min: number;
 }
+
+/** What a student sees of their grade. */
+export type ScoreVisibility = "points" | "label" | "both";
+
+/** Whether the deliverable includes the student's own taste file. */
+export type TasteRequirement = "required" | "optional" | "off";
+
+export const SCORE_MODES = ["stepped", "linear"] as const;
+export const SCORE_VISIBILITIES = ["points", "label", "both"] as const;
+export const TASTE_REQUIREMENTS = ["required", "optional", "off"] as const;
 
 export interface PairMix {
   exceptional: number;
@@ -26,23 +43,41 @@ export interface GradingSettings {
   professorWeight: number;
   /** 0–1: how much distinctiveness shifts the AI overall (0 = informational). */
   distinctivenessWeight: number;
-  /** Sorted descending by min. */
+  /** Legacy, sorted descending by min. Read for back-compat, never written. */
   cutPoints: CutPoint[];
+  /** Grade bands, best first. Where the lines fall is per-assignment state. */
+  bands: Band[];
+  scoreMode: ScoreMode;
+  scoreVisibility: ScoreVisibility;
+  tasteRequirement: TasteRequirement;
   /** Days after the deadline the peer window stays open (fallback). */
   peerWindowDays: number;
+}
+
+const DEFAULT_CUT_POINTS: CutPoint[] = [
+  { letter: "A", min: 80 },
+  { letter: "B", min: 60 },
+  { letter: "C", min: 40 },
+  { letter: "D", min: 20 },
+  { letter: "F", min: 0 },
+];
+
+/** Legacy cut points as bands: the letter becomes a label, the value unset. */
+export function bandsFromCutPoints(cutPoints: CutPoint[]): Band[] {
+  return [...cutPoints]
+    .sort((a, b) => b.min - a.min)
+    .map((cut) => ({ label: cut.letter, value: null }));
 }
 
 export const DEFAULT_SETTINGS: GradingSettings = {
   pairMix: { exceptional: 1, self: 1, refine: 1 },
   professorWeight: 8,
   distinctivenessWeight: 0.15,
-  cutPoints: [
-    { letter: "A", min: 80 },
-    { letter: "B", min: 60 },
-    { letter: "C", min: 40 },
-    { letter: "D", min: 20 },
-    { letter: "F", min: 0 },
-  ],
+  cutPoints: DEFAULT_CUT_POINTS,
+  bands: bandsFromCutPoints(DEFAULT_CUT_POINTS),
+  scoreMode: "stepped",
+  scoreVisibility: "both",
+  tasteRequirement: "optional",
   peerWindowDays: 5,
 };
 
@@ -67,6 +102,35 @@ function parseCutPoints(raw: unknown): CutPoint[] | null {
   return points.sort((a, b) => b.min - a.min);
 }
 
+function parseBands(raw: unknown): Band[] | null {
+  if (!Array.isArray(raw)) return null;
+  const bands: Band[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const b = item as Record<string, unknown>;
+    const label =
+      typeof b.label === "string" && b.label.trim()
+        ? b.label.trim().slice(0, 40)
+        : null;
+    const value =
+      typeof b.value === "number" && Number.isFinite(b.value)
+        ? Math.max(0, b.value)
+        : null;
+    bands.push({ label, value });
+  }
+  return bands.length > 0 ? bands : null;
+}
+
+function pick<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T
+): T {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : fallback;
+}
+
 function layer(base: GradingSettings, raw: unknown): GradingSettings {
   if (typeof raw !== "object" || raw === null) return base;
   const r = raw as Record<string, unknown>;
@@ -74,6 +138,7 @@ function layer(base: GradingSettings, raw: unknown): GradingSettings {
     typeof r.pairMix === "object" && r.pairMix !== null
       ? (r.pairMix as Record<string, unknown>)
       : {};
+  const cutPoints = parseCutPoints(r.cutPoints);
   return {
     pairMix: {
       exceptional: num(mix.exceptional, base.pairMix.exceptional, 0, 4),
@@ -87,9 +152,42 @@ function layer(base: GradingSettings, raw: unknown): GradingSettings {
       0,
       1
     ),
-    cutPoints: parseCutPoints(r.cutPoints) ?? base.cutPoints,
+    cutPoints: cutPoints ?? base.cutPoints,
+    // A layer that still speaks in cut points contributes its letters as
+    // labels, so an assignment mid-flight keeps the bands it already had.
+    bands:
+      parseBands(r.bands) ??
+      (cutPoints ? bandsFromCutPoints(cutPoints) : base.bands),
+    scoreMode: pick(r.scoreMode, SCORE_MODES, base.scoreMode),
+    scoreVisibility: pick(
+      r.scoreVisibility,
+      SCORE_VISIBILITIES,
+      base.scoreVisibility
+    ),
+    tasteRequirement: pick(
+      r.tasteRequirement,
+      TASTE_REQUIREMENTS,
+      base.tasteRequirement
+    ),
     peerWindowDays: num(r.peerWindowDays, base.peerWindowDays, 0.25, 30),
   };
+}
+
+/**
+ * Divider positions index this class's actual rows, so they are read raw off
+ * the assignment and never layered over a course default (a course template
+ * can carry labels and values, but not where the lines fall). Null means the
+ * assignment has none yet — derive them from the legacy thresholds.
+ */
+export function readDividers(assignmentSettings: unknown): number[] | null {
+  if (typeof assignmentSettings !== "object" || assignmentSettings === null) {
+    return null;
+  }
+  const raw = (assignmentSettings as Record<string, unknown>).dividers;
+  if (!Array.isArray(raw)) return null;
+  return raw
+    .filter((n): n is number => typeof n === "number" && Number.isFinite(n))
+    .map((n) => Math.max(0, Math.round(n)));
 }
 
 /** defaults → course grading_defaults → assignment settings. */

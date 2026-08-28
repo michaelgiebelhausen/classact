@@ -6,18 +6,28 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { displayPoints } from "@/lib/bands";
+import type { ScoreVisibility } from "@/lib/tastegrading";
 
 /**
  * The published report — private to the student (FERPA: your standing
- * only). Rank + letter up top, then the evidence: per-theme scores with
- * quotes pulled from their own work, whether they met their own bar,
- * distinctiveness, and their judging statistics.
+ * only). The score and its band label up top, then the evidence: per-theme
+ * scores with quotes pulled from their own work, whether they met their own
+ * bar, distinctiveness, and their judging statistics.
+ *
+ * Some instructors grade in labels and keep the numbers to themselves, so
+ * what appears here is the professor's call — but the rank is always shown,
+ * because a standing without a position is not a report.
  */
 
 interface Props {
   rank: number;
   total: number;
   letter: string | null;
+  /** What the professor awarded, once published. */
+  pointsAwarded: number | null;
+  pointsPossible: number | null;
+  visibility: ScoreVisibility;
   summary: string;
   themeScores: Array<{ name: string; score: number; evidence: string }>;
   ownBar: number | null;
@@ -45,18 +55,36 @@ export function StudentReport({
   rank,
   total,
   letter,
+  pointsAwarded,
+  pointsPossible,
+  visibility,
   summary,
   themeScores,
   ownBar,
   distinctiveness,
   stats,
 }: Props) {
+  const showPoints = visibility !== "label" && pointsAwarded !== null;
+  const showLabel = visibility !== "points" && Boolean(letter);
   return (
     <div className="grid gap-4">
       <Card>
         <CardHeader>
-          <CardTitle className="flex flex-wrap items-center gap-3">
-            {letter && <span className="text-3xl">{letter}</span>}
+          <CardTitle className="flex flex-wrap items-baseline gap-3">
+            {showPoints && (
+              <span className="text-3xl">
+                {displayPoints(pointsAwarded)}
+                {pointsPossible !== null && (
+                  <span className="text-lg text-muted-foreground">
+                    {" "}
+                    / {displayPoints(pointsPossible)}
+                  </span>
+                )}
+              </span>
+            )}
+            {showLabel && (
+              <span className={showPoints ? "text-xl" : "text-3xl"}>{letter}</span>
+            )}
             <span>
               Ranked {rank} of {total}
             </span>

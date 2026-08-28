@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { DocPane, type PairDocKind } from "./DocPane";
 
 /**
  * The comparison surface professors and peers share: two anonymous PDFs
@@ -19,8 +20,7 @@ export const VERDICT_LABELS = [
   "Right is clearly better",
 ];
 
-/** Mirror of the server DocKind (kept local so the client bundle stays clean). */
-export type PairDocKind = "pdf" | "md" | "png" | "jpeg";
+export type { PairDocKind };
 
 interface Props {
   leftUrl: string | null;
@@ -30,34 +30,6 @@ interface Props {
   verdict: number | null;
   busy: boolean;
   onVerdict: (verdict: number) => void;
-}
-
-/** Markdown submissions render as readable plain text (that's the format's point). */
-function MdPane({ url, label }: { url: string; label: string }) {
-  const [text, setText] = useState<string | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(url, { signal: controller.signal })
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
-      .then((t) => setText(t.slice(0, 200_000)))
-      .catch(() => setText("Couldn't load this file — reopen the pair."));
-    return () => controller.abort();
-  }, [url]);
-  if (text === null) {
-    return (
-      <div className="grid h-[540px] place-items-center text-sm text-muted-foreground">
-        Loading…
-      </div>
-    );
-  }
-  return (
-    <pre
-      aria-label={`${label} submission (Markdown)`}
-      className="h-[540px] w-full overflow-auto whitespace-pre-wrap p-4 font-sans text-sm leading-relaxed"
-    >
-      {text}
-    </pre>
-  );
 }
 
 export function ComparePair({
@@ -83,30 +55,7 @@ export function ComparePair({
               <p className="border-b px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {side.label}
               </p>
-              {side.url ? (
-                side.kind === "md" ? (
-                  <MdPane url={side.url} label={side.label} />
-                ) : side.kind === "png" || side.kind === "jpeg" ? (
-                  <div className="grid h-[540px] place-items-center overflow-auto bg-muted/20 p-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL */}
-                    <img
-                      src={side.url}
-                      alt={`${side.label} submission (image)`}
-                      className="max-h-full max-w-full object-contain"
-                    />
-                  </div>
-                ) : (
-                  <iframe
-                    src={side.url}
-                    title={`${side.label} submission`}
-                    className="h-[540px] w-full"
-                  />
-                )
-              ) : (
-                <div className="grid h-[540px] place-items-center text-sm text-muted-foreground">
-                  Loading…
-                </div>
-              )}
+              <DocPane url={side.url} label={side.label} kind={side.kind} />
             </CardContent>
           </Card>
         ))}

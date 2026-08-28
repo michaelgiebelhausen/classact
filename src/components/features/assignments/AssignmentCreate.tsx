@@ -15,6 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { createAssignment } from "@/server/actions/assignments";
+import type { TasteRequirement } from "@/lib/tastegrading";
 
 /**
  * Professor: publish an assignment. Title + brief PDF + deadline — that's
@@ -57,6 +58,8 @@ export function AssignmentCreate({
   // The professor's PRIVATE AI grading criteria (ai_only mode). Not the
   // student-facing brief — that is `instructions` below.
   const [gradingCriteria, setGradingCriteria] = useState("");
+  const [tasteRequirement, setTasteRequirement] =
+    useState<TasteRequirement>("optional");
   // 0033 — the student-facing brief. Students read this.
   const [instructions, setInstructions] = useState("");
   const [points, setPoints] = useState("");
@@ -113,8 +116,9 @@ export function AssignmentCreate({
       gradingMode,
       instructions,
       points,
-      gradingInstructions:
-        gradingMode === "ai_only" ? gradingCriteria : undefined,
+      // The professor's taste file now counts in both modes.
+      gradingInstructions: gradingCriteria || undefined,
+      tasteRequirement: gradingMode === "tasty" ? tasteRequirement : undefined,
     });
     setSaving(false);
     if (result.ok) {
@@ -218,22 +222,55 @@ export function AssignmentCreate({
           </p>
         </div>
 
-        {gradingMode === "ai_only" && (
+        <div className="grid gap-2">
+          <Label htmlFor="a-grading-criteria">
+            {gradingMode === "ai_only"
+              ? "Your taste file (required — this is the standard the AI grades against)"
+              : "Your taste file (optional)"}
+          </Label>
+          <textarea
+            id="a-grading-criteria"
+            value={gradingCriteria}
+            onChange={(e) => setGradingCriteria(e.target.value)}
+            placeholder={
+              gradingMode === "ai_only"
+                ? "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
+                : "What would make this work genuinely good? Write it the way you'd say it out loud."
+            }
+            rows={gradingMode === "ai_only" ? 3 : 5}
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          />
+          <p className="text-xs text-muted-foreground">
+            {gradingMode === "ai_only"
+              ? "There's no emergent rubric in AI-only mode, so students are shown this."
+              : "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."}
+          </p>
+        </div>
+
+        {gradingMode === "tasty" && (
           <div className="grid gap-2">
-            <Label htmlFor="a-grading-criteria">
-              Your grading criteria (required — this is the standard the AI
-              grades against)
-            </Label>
-            <textarea
-              id="a-grading-criteria"
-              value={gradingCriteria}
-              onChange={(e) => setGradingCriteria(e.target.value)}
-              placeholder={
-                "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
+            <Label htmlFor="a-taste-requirement">Students&apos; taste files</Label>
+            <select
+              id="a-taste-requirement"
+              value={tasteRequirement}
+              onChange={(e) =>
+                setTasteRequirement(e.target.value as TasteRequirement)
               }
-              rows={3}
-              className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            />
+              className="h-9 max-w-md rounded-md border bg-background px-2 text-sm"
+            >
+              <option value="optional">Invited — they can write one</option>
+              <option value="required">
+                Required — part of the deliverable
+              </option>
+              <option value="off">Not this time — don&apos;t ask</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {tasteRequirement === "required"
+                ? "They can't hand in the work until they've written what makes it good."
+                : tasteRequirement === "off"
+                  ? "No taste editor. The rubric emerges from your taste file and the AI's draft."
+                  : "They're asked, not blocked — most classes start here."}
+            </p>
           </div>
         )}
 

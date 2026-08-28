@@ -8,7 +8,16 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
-import { resolveSettings } from "@/lib/tastegrading";
+import {
+  resolveSettings,
+  SCORE_MODES,
+  SCORE_VISIBILITIES,
+  TASTE_REQUIREMENTS,
+  type ScoreVisibility,
+  type TasteRequirement,
+} from "@/lib/tastegrading";
+import type { ScoreMode } from "@/lib/bands";
+import { cleanTasteBody, isUntouchedTaste } from "@/lib/tasteprose";
 import { describeQueryFailure } from "@/lib/dberror";
 import {
   docKindFromPath,
@@ -17,7 +26,7 @@ import {
 } from "@/server/tastyai";
 import { resolveCourseAi } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
-import type { AssignmentRow, TasteCriterion } from "@/types/db";
+import type { AssignmentRow } from "@/types/db";
 
 /**
  * Tasty Grading — assignment lifecycle actions (professor create, student
@@ -27,7 +36,6 @@ import type { AssignmentRow, TasteCriterion } from "@/types/db";
  */
 
 const ASSIGNMENT_BUCKET = "assignment-docs";
-const MAX_CRITERIA = 15;
 
 async function requireUser() {
   const supabase = await createClient();
@@ -73,8 +81,11 @@ export async function createAssignment(input: {
   /** "tasty" (default): taste files + peer round. "ai_only": AI grades
    * against the instructor's criteria; no taste files, no peer review. */
   gradingMode?: "tasty" | "ai_only";
-  /** ai_only: the instructor's grading criteria (their "taste file"). */
+  /** The professor's own taste file. Required in ai_only mode (it IS the
+   *  rubric); optional in tasty mode, where it joins the class's corpus. */
   gradingInstructions?: string;
+  /** Whether students are asked for a taste file as part of the deliverable. */
+  tasteRequirement?: TasteRequirement;
 }): Promise<ActionResult<{ id: string }>> {
   const { supabase, user } = await requireUser();
   if (!user) return { ok: false, error: "Sign in first." };
@@ -170,13 +181,9 @@ export async function createAssignment(input: {
       peer_close_at: peerClose.toISOString(),
       settings: {
         ...(defaultTaste ? { defaultTaste } : {}),
-        ...(gradingMode === "ai_only"
-          ? {
-              gradingMode,
-              gradingInstructions: (input.gradingInstructions ?? "")
-                .trim()
-                .slice(0, 4000),
-            }
+        ...(gradingMode === "ai_only" ? { gradingMode } : {}),
+        ...(input.tasteRequirement && gradingMode === "tasty"
+          ? { tasteRequirement: input.tasteRequirement }
           : {}),
       },
     })
@@ -185,29 +192,39 @@ export async function createAssignment(input: {
   if (error || !created) {
     return { ok: false, error: "Couldn't create the assignment. Try again." };
   }
+
+  // The professor's own taste file — the benchmark row the rubric corpus
+  // reads as [PROFESSOR]. In ai_only mode it IS the rubric; in tasty mode it
+  // is one voice among the class's.
+  const professorTaste = cleanTasteBody(input.gradingInstructions ?? "");
+  if (professorTaste) {
+    await supabase.from("taste_files").insert({
+      assignment_id: created.id,
+      course_id: input.courseId,
+      enrollment_id: null,
+      body: professorTaste,
+      is_default_untouched: false,
+      first_edit_at: new Date().toISOString(),
+      last_edit_at: new Date().toISOString(),
+    });
+  }
+
   revalidatePath(`/course/${input.courseId}/assignments`);
   return { ok: true, data: { id: created.id } };
 }
 
-function cleanCriteria(raw: TasteCriterion[]): TasteCriterion[] {
-  return raw
-    .map((c) => ({
-      name: String(c.name ?? "").trim().slice(0, 80),
-      standard: String(c.standard ?? "").trim().slice(0, 500),
-    }))
-    .filter((c) => c.name && c.standard)
-    .slice(0, MAX_CRITERIA);
-}
-
 /**
- * Student: save the taste file (creates it on first save). Locked at the
- * deadline; is_default_untouched flips once the content differs from the
- * AI default.
+ * Student: save the taste file (creates it on first save). Free-flowing
+ * text — say what makes the work good, however you'd say it. Locked at the
+ * deadline; is_default_untouched flips once it stops matching the AI draft.
+ *
+ * An empty save is allowed on purpose: this is a draft box a student may
+ * come back to. Whether a taste file is REQUIRED is answered at submission,
+ * where the deliverable is actually handed in.
  */
 export async function saveTasteFile(
   assignmentId: string,
-  criteria: TasteCriterion[],
-  barStatement: string
+  body: string
 ): Promise<ActionResult> {
   const { supabase, user } = await requireUser();
   if (!user) return { ok: false, error: "Sign in first." };
@@ -224,18 +241,11 @@ export async function saveTasteFile(
   const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
   if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
 
-  const cleaned = cleanCriteria(criteria);
-  if (cleaned.length === 0) {
-    return { ok: false, error: "Keep at least one criterion — it's your standard." };
-  }
-  const bar = barStatement.trim().slice(0, 300);
-
-  const defaultTaste =
-    (assignment.settings as { defaultTaste?: TasteDraft }).defaultTaste ?? null;
-  const untouched =
-    defaultTaste !== null &&
-    JSON.stringify({ c: cleaned, b: bar }) ===
-      JSON.stringify({ c: defaultTaste.criteria, b: defaultTaste.barStatement });
+  const text = cleanTasteBody(body);
+  const untouched = isUntouchedTaste(
+    { body: text },
+    (assignment.settings as { defaultTaste?: unknown }).defaultTaste
+  );
 
   const now = new Date().toISOString();
   const { data: existing } = await supabase
@@ -249,8 +259,7 @@ export async function saveTasteFile(
     const { error } = await supabase
       .from("taste_files")
       .update({
-        criteria: cleaned,
-        bar_statement: bar,
+        body: text,
         is_default_untouched: untouched,
         first_edit_at: existing.first_edit_at ?? now,
         last_edit_at: now,
@@ -262,8 +271,7 @@ export async function saveTasteFile(
       assignment_id: assignmentId,
       course_id: assignment.course_id,
       enrollment_id: enrollmentId,
-      criteria: cleaned,
-      bar_statement: bar,
+      body: text,
       is_default_untouched: untouched,
       first_edit_at: now,
       last_edit_at: now,
@@ -289,7 +297,7 @@ export async function submitWork(
 
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, deadline")
+    .select("id, course_id, deadline, settings, courses!inner(grading_defaults)")
     .eq("id", assignmentId)
     .single();
   if (!assignment) return { ok: false, error: "Assignment not found." };
@@ -300,6 +308,34 @@ export async function submitWork(
   if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
   if (!storagePath.startsWith(`${assignment.course_id}/sub/${enrollmentId}/`)) {
     return { ok: false, error: "Upload didn't complete — try again." };
+  }
+
+  // When the taste file is part of the deliverable, it is enforced here —
+  // where the deliverable is handed in — not in the editor, which is a draft
+  // box. The client checks first so the upload isn't wasted.
+  const settings = resolveSettings(
+    (assignment.courses as unknown as { grading_defaults: unknown }).grading_defaults,
+    assignment.settings
+  );
+  if (settings.tasteRequirement === "required") {
+    const { data: taste } = await supabase
+      .from("taste_files")
+      .select("body, criteria, bar_statement")
+      .eq("assignment_id", assignmentId)
+      .eq("enrollment_id", enrollmentId)
+      .maybeSingle();
+    if (
+      isUntouchedTaste(
+        taste,
+        (assignment.settings as { defaultTaste?: unknown }).defaultTaste
+      )
+    ) {
+      return {
+        ok: false,
+        error:
+          "This assignment asks for your taste file too — say what makes the work good in your own words before you hand it in.",
+      };
+    }
   }
 
   const now = new Date().toISOString();
@@ -445,6 +481,15 @@ export async function updateAssignment(input: {
   }
 
   if (input.points !== undefined) {
+    // Once grades are out, the point value is baked into every score already
+    // awarded — changing it would silently desync what students were told
+    // from what the assignment claims to be worth.
+    if (assignment.state === "published") {
+      return {
+        ok: false,
+        error: "Grades are published — the point value can't change now.",
+      };
+    }
     const verdict = normalizePoints(input.points);
     if (!verdict.ok) return { ok: false, error: verdict.message };
     patch.points = verdict.value;
@@ -508,15 +553,30 @@ export async function updateAssignment(input: {
   return { ok: true };
 }
 
-export async function updateAssignmentSettings(
+/**
+ * Professor: the three grading knobs, each gated by how far the assignment
+ * has travelled.
+ *
+ * `tasteRequirement` closes with submissions — changing what the deliverable
+ * includes after students have handed it in would retroactively fail people.
+ * `scoreMode` freezes at publication, because it decides the numbers already
+ * handed out. `scoreVisibility` deliberately stays editable forever: showing
+ * a class the numbers behind their labels later is a normal thing to decide,
+ * and it changes only what is displayed, never what was awarded.
+ */
+export async function setGradingOptions(
   assignmentId: string,
-  patch: Record<string, unknown>
+  patch: {
+    scoreMode?: ScoreMode;
+    scoreVisibility?: ScoreVisibility;
+    tasteRequirement?: TasteRequirement;
+  }
 ): Promise<ActionResult> {
   const { supabase, user } = await requireUser();
   if (!user) return { ok: false, error: "Sign in first." };
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, settings, courses!inner(professor_id)")
+    .select("id, course_id, state, settings, courses!inner(professor_id)")
     .eq("id", assignmentId)
     .single();
   if (
@@ -525,12 +585,117 @@ export async function updateAssignmentSettings(
   ) {
     return { ok: false, error: "Only the course owner can change settings." };
   }
-  const merged = { ...(assignment.settings as Record<string, unknown>), ...patch };
+
+  const merged = { ...(assignment.settings as Record<string, unknown>) };
+
+  if (patch.scoreMode !== undefined) {
+    if (!SCORE_MODES.includes(patch.scoreMode)) {
+      return { ok: false, error: "Unknown scoring mode." };
+    }
+    if (assignment.state === "published") {
+      return { ok: false, error: "Grades are published — the scale can't change now." };
+    }
+    merged.scoreMode = patch.scoreMode;
+  }
+
+  if (patch.scoreVisibility !== undefined) {
+    if (!SCORE_VISIBILITIES.includes(patch.scoreVisibility)) {
+      return { ok: false, error: "Unknown visibility setting." };
+    }
+    merged.scoreVisibility = patch.scoreVisibility;
+  }
+
+  if (patch.tasteRequirement !== undefined) {
+    if (!TASTE_REQUIREMENTS.includes(patch.tasteRequirement)) {
+      return { ok: false, error: "Unknown taste setting." };
+    }
+    if (assignment.state !== "open") {
+      return {
+        ok: false,
+        error: "Submissions have closed — what the deliverable includes can't change now.",
+      };
+    }
+    merged.tasteRequirement = patch.tasteRequirement;
+  }
+
   const { error } = await supabase
     .from("assignments")
     .update({ settings: merged })
     .eq("id", assignmentId);
   if (error) return { ok: false, error: "Couldn't save settings." };
+  revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
+  return { ok: true };
+}
+
+/**
+ * Professor: their own taste file — the benchmark row the rubric corpus has
+ * always had a place for (enrollment_id null, tagged [PROFESSOR]) and no way
+ * to write. In ai_only mode it is the whole rubric; in tasty mode it sits
+ * beside the students' as one voice among many.
+ *
+ * Editable only while the assignment is open: the rubric is emerged from this
+ * text at the deadline, so a later edit would change nothing and quietly
+ * imply it had.
+ */
+export async function saveProfessorTaste(
+  assignmentId: string,
+  body: string
+): Promise<ActionResult> {
+  const { supabase, user } = await requireUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+  const { data: assignment } = await supabase
+    .from("assignments")
+    .select("id, course_id, state, courses!inner(professor_id)")
+    .eq("id", assignmentId)
+    .single();
+  if (
+    !assignment ||
+    (assignment.courses as unknown as { professor_id: string }).professor_id !== user.id
+  ) {
+    return { ok: false, error: "Only the course owner can write this." };
+  }
+  if (assignment.state !== "open") {
+    return {
+      ok: false,
+      error: "Grading has started — the rubric was already drawn from this.",
+    };
+  }
+
+  const text = cleanTasteBody(body);
+  const now = new Date().toISOString();
+  // The partial unique index (one professor row per assignment) can't be an
+  // onConflict target, so this reads before it writes — same shape as the
+  // student path.
+  const { data: existing } = await supabase
+    .from("taste_files")
+    .select("id, first_edit_at")
+    .eq("assignment_id", assignmentId)
+    .is("enrollment_id", null)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await supabase
+      .from("taste_files")
+      .update({
+        body: text,
+        is_default_untouched: false,
+        first_edit_at: existing.first_edit_at ?? now,
+        last_edit_at: now,
+      })
+      .eq("id", existing.id);
+    if (error) return { ok: false, error: "Couldn't save — try again." };
+  } else {
+    const { error } = await supabase.from("taste_files").insert({
+      assignment_id: assignmentId,
+      course_id: assignment.course_id,
+      enrollment_id: null,
+      body: text,
+      is_default_untouched: false,
+      first_edit_at: now,
+      last_edit_at: now,
+    });
+    if (error) return { ok: false, error: "Couldn't save — try again." };
+  }
   revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
   return { ok: true };
 }
