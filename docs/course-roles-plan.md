@@ -56,15 +56,52 @@ marks work; they are not handed a dossier on the person who submitted it.
 Worth flagging because this is *not* what Observer means in Canvas. There, an
 observer is usually a parent or advisor watching a particular student. Here it
 is someone sitting in on the class themselves — a visiting colleague, an
-auditor — who participates like a student but whose participation shouldn't
-count toward their own record.
+auditor — who participates like a student but under different expectations.
 
-That makes it a **data-scoping rule, not a UI rule.** "Reputation metrics" is
-the student-facing work-readiness view (`src/lib/employability.ts`) — the
-growth mirror built from attendance, seats claimed, people met, think-pair-share
-and so on. An observer's activity in this class must be *excluded from the
-aggregation that feeds their own* work-readiness signals, rather than merely
-hidden from a page. Hiding it would leave the number quietly wrong.
+**Why this matters more than it looks.** My Metrics is not a usage report. In
+Mike's words it is "sort of a reflection of your character as a member of the
+classroom community" — it reads shows-up-regularly, on-time, networks with
+people, answers questions, turns work in, and reports them back as
+Dependability, Initiative, Collaboration, Coachability. It makes a claim about
+who you are.
+
+An observer's attendance is erratic and their participation partial. For an
+observer **that is the role working correctly, not a character defect.** Score
+them on student expectations and the metric doesn't just read low — it says
+something false about the person. That is the harm to avoid.
+
+**So the rule is asymmetric, and this is the part to get right.** Mike's words
+are "shouldn't *negatively* impact" — not "shouldn't count". Those differ:
+
+- What an observer **does** do is real evidence of character and should count
+  for them. If they show up and network and answer questions, that happened.
+- What they **don't** do must not count against them.
+
+That rules out the obvious implementation. Excluding the course wholesale from
+their aggregation is wrong in the generous direction — it throws away the good
+along with the bad, and an observer who engages well ends up with nothing to
+show for it.
+
+**Mechanically it is the denominators.** The scores are ratios over what the
+course expected of you:
+
+```
+attendanceRate = sessionsAttended / sessionsHeld        // employability.ts:140
+verifiedRate   = verifiedAttendances / sessionsAttended // :142
+```
+
+`sessionsHeld` is "every class this course ran", which is the right
+expectation for an enrolled student and the wrong one for an observer. Same
+shape for `peerPairsAssigned` vs `peerPairsDone`, and for assignments. **Count
+an observer's numerators; don't hold them to the course's denominators.**
+Non-participation should read as "no signal here", which the code already
+models — `hasSignal` and the `null`-able means exist precisely for
+"nothing to read yet" — rather than as a zero, which reads as a failing.
+
+**Consequence to write down before someone trips on it:** observer metrics are
+therefore not comparable to student metrics, because they are measured against
+a different set of expectations. Never rank them together, and never put an
+observer in a class-wide comparison or leaderboard.
 
 Open sub-question: does an observer still appear on the professor's roster and
 seat map? Probably yes — they're physically in the room and the seat map is a
@@ -88,7 +125,10 @@ re-labelling accounts:
   sufficient role" — roughly twenty call sites currently comparing
   `professor_id` directly, plus the course-scoped `requireProfessor(courseId)`
   helpers in `exercises.ts`, `lectures.ts`, `participation.ts` and friends.
-- Employability aggregation gains a course-exclusion filter for observers.
+- Employability aggregation learns *role-aware denominators* for observers —
+  count their numerators, don't hold them to the course's expectations. Not a
+  course-exclusion filter; see the Observer section for why that's the wrong
+  shape.
 
 **No account, course, or enrollment migrates. Nobody re-picks anything.** That
 is the whole benefit of having removed the global flag first, and it is why
