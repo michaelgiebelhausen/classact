@@ -109,7 +109,7 @@ create policy checkins_delete_professor on public.check_ins for delete
 -- ---------- 5. Trigger: a denial recounts the subject's denied_count ----------
 
 create or replace function public.handle_seat_denial()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $fn_denial$
 begin
   update public.check_ins
      set denied_count = (
@@ -122,7 +122,7 @@ begin
      and enrollment_id = new.subject_enrollment_id;
   return new;
 end;
-$$;
+$fn_denial$;
 
 drop trigger if exists on_seat_denial on public.seat_denials;
 create trigger on_seat_denial
@@ -135,7 +135,7 @@ create trigger on_seat_denial
 -- upsert's conflict path is how a re-confirmation clears a denial.
 
 create or replace function public.handle_seat_verification()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $fn_verif$
 begin
   update public.seat_denials
      set resolved_at = now(), resolved_by = 'peer_confirm'
@@ -149,7 +149,7 @@ begin
      and (verified is distinct from true or denied_count is distinct from 0);
   return new;
 end;
-$$;
+$fn_verif$;
 
 drop trigger if exists on_seat_verification on public.seat_verifications;
 create trigger on_seat_verification
@@ -162,7 +162,7 @@ create trigger on_seat_verification
 -- about the seat they just left. BEFORE + mutating NEW, so there is no second
 -- UPDATE (and no trigger recursion, and no second realtime event).
 create or replace function public.handle_checkin_seat_change()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $fn_seatchg$
 begin
   if new.seat_id is distinct from old.seat_id then
     update public.seat_denials
@@ -174,7 +174,7 @@ begin
   end if;
   return new;
 end;
-$$;
+$fn_seatchg$;
 
 drop trigger if exists on_checkin_seat_change on public.check_ins;
 create trigger on_checkin_seat_change
@@ -184,7 +184,7 @@ create trigger on_checkin_seat_change
 -- A removed check-in (releaseSeat, or the delete half of a swap) resolves the
 -- denials that pointed at it.
 create or replace function public.handle_checkin_removed()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $fn_removed$
 begin
   update public.seat_denials
      set resolved_at = now(), resolved_by = 'checkin_removed'
@@ -193,7 +193,7 @@ begin
      and resolved_at is null;
   return old;
 end;
-$$;
+$fn_removed$;
 
 drop trigger if exists on_checkin_removed on public.check_ins;
 create trigger on_checkin_removed
@@ -206,7 +206,7 @@ create trigger on_checkin_removed
 -- semantics however the row came back. denied_count: closes the race where a
 -- denial landed between a release and a re-check-in.
 create or replace function public.handle_checkin_seeded()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $fn_seeded$
 begin
   if exists (
     select 1 from seat_verifications v
@@ -223,7 +223,7 @@ begin
   );
   return new;
 end;
-$$;
+$fn_seeded$;
 
 drop trigger if exists on_checkin_seeded on public.check_ins;
 create trigger on_checkin_seeded
@@ -243,7 +243,7 @@ create or replace function public.professor_confirm_attendance(
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $fn_confirm$
 declare
   v_course uuid;
   v_closed timestamptz;
@@ -280,7 +280,7 @@ begin
     raise exception 'student not checked in' using errcode = 'P0007';
   end if;
 end;
-$$;
+$fn_confirm$;
 
 revoke all on function public.professor_confirm_attendance(uuid, uuid) from public;
 grant execute on function public.professor_confirm_attendance(uuid, uuid) to authenticated;
@@ -301,7 +301,7 @@ create or replace function public.reassign_seat(
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $fn_reassign$
 declare
   v_course  uuid;
   v_closed  timestamptz;
@@ -386,7 +386,7 @@ begin
     v_other.professor_confirmed_at
   );
 end;
-$$;
+$fn_reassign$;
 
 revoke all on function public.reassign_seat(uuid, uuid, uuid) from public;
 grant execute on function public.reassign_seat(uuid, uuid, uuid) to authenticated;
