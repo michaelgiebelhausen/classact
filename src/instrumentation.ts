@@ -21,14 +21,27 @@ export function scrubEvent<T extends Sentry.Event>(event: T): T {
 
 export async function register() {
   const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
-  if (!dsn) return; // no-op until secrets are wired
+  if (dsn) {
+    Sentry.init({
+      dsn,
+      tracesSampleRate: 0.1,
+      sendDefaultPii: false,
+      beforeSend: (event) => scrubEvent(event),
+    });
+  }
 
-  Sentry.init({
-    dsn,
-    tracesSampleRate: 0.1,
-    sendDefaultPii: false,
-    beforeSend: (event) => scrubEvent(event),
-  });
+  // Does the database have the columns this build reads? Migrations are
+  // applied by hand, so a deploy can arrive ahead of its migration — and
+  // when it does the queries return empty rather than failing, which reads
+  // as "nobody has checked in" instead of "this is broken". Ask once per
+  // server instance, before anyone's class depends on the answer.
+  //
+  // Node runtime only: the check needs the service role key and the
+  // Supabase admin client, neither of which belongs in an edge bundle.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { assertSchemaAtBoot } = await import("@/server/schemaguard");
+    await assertSchemaAtBoot();
+  }
 }
 
 export const onRequestError = Sentry.captureRequestError;

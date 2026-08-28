@@ -263,6 +263,49 @@ identity for a future Canvas gradebook CSV export, which is spec'd but not
 built. Only `canvas_user_id` is populated, by the roster sync, for free on
 every resync. See `docs/canvas-assignment-fields-plan.md`.
 
+## The app now notices when the database is behind it
+
+No migration. Nothing to run — this is the guard that would have caught the
+0036 incident below in the first minute instead of the first class.
+
+**The failure it exists for.** Migrations here are applied by hand, so a
+deploy can land before its migration. On 2026-08-28 one did, and it did not
+crash: every check-in query destructures `{ data }` and ignores `error`, so
+PostgREST's "column does not exist" became `data: null`, became an empty
+occupants list, became a seat map showing an **empty room** in a class where
+students were sitting. Nothing reached Sentry, because nothing threw. A
+schema gap impersonating an empty classroom is the worst shape this can
+take, because it looks like an answer.
+
+**What happens now.** `src/lib/schemacontract.ts` lists the columns and
+tables this build reads that a migration created. At boot, one cheap probe
+per table (`select … limit(0)`) asks the database whether they're there:
+
+- **Development** — the server refuses to start, printing which column is
+  missing and which file to run. You cannot pull a migration-dependent
+  branch and forget.
+- **Production** — the same alert is logged, but the deployment keeps
+  serving. A deploy that refuses to boot turns a broken check-in page into a
+  broken everything, and Vercel does not roll back on its own.
+- **The check-in page** — shows an explicit "the site was updated ahead of
+  its database" card *instead of* the seat map. The professor gets the
+  migration filename; students get told their attendance is safe and that
+  their professor can fix it. Better an admission than a convincing lie
+  about who is in the room.
+
+**It cannot cry wolf.** Only two SQLSTATEs count as a gap: `42703` (no such
+column) and `42P01` (no such table) — Postgres stating a fact. A timeout, a
+dropped connection, a missing service-role key: all reported healthy on
+purpose, because blanking a working seat map mid-class over a network blip
+would be worse than the bug being guarded. A healthy answer is cached for
+the life of the server instance; an unhealthy one is re-checked every 60s,
+so the banner clears itself about a minute after you run the migration —
+no redeploy.
+
+**When you add a migration that adds a column the code reads, add it to
+`SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
+costs an empty classroom.
+
 ## Neighbors can say no, and the professor can say yes (0036)
 
 **Run `supabase/migrations/0036_neighbor_denials.sql` BEFORE deploying.** This

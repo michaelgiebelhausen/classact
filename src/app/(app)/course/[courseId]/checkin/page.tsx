@@ -45,6 +45,9 @@ import { timed } from "@/server/loadmetrics";
  */
 export const maxDuration = 90;
 import { loadCourseSeats } from "@/server/courseseats";
+import { checkSchema } from "@/server/schemaguard";
+import { migrationsToRun } from "@/lib/schemacontract";
+import { SchemaBehindNotice } from "@/components/features/checkin/SchemaBehindNotice";
 
 export default async function CheckInPage({
   params,
@@ -161,6 +164,13 @@ async function renderCheckIn(courseId: string) {
     schedule ? meetingStartInstant(schedule, today)?.toISOString() ?? null : null,
     sessionOpenedAt
   );
+
+  // Is the database actually carrying the columns this page reads? If not,
+  // the occupants query below returns nothing and the room draws empty —
+  // indistinguishable from a class nobody came to. Cached per instance, so
+  // this costs a healthy deployment one probe at boot and nothing after.
+  const schema = await checkSchema();
+  const schemaGap = schema.healthy ? null : migrationsToRun(schema.gaps);
 
   // Seats with geometry and adjacency, shared with every other page that
   // draws this room.
@@ -377,6 +387,12 @@ async function renderCheckIn(courseId: string) {
         )}
       </div>
 
+      {schemaGap ? (
+        <SchemaBehindNotice
+          migrations={schemaGap}
+          isProfessor={isProfessor}
+        />
+      ) : (
       <CheckInLive
         courseId={courseId}
         sessionId={sessionId}
@@ -400,6 +416,7 @@ async function renderCheckIn(courseId: string) {
             : null
         }
       />
+      )}
 
       {/* Absences: report one instead of emailing (student), or read the
           already-judged list (professor). */}
