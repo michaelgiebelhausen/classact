@@ -7,13 +7,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
-import { getProfile } from "@/lib/auth";
+import { getProfile, getMembership } from "@/lib/auth";
+import { teaches } from "@/lib/membership";
 import { getSignedPhotoUrls } from "@/lib/storage";
 import { PhotoUploader } from "@/components/features/profile/PhotoUploader";
 import { DeleteDataButton } from "@/components/features/profile/DeleteDataButton";
 import { AboutMeForm } from "@/components/features/profile/AboutMeForm";
 import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
-import { BecomeStudentButton } from "@/components/features/profile/BecomeStudentButton";
 import { UserDocUpload } from "@/components/features/profile/UserDocUpload";
 import { getMyUserDoc } from "@/server/actions/profile";
 import { icebreakersByKey, DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
@@ -42,7 +42,13 @@ export default async function ProfilePage() {
   // Professors answer icebreakers on their profile (they have no enrollment
   // to hang per-course answers on) — the questions are the union of what
   // they ask across their own courses.
-  const isProfessor = profile.role === "professor";
+  //
+  // "Professor" here means owning a course, not a flag on the account. So
+  // this card appears the moment you create one and not a second before, and
+  // someone who both teaches and attends sees it alongside the student
+  // sections rather than instead of them.
+  const membership = await getMembership(profile.id);
+  const isProfessor = membership ? teaches(membership) : false;
   // Its own table and its own query — deliberately not on `profiles`, which
   // getProfile() pulls in full on nearly every page.
   const userDoc = await getMyUserDoc();
@@ -124,22 +130,6 @@ export default async function ProfilePage() {
           </CardHeader>
           <CardContent>
             <AboutMeForm fields={aboutFields} initial={aboutAnswers} />
-          </CardContent>
-        </Card>
-      )}
-
-      {isProfessor && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Account type</CardTitle>
-            <CardDescription>
-              This is a professor account. If you&apos;re here to attend a
-              class rather than teach one, switch it over — same login, same
-              email, and any class you&apos;ve already joined comes with you.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <BecomeStudentButton />
           </CardContent>
         </Card>
       )}

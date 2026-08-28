@@ -128,8 +128,6 @@ export async function signInWithPassword(input: {
 export async function signUpWithPassword(input: {
   email: string;
   password: string;
-  /** "professor" creates a course-owning account; anything else = student. */
-  role?: string;
 }): Promise<ActionResult<{ confirmationNeeded: boolean }>> {
   const parsed = signUpSchema.safeParse(input);
   if (!parsed.success) {
@@ -137,17 +135,18 @@ export async function signUpWithPassword(input: {
   }
   if (!isConfigured.supabase) return { ok: false, error: NOT_CONFIGURED };
 
-  const role = input.role === "professor" ? "professor" : "student";
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
     options: {
-      // Read by the handle_new_user() trigger (migration 0023).
-      data: { role },
-      emailRedirectTo: `${env.siteUrl}/auth/callback?next=${
-        role === "professor" ? "/course/new" : "/dashboard"
-      }`,
+      // No role. Sign-up used to send one, the handle_new_user() trigger used
+      // to store it, and the form's toggle defaulted to "A professor" — so
+      // students who never made a choice were filed as professors. Whether
+      // you teach a course or attend one is now derived from what you belong
+      // to (src/lib/membership.ts), asked at the moment it matters instead of
+      // guessed here. Migration 0035 makes the trigger ignore it either way.
+      emailRedirectTo: `${env.siteUrl}/auth/callback?next=/dashboard`,
     },
   });
   if (error) {

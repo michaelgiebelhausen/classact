@@ -4,21 +4,32 @@ import { getProfile } from "@/lib/auth";
 import { getSignedPhotoUrls } from "@/lib/storage";
 import { DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
 import { OnboardingFlow } from "@/components/features/profile/OnboardingFlow";
-import { BecomeProfessorButton } from "@/components/features/profile/BecomeProfessorButton";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import type { PhotoKind } from "@/types/db";
 
 export default async function OnboardingPage() {
   const profile = await getProfile();
   if (!profile) redirect("/login");
-  if (profile.role === "professor") redirect("/dashboard");
 
   const supabase = await createClient();
 
-  // Union of icebreaker fields across the student's courses (usually one).
+  // Union of icebreaker fields across the classes this person is in (usually
+  // one). Dropped rows are excluded — a class you left shouldn't be setting
+  // the questions you answer.
   const { data: enrollments } = await supabase
     .from("enrollments")
     .select("id, roster_name_phonetic, courses(icebreaker_fields)")
-    .eq("profile_id", profile.id);
+    .eq("profile_id", profile.id)
+    .neq("status", "dropped");
+
+  // Onboarding is something you do for a class, so there has to be one. This
+  // used to read `role === "professor"`, which sent the wrong people away and
+  // kept the wrong people here: a mis-flagged student was bounced to a
+  // dashboard they had no business on, and a professor attending a colleague's
+  // class was excused from the onboarding that class is owed. Belonging to no
+  // class at all now means the dashboard's chooser, not a form about nothing.
+  if (!enrollments || enrollments.length === 0) redirect("/dashboard");
 
   // AI-generated pronunciation default (from roster import/sync) to pre-fill the
   // field; the student's own saved value, if any, takes precedence below.
@@ -72,13 +83,16 @@ export default async function OnboardingPage() {
         icebreakerKeys={icebreakerKeys}
         initialAnswers={initialAnswers}
       />
-      {/* Escape hatch: professors who signed up before the role question
-          existed land here by default. */}
+      {/* Teaching is a thing you can also do, not a different kind of
+          account to switch to — so this is a link to the course builder, and
+          the class they're onboarding for stays theirs either way. */}
       <div className="mt-8 grid justify-items-center gap-2 text-center">
         <p className="text-sm text-muted-foreground">
-          Here to teach, not to take the class?
+          Also teaching a course of your own?
         </p>
-        <BecomeProfessorButton label="Set up my own course instead" />
+        <Button asChild variant="outline">
+          <Link href="/course/new">Set up a course too</Link>
+        </Button>
       </div>
     </div>
   );

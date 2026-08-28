@@ -6,6 +6,15 @@
  *   npx supabase gen types typescript --project-id <ref> > src/types/db.ts
  */
 
+/**
+ * @deprecated Inert as of migration 0035. Nothing reads it.
+ *
+ * Roles are derived per course now — you're the professor of a course iff
+ * `courses.professor_id` is you, and a student of one iff you hold a
+ * non-dropped enrollment. See src/lib/membership.ts. The column and this type
+ * survive only so the row shape still matches the table; they will go
+ * together in a later migration. Do not reach for either.
+ */
 export type Role = "student" | "professor"
 export type EnrollmentStatus = "invited" | "active" | "dropped"
 export type PhotoKind = "candid" | "professional" | "adventure"
@@ -26,6 +35,7 @@ export type RoomSource = "professor" | "ai_import" | "seed"
 
 export type ProfileRow = {
   id: string
+  /** @deprecated Inert since 0035 — see the note on `Role`. */
   role: Role
   full_name: string | null
   name_phonetic: string | null

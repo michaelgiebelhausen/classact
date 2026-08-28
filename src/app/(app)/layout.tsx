@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getProfile } from "@/lib/auth";
+import { getProfile, getMembership } from "@/lib/auth";
+import { needsOnboarding } from "@/lib/membership";
 import { Sidebar } from "@/components/features/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -24,9 +25,17 @@ export default async function AppLayout({
   const profile = await getProfile();
   if (!profile) redirect("/login");
 
-  // Onboarding gate: students finish onboarding before using the app.
-  // /onboarding lives outside this layout group, so no redirect loop.
-  if (profile.role === "student" && !profile.onboarding_complete) {
+  // Onboarding gate: you finish onboarding once you're actually in someone's
+  // class. /onboarding lives outside this layout group, so no redirect loop.
+  //
+  // Keyed on holding an enrollment, not on `role === "student"`. The old form
+  // meant "isn't flagged a professor", which held a brand-new account with no
+  // classes at a gate it had nothing to satisfy, and let a professor sitting
+  // in a colleague's class skip the onboarding that class is owed. A failed
+  // count returns null and we let them through rather than trapping someone
+  // behind a hiccup.
+  const membership = await getMembership(profile.id);
+  if (membership && needsOnboarding(membership, profile.onboarding_complete)) {
     redirect("/onboarding");
   }
 

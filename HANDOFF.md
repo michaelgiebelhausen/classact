@@ -263,6 +263,62 @@ identity for a future Canvas gradebook CSV export, which is spec'd but not
 built. Only `canvas_user_id` is populated, by the roster sync, for free on
 every resync. See `docs/canvas-assignment-fields-plan.md`.
 
+## Nobody declares a role any more (0035)
+
+**Run `supabase/migrations/0035_membership_is_the_role.sql`.** Deploy-order
+safe in either direction: the migration only stops `handle_new_user()` reading
+a role out of sign-up metadata, and the app has already stopped sending one.
+Run it late and a new sign-up gets a stale `profiles.role` value that nothing
+reads.
+
+**What was wrong.** The sign-up form's "I'm signing up as…" toggle defaulted
+to **A professor**. Anyone who typed an email and a password and pressed the
+only button on the form was written into `profiles.role` as a professor
+without ever answering the question. That is the whole of the "students
+somehow made themselves professors" mystery — nobody chose it, the answer was
+pre-filled. A professor in the AI Tools class hit the same trap from the other
+side: he answered honestly, and because the flag is global it made him a
+professor in a class he was *attending*.
+
+**Nothing was ever exposed.** Every permission in the app already gated on
+`course.professor_id === profile.id`, per course. The global role granted
+access to no one else's data; what it decided was which half of the app you
+were shown. That is why being wrong about it stranded people rather than
+leaking anything.
+
+**What it is now.** The role is derived, per course, from the two records that
+were always the truth: you are the professor of a course iff
+`courses.professor_id` is you, and a student of one iff you hold a non-dropped
+enrollment. Both can be true of the same person in different courses. Nothing
+is declared, so nothing can be declared wrong. See `src/lib/membership.ts`.
+
+- The sign-up role toggle is gone. Sign-up asks for an email and a password.
+- `/dashboard` shows **both** sections — "Courses I teach" and "Classes I'm
+  in" — and whichever you don't have yet is offered as a link.
+- An account belonging to nothing gets a two-door chooser ("I am a student…"
+  / "I am a professor…"). The answer is **not stored**; the next thing you do
+  makes it true. A wrong tap costs a Back button.
+- Onboarding is now owed once you hold an enrollment, not because you aren't
+  flagged a professor. A professor attending a colleague's class is correctly
+  onboarded for it; one building their first course never sees it.
+- AI settings and Canvas settings gate on owning a course.
+- `becomeProfessor()`, `becomeStudent()`, both buttons, and
+  `src/lib/rolechange.ts` are deleted — they existed only to repair the flag.
+
+**`profiles.role` is left in the table and left alone**, carrying whatever
+values it already had, including every wrong one. Nothing reads it; the
+migration comments the column as inert. Dropping it is a later migration, once
+a semester has passed without anything reaching for it — a live class is the
+wrong place to discover a reference we missed.
+
+**One open note:** with no role, `/course/new` is reachable by anyone, and the
+thing that makes a mis-tap cost money instead of nothing is the billing gate —
+which is off while `BILLING_ENABLED` is not `"true"`. Until it's on, a student
+who taps the professor door can create a junk course (harmless: RLS-scoped to
+them, no students, and the dashboard still shows their classes so they are
+never stranded). The chooser's copy adapts and does not quote a price that
+isn't being charged.
+
 ## The user.md file on a profile (0034)
 
 **Run `supabase/migrations/0034_profile_documents.sql`.** Unlike 0030–0032

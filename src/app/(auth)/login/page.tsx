@@ -64,7 +64,6 @@ function LoginForm() {
   // Set when a link died mid-join: keep the student headed for their class.
   const nextAfterAuth = searchParams.get("next") ?? "/dashboard";
   const [mode, setMode] = useState<Mode>("password");
-  const [role, setRole] = useState<"professor" | "student">("professor");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,7 +90,7 @@ function LoginForm() {
       return;
     }
     if (mode === "signup") {
-      const result = await signUpWithPassword({ email, password, role });
+      const result = await signUpWithPassword({ email, password });
       setBusy(false);
       if (!result.ok) {
         toast.error(result.error);
@@ -102,7 +101,10 @@ function LoginForm() {
           "Almost there — click the confirmation link we just emailed you, and you'll land signed in."
         );
       } else {
-        router.push(role === "professor" ? "/course/new" : "/dashboard");
+        // Everyone lands on the dashboard. Teaching or attending is asked
+        // there, once, with both doors labelled — not guessed from a toggle
+        // on this form.
+        router.push("/dashboard");
         router.refresh();
       }
       return;
@@ -162,34 +164,12 @@ function LoginForm() {
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="grid gap-4">
-            {mode === "signup" && (
-              <div className="grid gap-2">
-                <Label>I&apos;m signing up as…</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={role === "professor" ? "default" : "outline"}
-                    onClick={() => setRole("professor")}
-                  >
-                    A professor
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={role === "student" ? "default" : "outline"}
-                    onClick={() => setRole("student")}
-                  >
-                    A student
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {role === "professor"
-                    ? "You'll create your class right after confirming your email."
-                    : "Students usually join with a code from their professor."}
-                </p>
-              </div>
-            )}
+            {/* No "I'm signing up as…" toggle. It defaulted to "A professor",
+                so anyone who filled in the two fields and pressed the one
+                button became a professor without answering anything — the
+                origin of every student who "somehow" turned into one. The
+                question is now asked on the dashboard, attached to the thing
+                they're about to do, and never written to their account. */}
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input

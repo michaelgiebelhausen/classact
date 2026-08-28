@@ -21,18 +21,25 @@ import type { ActionResult } from "@/server/actions/auth";
 
 const TASK_KEYS = ["default", "taste", "rubric", "baseline", "scoring", "questions"] as const;
 
+/**
+ * Gated on owning a course, not on an account flag.
+ *
+ * A key here pays for AI in the courses you run, so having a course to run is
+ * the thing that matters — and it's a fact about the roster, not a word
+ * somebody picked at sign-up. Read through RLS: `courses` is scoped to
+ * `professor_id = auth.uid()`, so this counts only their own.
+ */
 async function requireProfessor() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { user: null, supabase };
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id, role")
-    .eq("id", user.id)
-    .single();
-  if (!profile || profile.role !== "professor") return { user: null, supabase };
+  const { count, error } = await supabase
+    .from("courses")
+    .select("id", { count: "exact", head: true })
+    .eq("professor_id", user.id);
+  if (error || !count) return { user: null, supabase };
   return { user, supabase };
 }
 

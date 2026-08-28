@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { normalizeLinkedInUrl } from "@/lib/linkedin";
-import { canLeaveProfessorRole } from "@/lib/rolechange";
 import { validateUserDoc, byteLength } from "@/lib/usermd";
 import type { ActionResult } from "@/server/actions/auth";
 
@@ -61,103 +60,25 @@ export async function saveProfileAnswers(
  * Save (or clear) the LinkedIn profile link. Stored canonicalized so every
  * paste style lands on the same URL; an empty value removes it.
  */
-/**
- * Switch your own account to a professor account. Self-serve on purpose:
- * the professor role only lets you own courses you create — every policy is
- * scoped to `professor_id = auth.uid()`, so this grants no access to anyone
- * else's data. It's the recovery path for accounts created before sign-up
- * asked, and for anyone who picked the wrong option.
- */
-export async function becomeProfessor(): Promise<ActionResult> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Sign in first." };
-
-  const { error } = await supabase
-    .from("profiles")
-    .update({ role: "professor", onboarding_complete: true })
-    .eq("id", user.id);
-  if (error) {
-    return { ok: false, error: "Couldn't switch your account over." };
-  }
-  revalidatePath("/dashboard");
-  revalidatePath("/profile");
-  return { ok: true };
-}
-
-/**
- * Switch your own account back to a student account.
+/*
+ * becomeProfessor() and becomeStudent() lived here.
  *
- * The inverse of `becomeProfessor`, which was a one-way door until now. A
- * student who taps "professor" at sign-up has no join-a-class path at all —
- * every sign-in drops them on the course builder, and clearing cookies doesn't
- * help because the role is on the profile row. Three students sat in that
- * state during the Fall 2026 pilot, all three already enrolled in the class
- * they couldn't see.
+ * They existed to repair `profiles.role` — the global flag that said, in one
+ * word, whether you were a professor or a student everywhere in the app. It
+ * was set from a sign-up toggle that defaulted to "A professor", so it was
+ * wrong often, and because it decided which half of the product you were
+ * shown, being wrong meant being stranded: a student flagged professor landed
+ * on the course builder every sign-in with no route to the class they were
+ * already enrolled in. These two buttons were the way out, and
+ * canLeaveProfessorRole() was the guard stopping a real professor from
+ * demoting themselves out from under a live roster.
  *
- * Deliberately leaves `onboarding_complete` untouched. Whatever they had
- * stands: this is a routing fix, not a re-registration, and the account —
- * login, email, enrollments — is the same one it was a second ago.
+ * All three are gone because the flag is gone. Whether you teach or attend is
+ * derived per course now, from courses.professor_id and enrollments — see
+ * src/lib/membership.ts. There is no account type to switch, so there is
+ * nothing to be stuck in and nothing to repair. Migration 0035 stops the
+ * sign-up trigger writing the column at all.
  */
-export async function becomeStudent(): Promise<ActionResult> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Sign in first." };
-
-  // Count what they'd be walking away from. Read through RLS on purpose:
-  // courses are scoped to `professor_id = auth.uid()`, so this sees exactly
-  // the courses they own and nothing else.
-  const { data: courses, error: coursesError } = await supabase
-    .from("courses")
-    .select("id")
-    .eq("professor_id", user.id);
-  if (coursesError) {
-    // Never demote on an unread course list — that is precisely how a class
-    // gets stranded by a transient query failure.
-    return {
-      ok: false,
-      error: "Couldn't check your courses just now. Try again in a moment.",
-    };
-  }
-
-  const courseIds = (courses ?? []).map((c) => c.id);
-  let studentsEnrolled = 0;
-  if (courseIds.length > 0) {
-    const { count, error: enrollError } = await supabase
-      .from("enrollments")
-      .select("id", { count: "exact", head: true })
-      .in("course_id", courseIds)
-      .neq("status", "dropped");
-    if (enrollError) {
-      return {
-        ok: false,
-        error: "Couldn't check your rosters just now. Try again in a moment.",
-      };
-    }
-    studentsEnrolled = count ?? 0;
-  }
-
-  const verdict = canLeaveProfessorRole({
-    coursesTaught: courseIds.length,
-    studentsEnrolled,
-  });
-  if (!verdict.allowed) return { ok: false, error: verdict.reason };
-
-  const { error } = await supabase
-    .from("profiles")
-    .update({ role: "student" })
-    .eq("id", user.id);
-  if (error) {
-    return { ok: false, error: "Couldn't switch your account over." };
-  }
-  revalidatePath("/dashboard");
-  revalidatePath("/profile");
-  return { ok: true };
-}
 
 export async function saveLinkedInUrl(
   raw: string

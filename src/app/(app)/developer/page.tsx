@@ -67,18 +67,22 @@ export default async function DeveloperPage() {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(500),
-      admin.from("profiles").select("id, full_name, role"),
-      admin.from("courses").select("id, name"),
+      admin.from("profiles").select("id, full_name"),
+      admin.from("courses").select("id, name, professor_id"),
     ]);
 
   const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
   const courseById = new Map((courses ?? []).map((c) => [c.id, c.name]));
+  // "Professor" is derived — whoever owns a course is one. This used to read
+  // profiles.role, which since 0035 is inert and would label whatever a
+  // student happened to tap at sign-up.
+  const owners = new Set((courses ?? []).map((c) => c.professor_id));
   const items: DeveloperItem[] = (rows ?? []).map((r) => {
     const courseId = courseIdFromPath(r.page_path);
     return {
       ...r,
       submitterName: profileById.get(r.profile_id)?.full_name ?? null,
-      submitterRole: profileById.get(r.profile_id)?.role ?? null,
+      submitterRole: owners.has(r.profile_id) ? "professor" : "student",
       courseName: courseId ? (courseById.get(courseId) ?? null) : null,
     };
   });

@@ -49,19 +49,23 @@ export default async function FeedbackPage() {
   let items: FeedbackItem[] = [];
   if (isFounder && isConfigured.supabaseAdmin) {
     const admin = createAdminClient();
-    const [{ data: rows }, { data: profiles }] = await Promise.all([
+    const [{ data: rows }, { data: profiles }, { data: courses }] = await Promise.all([
       admin
         .from("feedback")
         .select("*")
         .order("created_at", { ascending: false })
         .limit(500),
-      admin.from("profiles").select("id, full_name, role"),
+      admin.from("profiles").select("id, full_name"),
+      admin.from("courses").select("professor_id"),
     ]);
     const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
+    // Derived from course ownership, not from profiles.role, which since 0035
+    // is inert and would label whatever was tapped at sign-up.
+    const owners = new Set((courses ?? []).map((c) => c.professor_id));
     items = (rows ?? []).map((r) => ({
       ...r,
       submitterName: byId.get(r.profile_id)?.full_name ?? null,
-      submitterRole: byId.get(r.profile_id)?.role ?? null,
+      submitterRole: owners.has(r.profile_id) ? "professor" : "student",
     }));
   } else {
     const supabase = await createClient();

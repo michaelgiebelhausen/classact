@@ -22,18 +22,25 @@ import type { ActionResult } from "@/server/actions/auth";
  * return to a client.
  */
 
+/**
+ * Gated on owning a course, not on an account flag.
+ *
+ * A Canvas token here syncs the rosters of courses you run, so having a
+ * course to run is the thing that matters — and it's a fact about the roster, not a word
+ * somebody picked at sign-up. Read through RLS: `courses` is scoped to
+ * `professor_id = auth.uid()`, so this counts only their own.
+ */
 async function requireProfessor() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { user: null };
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id, role")
-    .eq("id", user.id)
-    .single();
-  if (!profile || profile.role !== "professor") return { user: null };
+  const { count, error } = await supabase
+    .from("courses")
+    .select("id", { count: "exact", head: true })
+    .eq("professor_id", user.id);
+  if (error || !count) return { user: null };
   return { user };
 }
 
