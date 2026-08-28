@@ -314,7 +314,7 @@ in any migration, so the professor's "free this seat" was deleting **zero
 rows** through RLS while toasting success — the seat stayed occupied on
 everyone else's screen. 0036 adds `checkins_delete_professor`. To check
 whether a hand-applied policy already existed, run in the SQL editor:
-`select polname from pg_policies where tablename = 'check_ins';` — either
+`select policyname from pg_policies where tablename = 'check_ins';` — either
 way the migration is idempotent. Two client-side realtime bugs rode along:
 freed seats now disappear from other students' maps without a reload, and a
 student who moves seats no longer shows up in two places.
