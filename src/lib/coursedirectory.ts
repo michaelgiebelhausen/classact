@@ -34,8 +34,12 @@ type CourseDirectoryEntry = DirectoryEntry;
  */
 
 /** Well under the one-hour signed-URL lifetime in lib/storage, so a cached
- *  entry can never hand out an already-expired photo URL. */
-const TTL_MS = 30_000;
+ *  entry can never hand out an already-expired photo URL. Deliberately NOT
+ *  30s: the check-in page refreshes itself every 30s while waiting for class
+ *  to open, and a TTL equal to that interval meant every single refresh
+ *  landed just past expiry and rebuilt the directory. Mutations don't wait
+ *  on this — every roster change calls invalidateCourseDirectory. */
+const TTL_MS = 60_000;
 
 /** A build that never settles would otherwise wedge `inFlight` forever, and
  *  every later request for the course would join a promise that never
