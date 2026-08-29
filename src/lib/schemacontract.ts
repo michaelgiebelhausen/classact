@@ -84,8 +84,8 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
   },
   {
     table: "courses",
-    columns: ["transcripts_downloadable", "syllabus_path"],
-    migration: "0040_course_materials.sql",
+    columns: ["transcripts_downloadable", "syllabus_path", "ta_enabled"],
+    migration: "0040_course_materials.sql / 0041_ta_toggle.sql",
   },
   {
     table: "ta_messages",

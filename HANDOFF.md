@@ -358,13 +358,19 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
-## Transcripts, syllabus, and Ask the TA (0040)
+## Transcripts, syllabus, and Ask the TA (0040 + 0041)
 
-**Run `supabase/migrations/0040_course_materials.sql` BEFORE deploying.** It
-adds transcript/syllabus columns the new code selects, the private
-`course-materials` bucket, and the `ta_messages` table. The schema guard
-knows about all three, so an unmigrated database shows the "database is
-behind" card rather than failing silently — but run it first anyway.
+**Run `supabase/migrations/0040_course_materials.sql` AND
+`0041_ta_toggle.sql` BEFORE deploying.** 0040 adds transcript/syllabus
+columns the new code selects, the private `course-materials` bucket, and the
+`ta_messages` table; 0041 adds `courses.ta_enabled`. The schema guard knows
+about all of it, so an unmigrated database shows the "database is behind"
+card rather than failing silently — but run them first anyway.
+
+**The TA is opt-in per course (0041, default OFF).** One OpenRouter key
+covers every AI task, so without this a key connected for grading would
+silently switch on student-facing chat spend. The switch lives on the Ask TA
+page (professor view); grading and question generation ignore it entirely.
 
 **What shipped.**
 - Professors attach a lecture transcript (.txt/.md/.vtt, ≤2MB — text only on

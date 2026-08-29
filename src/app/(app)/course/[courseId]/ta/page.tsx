@@ -14,6 +14,7 @@ import {
   TaIndexPanel,
   type IndexItem,
 } from "@/components/features/ta/TaIndexPanel";
+import { TaTogglePanel } from "@/components/features/ta/TaTogglePanel";
 
 // The askTa / indexNextMaterial actions run AI calls up to 90-150s; server
 // actions inherit the invoking page's segment config (checkin page is the
@@ -33,7 +34,9 @@ export default async function AskTaPage({
   // RLS membership gate — non-members get null.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, professor_id, syllabus_title, syllabus_path, syllabus_text")
+    .select(
+      "id, name, professor_id, ta_enabled, syllabus_title, syllabus_path, syllabus_text"
+    )
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -67,10 +70,11 @@ export default async function AskTaPage({
     }
   }
 
-  // Key availability decides whether the chat is live. resolveCourseAi is
-  // service-role only — the key itself never reaches this page's output.
+  // A live chat needs a key AND the professor's opt-in (0041) — a key
+  // connected for grading doesn't switch the TA on by itself. resolveCourseAi
+  // is service-role only; the key never reaches this page's output.
   const creds = await resolveCourseAi(courseId, "ta");
-  const enabled = creds !== null;
+  const hasKey = creds !== null;
 
   // Corpus inventory — what the TA can (and can't yet) read. Text columns
   // stay out of this select on purpose; only presence is needed.
@@ -129,9 +133,13 @@ export default async function AskTaPage({
     .map((m) => ({ id: m.id, role: m.role, content: m.content }));
 
   let disabledReason: string | null = null;
-  if (!enabled) {
+  if (!hasKey) {
     disabledReason = isProfessor
-      ? "The TA runs on your OpenRouter key. Connect one in AI Settings and it switches on for the whole class."
+      ? "The TA runs on your OpenRouter key. Connect one in AI Settings, then switch the TA on below."
+      : "The TA isn't enabled for this course yet — ask your professor.";
+  } else if (!course.ta_enabled) {
+    disabledReason = isProfessor
+      ? "Your key is connected — flip the switch below to open the TA to students (and to try it yourself)."
       : "The TA isn't enabled for this course yet — ask your professor.";
   } else if (!anyIndexed) {
     disabledReason = isProfessor
@@ -146,7 +154,7 @@ export default async function AskTaPage({
         <p className="text-muted-foreground">{course.name}</p>
       </div>
 
-      {!enabled && isProfessor && (
+      {!hasKey && isProfessor && (
         <Card>
           <CardHeader>
             <CardTitle>Turn on your course TA</CardTitle>
@@ -168,7 +176,14 @@ export default async function AskTaPage({
       />
 
       {isProfessor && (
-        <TaIndexPanel courseId={courseId} items={items} enabled={enabled} />
+        <>
+          <TaTogglePanel
+            courseId={courseId}
+            enabled={course.ta_enabled ?? false}
+            hasKey={hasKey}
+          />
+          <TaIndexPanel courseId={courseId} items={items} enabled={hasKey} />
+        </>
       )}
     </div>
   );

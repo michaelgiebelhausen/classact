@@ -568,6 +568,26 @@ export async function updateTranscriptDownloads(
   return { ok: true };
 }
 
+/**
+ * Professor: switch Ask the TA on or off for a course. Off is the default —
+ * a key connected for grading must not silently start paying for student
+ * chat (0041).
+ */
+export async function updateTaEnabled(
+  courseId: string,
+  enabled: boolean
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  // RLS restricts the update to the owning professor.
+  const { error } = await supabase
+    .from("courses")
+    .update({ ta_enabled: enabled })
+    .eq("id", courseId);
+  if (error) return { ok: false, error: "Couldn't save. Try again." };
+  revalidatePath(`/course/${courseId}/ta`);
+  return { ok: true };
+}
+
 const MAX_SYLLABUS_TEXT_BYTES = 2 * 1024 * 1024;
 
 /**

@@ -137,6 +137,9 @@ export type CourseRow = {
   invite_message: string | null
   /** 0040 — professor toggle: may students download lecture transcripts? */
   transcripts_downloadable: boolean
+  /** 0041 — Ask the TA is opt-in: a connected key alone must not switch on
+   *  student-facing chat spend. Default false. */
+  ta_enabled: boolean
   syllabus_path: string | null
   syllabus_title: string | null
   /** 0040 — TA-corpus text; can be very long, keep out of broad selects. */

@@ -42,7 +42,7 @@ async function requireMember(courseId: string) {
   // RLS membership gate — non-members get null on the course row itself.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, professor_id, syllabus_text, syllabus_title")
+    .select("id, name, professor_id, ta_enabled, syllabus_text, syllabus_title")
     .eq("id", courseId)
     .single();
   if (!course) {
@@ -143,6 +143,17 @@ export async function askTa(
   const { supabase, user, course, error } = await requireMember(courseId);
   if (error || !user || !course) {
     return { ok: false, error: error ?? "Not allowed." };
+  }
+
+  // Opt-in gate (0041): a connected key alone doesn't turn the TA on.
+  if (!course.ta_enabled) {
+    return {
+      ok: false,
+      error:
+        course.professor_id === user.id
+          ? "The TA is switched off — turn it on from this page first."
+          : "The TA isn't enabled for this course yet — ask your professor.",
+    };
   }
 
   // Burst guard (in-memory is fine at this window size).
