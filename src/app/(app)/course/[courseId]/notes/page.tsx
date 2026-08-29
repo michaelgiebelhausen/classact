@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
+import { getSignedDeckDownloadUrl } from "@/lib/storage";
 import {
   Card,
   CardDescription,
@@ -83,16 +84,32 @@ export default async function NotesPage({
 
   const { data: decks } = await supabase
     .from("lecture_decks")
-    .select("id, title")
+    .select("id, title, kind, storage_path")
     .eq("course_id", courseId);
-  const deckTitleById = new Map((decks ?? []).map((d) => [d.id, d.title]));
+  const deckById = new Map((decks ?? []).map((d) => [d.id, d]));
+
+  // Signed download links for the slide PDFs, so notes and the deck they were
+  // taken against can leave together. One URL per deck, not per lecture.
+  const slidesUrlByDeck = new Map<string, string | null>();
+  for (const deck of deckById.values()) {
+    if (deck.kind !== "pdf" || !deck.storage_path) continue;
+    slidesUrlByDeck.set(
+      deck.id,
+      await getSignedDeckDownloadUrl(
+        supabase,
+        deck.storage_path,
+        `${deck.title || "slides"}.pdf`
+      )
+    );
+  }
 
   const lectureById = new Map(
     (lectures ?? []).map((l) => [
       l.id,
       {
         startedAt: l.started_at,
-        deckTitle: deckTitleById.get(l.deck_id) ?? "",
+        deckTitle: deckById.get(l.deck_id)?.title ?? "",
+        slidesUrl: slidesUrlByDeck.get(l.deck_id) ?? null,
       },
     ])
   );
@@ -107,6 +124,7 @@ export default async function NotesPage({
       lectureId: entry.lecture_id,
       startedAt: meta.startedAt,
       deckTitle: meta.deckTitle,
+      slidesUrl: meta.slidesUrl,
       entries: [],
     };
     bucket.entries.push({

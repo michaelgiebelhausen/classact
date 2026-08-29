@@ -19,6 +19,25 @@ export async function getSignedDeckUrl(
   return data.signedUrl
 }
 
+/**
+ * Like getSignedDeckUrl, but the URL forces a save-as instead of opening in
+ * the browser. The storage host is a different origin, so an <a download>
+ * attribute is ignored — the attachment disposition has to come from the
+ * server, which is what the `download` option puts in the signature.
+ */
+export async function getSignedDeckDownloadUrl(
+  client: SupabaseClient<Database>,
+  path: string,
+  filename: string
+): Promise<string | null> {
+  const safeName = filename.replace(/[\\/:*?"<>|]/g, "-").trim() || "slides.pdf"
+  const { data, error } = await client.storage
+    .from(DECK_BUCKET)
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, { download: safeName })
+  if (error || !data) return null
+  return data.signedUrl
+}
+
 /** Short-lived signed URL for a project assignment PDF. */
 export async function getSignedProjectUrl(
   client: SupabaseClient<Database>,

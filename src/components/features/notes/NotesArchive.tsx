@@ -38,6 +38,8 @@ export interface ArchiveLecture {
   /** ISO timestamp. */
   startedAt: string;
   deckTitle: string;
+  /** Signed download URL for the lecture's slide PDF, when there is one. */
+  slidesUrl?: string | null;
   entries: NoteEntryData[];
 }
 
@@ -223,12 +225,19 @@ export function NotesArchive({
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
+                {lecture.slidesUrl && (
+                  <Button asChild variant="ghost" size="sm">
+                    <a href={lecture.slidesUrl}>
+                      <Download className="size-4" /> Slides
+                    </a>
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => download(lecture)}
                 >
-                  <Download className="size-4" /> Download
+                  <Download className="size-4" /> Notes
                 </Button>
                 <Button
                   variant="ghost"

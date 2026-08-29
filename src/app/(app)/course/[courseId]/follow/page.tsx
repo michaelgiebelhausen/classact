@@ -3,7 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { getSignedDeckUrl, resolveEnrollmentPhotos } from "@/lib/storage";
+import {
+  getSignedDeckDownloadUrl,
+  getSignedDeckUrl,
+  resolveEnrollmentPhotos,
+} from "@/lib/storage";
 import { summarizeFocus, summarizeFocusByEnrollment } from "@/lib/focus";
 import { loadCourseSeats } from "@/server/courseseats";
 import {
@@ -125,6 +129,14 @@ export default async function FollowAlongPage({
   const fileUrl =
     deck?.kind === "pdf" && deck.storage_path
       ? await getSignedDeckUrl(supabase, deck.storage_path)
+      : null;
+  const slidesDownloadUrl =
+    deck?.kind === "pdf" && deck.storage_path
+      ? await getSignedDeckDownloadUrl(
+          supabase,
+          deck.storage_path,
+          `${deck.title || "slides"}.pdf`
+        )
       : null;
 
   const header = (
@@ -440,6 +452,7 @@ export default async function FollowAlongPage({
         deckTitle={deck.title}
         deckKind={deck.kind}
         fileUrl={fileUrl}
+        slidesDownloadUrl={slidesDownloadUrl}
         embedUrl={deck.embed_url}
         initialEntries={(noteEntries ?? []).map((e) => ({
           id: e.id,

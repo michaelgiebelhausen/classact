@@ -6,6 +6,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Download,
   Eye,
   Pause,
   PencilLine,
@@ -59,6 +60,8 @@ interface Props {
   deckTitle: string;
   deckKind: "pdf" | "google_slides";
   fileUrl: string | null;
+  /** Attachment-disposition variant of fileUrl, so a click saves the PDF. */
+  slidesDownloadUrl?: string | null;
   embedUrl: string | null;
   /** Notes this student already took in this lecture, oldest first. */
   initialEntries: NoteEntryData[];
@@ -94,6 +97,7 @@ export function StudentFollow({
   deckTitle,
   deckKind,
   fileUrl,
+  slidesDownloadUrl = null,
   embedUrl,
   initialEntries,
   initialAwayCount,
@@ -662,6 +666,15 @@ export function StudentFollow({
                 : "Embedded slides — follow along with the room."}
             </CardDescription>
           </CardHeader>
+          {deckKind === "pdf" && slidesDownloadUrl && (
+            <CardContent>
+              <Button asChild variant="outline" size="sm" className="w-full">
+                <a href={slidesDownloadUrl}>
+                  <Download className="size-4" /> Download slides
+                </a>
+              </Button>
+            </CardContent>
+          )}
         </Card>
 
         <Card>
