@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { FileText, GripVertical, Play, Presentation, Trash2 } from "lucide-react";
@@ -29,6 +29,22 @@ import { DeckReading } from "@/components/features/follow/DeckReading";
 import { capture } from "@/lib/analytics";
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024; // Supabase default object limit
+
+type DeckSort = "custom" | "newest" | "oldest";
+
+const SORT_OPTIONS: { value: DeckSort; label: string }[] = [
+  { value: "custom", label: "My order" },
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+];
+
+const SORT_HINTS: Record<DeckSort, string> = {
+  custom:
+    "Drag the handle to put them in the order you teach them. New uploads land at the top.",
+  newest: "Sorted by date added, newest at the top — new uploads land there.",
+  oldest:
+    "Sorted by date added, oldest at the top — new uploads land at the bottom.",
+};
 
 export interface DeckListItem {
   id: string;
@@ -80,6 +96,42 @@ export function DeckManager({ courseId, decks }: Props) {
   }
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragArmed, setDragArmed] = useState(false);
+
+  // Display sort for this list. "custom" is the drag order stored on the
+  // server; the date sorts are per-professor display preferences, so they
+  // live in localStorage rather than the course row. Read after mount so
+  // the server-rendered HTML (always "custom") matches on hydration.
+  const [sort, setSort] = useState<DeckSort>("custom");
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(`classact:deck-sort:${courseId}`);
+      if (saved === "newest" || saved === "oldest" || saved === "custom") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- reading back a preference the browser stored is exactly the external-system sync effects are for; it runs once per course.
+        setSort(saved);
+      }
+    } catch {
+      // localStorage unavailable — keep the default
+    }
+  }, [courseId]);
+
+  function changeSort(next: DeckSort) {
+    setSort(next);
+    try {
+      window.localStorage.setItem(`classact:deck-sort:${courseId}`, next);
+    } catch {
+      // fine — the choice just won't stick across visits
+    }
+  }
+
+  // created_at is an ISO timestamp, so string comparison sorts correctly.
+  const visibleDecks =
+    sort === "custom"
+      ? order
+      : [...order].sort((a, b) =>
+          sort === "newest"
+            ? b.createdAt.localeCompare(a.createdAt)
+            : a.createdAt.localeCompare(b.createdAt)
+        );
 
   function moveDeck(from: number, to: number) {
     if (from === to || to < 0 || to >= order.length) return;
@@ -240,12 +292,32 @@ export function DeckManager({ courseId, decks }: Props) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Your decks</CardTitle>
-          <CardDescription>
-            Hit Present to go live — students on the Follow Along page will
-            sync to your current slide. Drag the handle to put them in the
-            order you teach them.
-          </CardDescription>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="grid gap-1.5">
+              <CardTitle>Your decks</CardTitle>
+              <CardDescription>
+                Hit Present to go live — students on the Follow Along page
+                will sync to your current slide. {SORT_HINTS[sort]}
+              </CardDescription>
+            </div>
+            <div
+              role="group"
+              aria-label="Sort decks"
+              className="flex shrink-0 items-center gap-1 rounded-md border p-0.5"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  size="sm"
+                  variant={sort === option.value ? "secondary" : "ghost"}
+                  aria-pressed={sort === option.value}
+                  onClick={() => changeSort(option.value)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {decks.length === 0 ? (
@@ -254,10 +326,10 @@ export function DeckManager({ courseId, decks }: Props) {
             </p>
           ) : (
             <ul className="grid gap-2">
-              {order.map((deck, index) => (
+              {visibleDecks.map((deck, index) => (
                 <li
                   key={deck.id}
-                  draggable={dragArmed}
+                  draggable={dragArmed && sort === "custom"}
                   onDragStart={() => setDragIndex(index)}
                   onDragOver={(e) => {
                     if (dragIndex !== null && dragIndex !== index) e.preventDefault();
@@ -282,6 +354,7 @@ export function DeckManager({ courseId, decks }: Props) {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
+                      {sort === "custom" && (
                       <button
                         type="button"
                         aria-label={`Reorder ${deck.title}. Use arrow keys to move it.`}
@@ -300,6 +373,7 @@ export function DeckManager({ courseId, decks }: Props) {
                       >
                         <GripVertical className="size-4" />
                       </button>
+                      )}
                       <Presentation className="size-5 text-muted-foreground" />
                       <div>
                         <p className="text-sm font-medium">{deck.title}</p>
