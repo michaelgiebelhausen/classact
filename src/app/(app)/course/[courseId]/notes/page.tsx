@@ -1,7 +1,12 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
-import { getSignedDeckDownloadUrl } from "@/lib/storage";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isConfigured } from "@/lib/env";
+import {
+  getSignedDeckDownloadUrl,
+  getSignedMaterialDownloadUrl,
+} from "@/lib/storage";
 import {
   Card,
   CardDescription,
@@ -26,7 +31,7 @@ export default async function NotesPage({
   // RLS membership gate — non-members get null.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name")
+    .select("id, name, transcripts_downloadable")
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -84,7 +89,7 @@ export default async function NotesPage({
 
   const { data: decks } = await supabase
     .from("lecture_decks")
-    .select("id, title, kind, storage_path")
+    .select("id, title, kind, storage_path, transcript_path, transcript_title")
     .eq("course_id", courseId);
   const deckById = new Map((decks ?? []).map((d) => [d.id, d]));
 
@@ -103,6 +108,26 @@ export default async function NotesPage({
     );
   }
 
+  // Transcript links come from the admin client — the course-materials
+  // bucket has no member-read policy, so the professor's download toggle is
+  // enforced right here by simply not minting when it's off.
+  const transcriptUrlByDeck = new Map<string, string | null>();
+  if (course.transcripts_downloadable && isConfigured.supabaseAdmin) {
+    const admin = createAdminClient();
+    for (const deck of deckById.values()) {
+      if (!deck.transcript_path) continue;
+      const ext = deck.transcript_path.split(".").pop() ?? "txt";
+      transcriptUrlByDeck.set(
+        deck.id,
+        await getSignedMaterialDownloadUrl(
+          admin,
+          deck.transcript_path,
+          `${deck.transcript_title || "transcript"}.${ext}`
+        )
+      );
+    }
+  }
+
   const lectureById = new Map(
     (lectures ?? []).map((l) => [
       l.id,
@@ -110,6 +135,8 @@ export default async function NotesPage({
         startedAt: l.started_at,
         deckTitle: deckById.get(l.deck_id)?.title ?? "",
         slidesUrl: slidesUrlByDeck.get(l.deck_id) ?? null,
+        transcriptTitle: deckById.get(l.deck_id)?.transcript_title ?? null,
+        transcriptUrl: transcriptUrlByDeck.get(l.deck_id) ?? null,
       },
     ])
   );
@@ -125,6 +152,8 @@ export default async function NotesPage({
       startedAt: meta.startedAt,
       deckTitle: meta.deckTitle,
       slidesUrl: meta.slidesUrl,
+      transcriptTitle: meta.transcriptTitle,
+      transcriptUrl: meta.transcriptUrl,
       entries: [],
     };
     bucket.entries.push({

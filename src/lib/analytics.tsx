@@ -30,7 +30,11 @@ export type AnalyticsEvent =
   | "poll_revealed"
   | "exercise_started"
   | "project_uploaded"
-  | "project_tasks_generated";
+  | "project_tasks_generated"
+  | "transcript_attached"
+  | "syllabus_uploaded"
+  | "ta_asked"
+  | "ta_indexed";
 
 export function capture(event: AnalyticsEvent, props?: Record<string, unknown>) {
   if (!KEY) return;

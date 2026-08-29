@@ -5,6 +5,10 @@ export const PHOTO_BUCKET = "profile-photos"
 export const DECK_BUCKET = "lecture-decks"
 export const PROJECT_BUCKET = "project-docs"
 export const ASSIGNMENT_BUCKET = "assignment-docs"
+/** 0040 — transcripts + syllabus. No member-read policy on purpose: student
+ *  access is minted server-side (admin client) so the professor's download
+ *  toggle actually gates anything. */
+export const MATERIALS_BUCKET = "course-materials"
 const SIGNED_URL_TTL_SECONDS = 60 * 60 // 1 hour
 
 /** Short-lived signed URL for a lecture deck PDF. */
@@ -33,6 +37,26 @@ export async function getSignedDeckDownloadUrl(
   const safeName = filename.replace(/[\\/:*?"<>|]/g, "-").trim() || "slides.pdf"
   const { data, error } = await client.storage
     .from(DECK_BUCKET)
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, { download: safeName })
+  if (error || !data) return null
+  return data.signedUrl
+}
+
+/**
+ * Attachment-disposition signed URL for a course-materials object (transcript
+ * or syllabus). The bucket has no member-read policy, so pass the ADMIN
+ * client — and only after checking whatever gate applies (e.g.
+ * courses.transcripts_downloadable). A flipped-off toggle leaves already
+ * minted URLs alive for up to the TTL; that's accepted.
+ */
+export async function getSignedMaterialDownloadUrl(
+  client: SupabaseClient<Database>,
+  path: string,
+  filename: string
+): Promise<string | null> {
+  const safeName = filename.replace(/[\\/:*?"<>|]/g, "-").trim() || "download"
+  const { data, error } = await client.storage
+    .from(MATERIALS_BUCKET)
     .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, { download: safeName })
   if (error || !data) return null
   return data.signedUrl

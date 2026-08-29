@@ -12,7 +12,7 @@ import {
 } from "@/lib/validators";
 import { DEFAULT_ICEBREAKER_KEYS, ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { isScheduleComplete } from "@/lib/schedule";
-import { DECK_BUCKET } from "@/lib/storage";
+import { DECK_BUCKET, MATERIALS_BUCKET } from "@/lib/storage";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -543,5 +543,122 @@ export async function updateSchedule(
   if (error) return { ok: false, error: "Couldn't save the schedule. Try again." };
   revalidatePath(`/course/${courseId}/setup`);
   revalidatePath(`/course/${courseId}/checkin`);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Course materials (0040): transcript download toggle + syllabus
+// ---------------------------------------------------------------------------
+
+/** Professor: may students download lecture transcripts? (default yes) */
+export async function updateTranscriptDownloads(
+  courseId: string,
+  allowed: boolean
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  // RLS restricts the update to the owning professor.
+  const { error } = await supabase
+    .from("courses")
+    .update({ transcripts_downloadable: allowed })
+    .eq("id", courseId);
+  if (error) return { ok: false, error: "Couldn't save. Try again." };
+  revalidatePath(`/course/${courseId}/setup`);
+  revalidatePath(`/course/${courseId}/notes`);
+  revalidatePath(`/course/${courseId}/follow`);
+  return { ok: true };
+}
+
+const MAX_SYLLABUS_TEXT_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Professor: record the uploaded syllabus. The browser has already put the
+ * file under `{courseId}/` in the course-materials bucket. Text uploads
+ * fill syllabus_text immediately; a PDF stores its path and waits for the
+ * Ask-the-TA indexing pass to extract its text.
+ */
+export async function setSyllabus(
+  courseId: string,
+  storagePath: string,
+  title: string
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+  if (!storagePath.startsWith(`${courseId}/`)) {
+    return { ok: false, error: "Upload didn't complete — try again." };
+  }
+  // RLS on the select proves ownership before we touch storage.
+  const { data: course } = await supabase
+    .from("courses")
+    .select("id, professor_id, syllabus_path")
+    .eq("id", courseId)
+    .single();
+  if (!course || course.professor_id !== user.id) {
+    return { ok: false, error: "Only the course owner can do that." };
+  }
+
+  let syllabusText: string | null = null;
+  if (!/\.pdf$/i.test(storagePath)) {
+    const { data: file, error: downloadError } = await supabase.storage
+      .from(MATERIALS_BUCKET)
+      .download(storagePath);
+    if (downloadError || !file) {
+      return { ok: false, error: "Couldn't read the uploaded syllabus." };
+    }
+    if (file.size > MAX_SYLLABUS_TEXT_BYTES) {
+      await supabase.storage.from(MATERIALS_BUCKET).remove([storagePath]);
+      return { ok: false, error: "That file is over 2MB." };
+    }
+    syllabusText = (await file.text()).trim() || null;
+    if (!syllabusText) {
+      await supabase.storage.from(MATERIALS_BUCKET).remove([storagePath]);
+      return { ok: false, error: "That file doesn't contain any text." };
+    }
+  }
+
+  if (course.syllabus_path && course.syllabus_path !== storagePath) {
+    await supabase.storage.from(MATERIALS_BUCKET).remove([course.syllabus_path]);
+  }
+  const { error } = await supabase
+    .from("courses")
+    .update({
+      syllabus_path: storagePath,
+      syllabus_title: title.trim().slice(0, 200) || "Syllabus",
+      syllabus_text: syllabusText,
+    })
+    .eq("id", courseId);
+  if (error) return { ok: false, error: "Couldn't save the syllabus." };
+  revalidatePath(`/course/${courseId}/setup`);
+  revalidatePath(`/course/${courseId}/ta`);
+  return { ok: true };
+}
+
+/** Professor: remove the syllabus (row fields + stored object). */
+export async function removeSyllabus(courseId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+  const { data: course } = await supabase
+    .from("courses")
+    .select("id, professor_id, syllabus_path")
+    .eq("id", courseId)
+    .single();
+  if (!course || course.professor_id !== user.id) {
+    return { ok: false, error: "Only the course owner can do that." };
+  }
+  if (course.syllabus_path) {
+    await supabase.storage.from(MATERIALS_BUCKET).remove([course.syllabus_path]);
+  }
+  const { error } = await supabase
+    .from("courses")
+    .update({ syllabus_path: null, syllabus_title: null, syllabus_text: null })
+    .eq("id", courseId);
+  if (error) return { ok: false, error: "Couldn't remove the syllabus." };
+  revalidatePath(`/course/${courseId}/setup`);
+  revalidatePath(`/course/${courseId}/ta`);
   return { ok: true };
 }

@@ -77,6 +77,21 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
     columns: [],
     migration: "0038_note_entries.sql",
   },
+  {
+    table: "lecture_decks",
+    columns: ["transcript_path", "transcript_title", "deck_text"],
+    migration: "0040_course_materials.sql",
+  },
+  {
+    table: "courses",
+    columns: ["transcripts_downloadable", "syllabus_path"],
+    migration: "0040_course_materials.sql",
+  },
+  {
+    table: "ta_messages",
+    columns: [],
+    migration: "0040_course_materials.sql",
+  },
 ];
 
 /**

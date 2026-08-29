@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { DECK_BUCKET } from "@/lib/storage";
+import { DECK_BUCKET, MATERIALS_BUCKET } from "@/lib/storage";
+import { transcriptToText } from "@/lib/transcripts";
 import { assignPairs, pairKey, tallyVotes } from "@/lib/participate";
 import { generateTpsQuestions } from "@/server/questiongen";
 import { resolveCourseAi } from "@/server/aicreds";
@@ -163,6 +164,109 @@ export async function removeDeckReading(
   if (updateError) return { ok: false, error: "Couldn't remove the reading." };
   revalidatePath(`/course/${courseId}/follow`);
   revalidatePath(`/course/${courseId}/participate`);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Lecture transcript (0040)
+// ---------------------------------------------------------------------------
+
+/** Text uploads only in v1 — recorders all export text, and it keeps the TA
+ *  corpus fillable at attach time with no AI extraction pass. */
+const MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Professor: attach a lecture transcript (.txt/.md/.vtt) to a deck. The
+ * browser has already uploaded the file under `{courseId}/` in the
+ * course-materials bucket; this stores the text (VTT flattened to prose)
+ * and cleans up any previous transcript object.
+ */
+export async function attachDeckTranscript(
+  courseId: string,
+  deckId: string,
+  storagePath: string,
+  title: string
+): Promise<ActionResult> {
+  const { supabase, error } = await requireProfessor(courseId);
+  if (error) return { ok: false, error };
+  if (!storagePath.startsWith(`${courseId}/`)) {
+    return { ok: false, error: "Upload didn't complete — try again." };
+  }
+  const { data: deck } = await supabase
+    .from("lecture_decks")
+    .select("id, transcript_path")
+    .eq("id", deckId)
+    .eq("course_id", courseId)
+    .single();
+  if (!deck) return { ok: false, error: "Deck not found." };
+
+  const { data: file, error: downloadError } = await supabase.storage
+    .from(MATERIALS_BUCKET)
+    .download(storagePath);
+  if (downloadError || !file) {
+    return { ok: false, error: "Couldn't read the uploaded transcript." };
+  }
+  if (file.size > MAX_TRANSCRIPT_BYTES) {
+    await supabase.storage.from(MATERIALS_BUCKET).remove([storagePath]);
+    return { ok: false, error: "That transcript is over 2MB." };
+  }
+  const text = transcriptToText(await file.text());
+  if (!text) {
+    await supabase.storage.from(MATERIALS_BUCKET).remove([storagePath]);
+    return { ok: false, error: "That file doesn't contain any text." };
+  }
+
+  if (deck.transcript_path && deck.transcript_path !== storagePath) {
+    await supabase.storage.from(MATERIALS_BUCKET).remove([deck.transcript_path]);
+  }
+  const { error: updateError } = await supabase
+    .from("lecture_decks")
+    .update({
+      transcript_path: storagePath,
+      transcript_title: title.trim().slice(0, 200) || "Transcript",
+      transcript_text: text,
+    })
+    .eq("id", deckId);
+  if (updateError) {
+    return { ok: false, error: "Couldn't attach the transcript." };
+  }
+  revalidatePath(`/course/${courseId}/follow`);
+  revalidatePath(`/course/${courseId}/notes`);
+  revalidatePath(`/course/${courseId}/setup`);
+  return { ok: true };
+}
+
+/** Professor: remove a deck's transcript (row + stored object). */
+export async function removeDeckTranscript(
+  courseId: string,
+  deckId: string
+): Promise<ActionResult> {
+  const { supabase, error } = await requireProfessor(courseId);
+  if (error) return { ok: false, error };
+  const { data: deck } = await supabase
+    .from("lecture_decks")
+    .select("id, transcript_path")
+    .eq("id", deckId)
+    .eq("course_id", courseId)
+    .single();
+  if (!deck) return { ok: false, error: "Deck not found." };
+  if (deck.transcript_path) {
+    await supabase.storage.from(MATERIALS_BUCKET).remove([deck.transcript_path]);
+  }
+  const { error: updateError } = await supabase
+    .from("lecture_decks")
+    .update({
+      transcript_path: null,
+      transcript_title: null,
+      transcript_text: null,
+    })
+    .eq("id", deckId);
+  if (updateError) {
+    return { ok: false, error: "Couldn't remove the transcript." };
+  }
+  revalidatePath(`/course/${courseId}/follow`);
+  revalidatePath(`/course/${courseId}/notes`);
+  revalidatePath(`/course/${courseId}/setup`);
   return { ok: true };
 }
 

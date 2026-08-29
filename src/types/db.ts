@@ -135,6 +135,12 @@ export type CourseRow = {
    * left unrendered. Null = send the shipped default (0026). */
   invite_subject: string | null
   invite_message: string | null
+  /** 0040 — professor toggle: may students download lecture transcripts? */
+  transcripts_downloadable: boolean
+  syllabus_path: string | null
+  syllabus_title: string | null
+  /** 0040 — TA-corpus text; can be very long, keep out of broad selects. */
+  syllabus_text: string | null
   /** Canvas linkage from the last roster sync (0027): which Canvas course
    * (and which sections of a cross-listed shell) this roster came from, so
    * resync is one click. Null = never synced from Canvas. */
@@ -526,8 +532,25 @@ export type LectureDeckRow = {
   page_count: number | null
   reading_path: string | null
   reading_title: string | null
+  transcript_path: string | null
+  transcript_title: string | null
+  /** 0040 — text bodies for the TA corpus; can run 100k+ chars each. Never
+   *  add these to a select that feeds a page render. */
+  transcript_text: string | null
+  deck_text: string | null
+  reading_text: string | null
   /** Manual order within the course (0 = first); professors drag to set it. */
   position: number
+  created_at: string
+}
+
+/** 0040 — one turn in a member's private Ask-the-TA thread. */
+export type TaMessageRow = {
+  id: string
+  course_id: string
+  profile_id: string
+  role: 'user' | 'assistant'
+  content: string
   created_at: string
 }
 
@@ -760,6 +783,7 @@ export type Database = {
       lecture_decks: TableShape<LectureDeckRow>
       lectures: TableShape<LectureRow>
       lecture_note_entries: TableShape<LectureNoteEntryRow>
+      ta_messages: TableShape<TaMessageRow>
       focus_events: TableShape<FocusEventRow>
       deck_questions: TableShape<DeckQuestionRow>
       poll_rounds: TableShape<PollRoundRow>

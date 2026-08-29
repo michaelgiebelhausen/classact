@@ -21,12 +21,17 @@ export type AiTask =
   | "baseline"
   | "scoring"
   | "questions"
-  | "absence";
+  | "absence"
+  | "ta"
+  | "extract";
 
 /**
  * Tasks the platform covers on the system key when the professor has no key.
  * The rule: non-grading AI is on the house; grading stays BYOK. Absence
  * assessment is administrative (a few hundred tokens) and belongs here.
+ * Ask-the-TA ("ta") and material indexing ("extract") stay OFF this list on
+ * purpose — open-ended student chat over big corpora is exactly the spend
+ * Mike doesn't want to absorb; a keyless course simply has no TA.
  */
 const PLATFORM_SUBSIDIZED: readonly AiTask[] = ["questions", "absence"];
 
@@ -44,6 +49,8 @@ interface StoredModels {
   scoring?: string;
   questions?: string;
   absence?: string;
+  ta?: string;
+  extract?: string;
   /** Pricing snapshot captured at settings-save time: modelId → $/Mtok. */
   pricing?: Record<string, { prompt: number; completion: number }>;
 }

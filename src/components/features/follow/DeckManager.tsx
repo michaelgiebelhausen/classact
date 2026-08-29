@@ -26,6 +26,7 @@ import {
   type QuestionItem,
 } from "@/components/features/follow/DeckQuestions";
 import { DeckReading } from "@/components/features/follow/DeckReading";
+import { DeckTranscript } from "@/components/features/follow/DeckTranscript";
 import { capture } from "@/lib/analytics";
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024; // Supabase default object limit
@@ -53,6 +54,7 @@ export interface DeckListItem {
   pageCount: number | null;
   createdAt: string;
   readingTitle: string | null;
+  transcriptTitle: string | null;
   questions: QuestionItem[];
 }
 
@@ -389,6 +391,11 @@ export function DeckManager({ courseId, decks }: Props) {
                         courseId={courseId}
                         deckId={deck.id}
                         readingTitle={deck.readingTitle}
+                      />
+                      <DeckTranscript
+                        courseId={courseId}
+                        deckId={deck.id}
+                        transcriptTitle={deck.transcriptTitle}
                       />
                       <Button
                         size="sm"

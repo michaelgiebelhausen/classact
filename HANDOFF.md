@@ -358,6 +358,46 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Transcripts, syllabus, and Ask the TA (0040)
+
+**Run `supabase/migrations/0040_course_materials.sql` BEFORE deploying.** It
+adds transcript/syllabus columns the new code selects, the private
+`course-materials` bucket, and the `ta_messages` table. The schema guard
+knows about all three, so an unmigrated database shows the "database is
+behind" card rather than failing silently — but run it first anyway.
+
+**What shipped.**
+- Professors attach a lecture transcript (.txt/.md/.vtt, ≤2MB — text only on
+  purpose; every recorder exports text) per deck on the Slides tab. VTT is
+  flattened to prose at upload.
+- A Materials tab in course setup holds the syllabus upload (.pdf/.txt/.md)
+  and the "Students can download transcripts" toggle (default ON).
+- Students get Transcript download buttons on the Notes page and the live
+  Follow Along view. **The toggle is enforced server-side**: the bucket has
+  no member-read policy and links are admin-minted only while the toggle is
+  on. Flipping it off leaves already-minted links alive for up to an hour.
+- **Ask the TA** (sidebar: "Ask TA", `/course/{id}/ta`): a chat grounded
+  ONLY in course materials — syllabus, assignment instructions, transcripts,
+  and slide/reading text — with bracketed citations, refusing questions the
+  materials don't cover. Threads are private per member (RLS author-only, no
+  professor read path, same principle as notes).
+- **It runs on the professor's OpenRouter key only** — no platform subsidy.
+  No key = students see "ask your professor to enable"; the professor sees a
+  link to AI Settings. Slide decks and PDF readings/syllabi need a one-time
+  "Index materials" pass (button on the TA page, professor-driven, on their
+  key); transcripts and text syllabi are readable instantly.
+- Caps: 3 questions/min burst, 30/day per person, 400/day per course — the
+  daily caps are counted from `ta_messages` in the database, so they survive
+  deploys.
+
+**Smoke test (5 minutes).** As professor: upload a syllabus (.txt is
+fastest), attach a .vtt or .txt transcript to a deck, open Ask TA and ask a
+syllabus question — expect an answer citing [Syllabus]. Ask something not in
+any material — expect "I don't see this in the course materials." As a
+student: Notes page shows Transcript next to Slides; flip the toggle off in
+Materials and reload — the button is gone; the TA still answers transcript
+questions either way.
+
 ## Notes students can actually keep (0038)
 
 **Run `supabase/migrations/0038_note_entries.sql` BEFORE deploying.** Deploy

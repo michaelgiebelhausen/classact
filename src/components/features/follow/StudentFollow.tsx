@@ -62,6 +62,8 @@ interface Props {
   fileUrl: string | null;
   /** Attachment-disposition variant of fileUrl, so a click saves the PDF. */
   slidesDownloadUrl?: string | null;
+  /** Minted only while the professor allows transcript downloads. */
+  transcriptDownloadUrl?: string | null;
   embedUrl: string | null;
   /** Notes this student already took in this lecture, oldest first. */
   initialEntries: NoteEntryData[];
@@ -98,6 +100,7 @@ export function StudentFollow({
   deckKind,
   fileUrl,
   slidesDownloadUrl = null,
+  transcriptDownloadUrl = null,
   embedUrl,
   initialEntries,
   initialAwayCount,
@@ -666,13 +669,23 @@ export function StudentFollow({
                 : "Embedded slides — follow along with the room."}
             </CardDescription>
           </CardHeader>
-          {deckKind === "pdf" && slidesDownloadUrl && (
-            <CardContent>
-              <Button asChild variant="outline" size="sm" className="w-full">
-                <a href={slidesDownloadUrl}>
-                  <Download className="size-4" /> Download slides
-                </a>
-              </Button>
+          {((deckKind === "pdf" && slidesDownloadUrl) ||
+            transcriptDownloadUrl) && (
+            <CardContent className="grid gap-2">
+              {deckKind === "pdf" && slidesDownloadUrl && (
+                <Button asChild variant="outline" size="sm" className="w-full">
+                  <a href={slidesDownloadUrl}>
+                    <Download className="size-4" /> Download slides
+                  </a>
+                </Button>
+              )}
+              {transcriptDownloadUrl && (
+                <Button asChild variant="outline" size="sm" className="w-full">
+                  <a href={transcriptDownloadUrl}>
+                    <Download className="size-4" /> Download transcript
+                  </a>
+                </Button>
+              )}
             </CardContent>
           )}
         </Card>

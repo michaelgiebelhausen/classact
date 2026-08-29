@@ -40,6 +40,10 @@ export interface ArchiveLecture {
   deckTitle: string;
   /** Signed download URL for the lecture's slide PDF, when there is one. */
   slidesUrl?: string | null;
+  /** Transcript title shows even when downloads are toggled off… */
+  transcriptTitle?: string | null;
+  /** …but the URL is only minted while the professor allows downloads. */
+  transcriptUrl?: string | null;
   entries: NoteEntryData[];
 }
 
@@ -229,6 +233,13 @@ export function NotesArchive({
                   <Button asChild variant="ghost" size="sm">
                     <a href={lecture.slidesUrl}>
                       <Download className="size-4" /> Slides
+                    </a>
+                  </Button>
+                )}
+                {lecture.transcriptUrl && (
+                  <Button asChild variant="ghost" size="sm">
+                    <a href={lecture.transcriptUrl}>
+                      <Download className="size-4" /> Transcript
                     </a>
                   </Button>
                 )}

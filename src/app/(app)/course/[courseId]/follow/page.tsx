@@ -6,6 +6,7 @@ import { getProfile } from "@/lib/auth";
 import {
   getSignedDeckDownloadUrl,
   getSignedDeckUrl,
+  getSignedMaterialDownloadUrl,
   resolveEnrollmentPhotos,
 } from "@/lib/storage";
 import { summarizeFocus, summarizeFocusByEnrollment } from "@/lib/focus";
@@ -81,7 +82,7 @@ export default async function FollowAlongPage({
   // RLS membership gate — non-members get null.
   const { data: course } = await supabase
     .from("courses")
-    .select("id, name, professor_id, room_id")
+    .select("id, name, professor_id, room_id, transcripts_downloadable")
     .eq("id", courseId)
     .single();
   if (!course) notFound();
@@ -121,7 +122,9 @@ export default async function FollowAlongPage({
   const { data: deck } = lecture
     ? await supabase
         .from("lecture_decks")
-        .select("id, title, kind, storage_path, embed_url, page_count")
+        .select(
+          "id, title, kind, storage_path, embed_url, page_count, transcript_path, transcript_title"
+        )
         .eq("id", lecture.deck_id)
         .single()
     : { data: null };
@@ -138,6 +141,21 @@ export default async function FollowAlongPage({
           `${deck.title || "slides"}.pdf`
         )
       : null;
+  // Admin-minted (the bucket has no member read) and only while the
+  // professor's toggle allows it — that's the whole enforcement.
+  let transcriptDownloadUrl: string | null = null;
+  if (
+    deck?.transcript_path &&
+    course.transcripts_downloadable &&
+    isConfigured.supabaseAdmin
+  ) {
+    const ext = deck.transcript_path.split(".").pop() ?? "txt";
+    transcriptDownloadUrl = await getSignedMaterialDownloadUrl(
+      createAdminClient(),
+      deck.transcript_path,
+      `${deck.transcript_title || "transcript"}.${ext}`
+    );
+  }
 
   const header = (
     <div>
@@ -151,7 +169,9 @@ export default async function FollowAlongPage({
     if (!lecture || !deck) {
       const { data: deckRows } = await supabase
         .from("lecture_decks")
-        .select("id, title, kind, page_count, created_at, reading_title")
+        .select(
+          "id, title, kind, page_count, created_at, reading_title, transcript_title"
+        )
         .eq("course_id", courseId)
         .order("position", { ascending: true })
         .order("created_at", { ascending: false });
@@ -184,6 +204,7 @@ export default async function FollowAlongPage({
         pageCount: d.page_count,
         createdAt: d.created_at,
         readingTitle: d.reading_title,
+        transcriptTitle: d.transcript_title,
         questions: questionsByDeck.get(d.id) ?? [],
       }));
       return (
@@ -453,6 +474,7 @@ export default async function FollowAlongPage({
         deckKind={deck.kind}
         fileUrl={fileUrl}
         slidesDownloadUrl={slidesDownloadUrl}
+        transcriptDownloadUrl={transcriptDownloadUrl}
         embedUrl={deck.embed_url}
         initialEntries={(noteEntries ?? []).map((e) => ({
           id: e.id,

@@ -36,6 +36,7 @@ import {
   DeckManager,
   type DeckListItem,
 } from "@/components/features/follow/DeckManager";
+import { MaterialsTab } from "@/components/features/setup/MaterialsTab";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import {
   DEFAULT_INVITE_MESSAGE,
@@ -91,6 +92,8 @@ interface Props {
     /** Null = this course has never customized the invite (0026). */
     invite_subject: string | null;
     invite_message: string | null;
+    syllabus_title: string | null;
+    transcripts_downloadable: boolean;
   };
   roomSetup: {
     hasExistingRoom: boolean;
@@ -134,6 +137,7 @@ export function CourseSetupTabs({
         <TabsTrigger value="attendance">Attendance</TabsTrigger>
         <TabsTrigger value="roster">Roster</TabsTrigger>
         <TabsTrigger value="slides">Slides</TabsTrigger>
+        <TabsTrigger value="materials">Materials</TabsTrigger>
         <TabsTrigger value="icebreakers">Icebreakers</TabsTrigger>
         <TabsTrigger value="invite">Invite</TabsTrigger>
       </TabsList>
@@ -163,6 +167,13 @@ export function CourseSetupTabs({
       </TabsContent>
       <TabsContent value="slides">
         <DeckManager courseId={course.id} decks={decks} />
+      </TabsContent>
+      <TabsContent value="materials">
+        <MaterialsTab
+          courseId={course.id}
+          syllabusTitle={course.syllabus_title}
+          transcriptsDownloadable={course.transcripts_downloadable}
+        />
       </TabsContent>
       <TabsContent value="icebreakers">
         <IcebreakerTab courseId={course.id} initialKeys={course.icebreaker_fields} />

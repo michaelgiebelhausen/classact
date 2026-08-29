@@ -31,7 +31,7 @@ export default async function CourseSetupPage({
   const { data: course, error: courseError } = await supabase
     .from("courses")
     .select(
-      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy, invite_subject, invite_message, canvas_course_id, canvas_section_ids, canvas_synced_at"
+      "id, name, join_code, icebreaker_fields, professor_id, room_id, meeting_days, meeting_start, meeting_end, timezone, auto_open, term_start, term_end, attendance_policy, invite_subject, invite_message, canvas_course_id, canvas_section_ids, canvas_synced_at, syllabus_title, transcripts_downloadable"
     )
     .eq("id", courseId)
     .single();
@@ -179,7 +179,9 @@ export default async function CourseSetupPage({
   const [{ data: deckRows }, { data: questionRows }] = await Promise.all([
     supabase
       .from("lecture_decks")
-      .select("id, title, kind, page_count, created_at, reading_title")
+      .select(
+        "id, title, kind, page_count, created_at, reading_title, transcript_title"
+      )
       .eq("course_id", courseId)
       .order("position", { ascending: true })
       .order("created_at", { ascending: false }),
@@ -213,6 +215,7 @@ export default async function CourseSetupPage({
     pageCount: d.page_count,
     createdAt: d.created_at,
     readingTitle: d.reading_title,
+    transcriptTitle: d.transcript_title,
     questions: questionsByDeck.get(d.id) ?? [],
   }));
 
@@ -233,6 +236,8 @@ export default async function CourseSetupPage({
           icebreaker_fields: (course.icebreaker_fields as string[]) ?? [],
           invite_subject: course.invite_subject,
           invite_message: course.invite_message,
+          syllabus_title: course.syllabus_title,
+          transcripts_downloadable: course.transcripts_downloadable ?? true,
         }}
         roomSetup={{
           hasExistingRoom: (seatCount ?? 0) > 0,
