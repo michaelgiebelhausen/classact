@@ -55,6 +55,25 @@ export default async function OnboardingPage() {
     ? { first: profile.first_name ?? "", last: profile.last_name ?? "" }
     : splitForEditing(profile.full_name ?? "");
 
+  // Same for pronunciation (0043): saved parts win; else split the composed
+  // value, falling back to the roster-derived whole-name guess.
+  const hasPhoneticParts =
+    Boolean(profile.first_name_phonetic?.trim()) ||
+    Boolean(profile.last_name_phonetic?.trim());
+  const { first: initialFirstPhonetic, last: initialLastPhonetic } =
+    hasPhoneticParts
+      ? {
+          first: profile.first_name_phonetic ?? "",
+          last: profile.last_name_phonetic ?? "",
+        }
+      : splitForEditing(profile.name_phonetic || autoPhonetic);
+  // The pre-fill is a guess only when it came from the roster/AI autoPhonetic,
+  // not from anything the student saved themselves.
+  const phoneticWasGuessed =
+    !hasPhoneticParts &&
+    !(profile.name_phonetic ?? "").trim() &&
+    autoPhonetic.trim().length > 0;
+
   // Existing photos + answers (resume support).
   const { data: photos } = await supabase
     .from("profile_photos")
@@ -88,7 +107,9 @@ export default async function OnboardingPage() {
       <OnboardingFlow
         initialFirst={initialFirst}
         initialLast={initialLast}
-        initialPhonetic={profile.name_phonetic || autoPhonetic}
+        initialFirstPhonetic={initialFirstPhonetic}
+        initialLastPhonetic={initialLastPhonetic}
+        phoneticWasGuessed={phoneticWasGuessed}
         photoUrls={photoUrls}
         icebreakerKeys={icebreakerKeys}
         initialAnswers={initialAnswers}

@@ -9,22 +9,26 @@ import { Label } from "@/components/ui/label";
 import { updateMyName } from "@/server/actions/profile";
 
 /**
- * Edit given and family names separately, plus how to say them. Mirrors the
- * first onboarding step, so the two places you set your name look the same.
+ * Edit given and family names, each with its own pronunciation. Laid out as two
+ * rows — name on the left, "how you say it" on the right — mirroring how the
+ * onboarding name step reads.
  */
 export function NameForm({
   initialFirst,
   initialLast,
-  initialPhonetic,
+  initialFirstPhonetic,
+  initialLastPhonetic,
 }: {
   initialFirst: string;
   initialLast: string;
-  initialPhonetic: string;
+  initialFirstPhonetic: string;
+  initialLastPhonetic: string;
 }) {
   const router = useRouter();
   const [first, setFirst] = useState(initialFirst);
   const [last, setLast] = useState(initialLast);
-  const [phonetic, setPhonetic] = useState(initialPhonetic);
+  const [firstPhonetic, setFirstPhonetic] = useState(initialFirstPhonetic);
+  const [lastPhonetic, setLastPhonetic] = useState(initialLastPhonetic);
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -32,12 +36,15 @@ export function NameForm({
     const result = await updateMyName({
       firstName: first,
       lastName: last,
-      namePhonetic: phonetic,
+      firstNamePhonetic: firstPhonetic,
+      lastNamePhonetic: lastPhonetic,
     });
     setSaving(false);
     if (result.ok && result.data) {
       setFirst(result.data.firstName);
       setLast(result.data.lastName);
+      setFirstPhonetic(result.data.firstNamePhonetic);
+      setLastPhonetic(result.data.lastNamePhonetic);
       toast.success("Saved — that's the name your class sees now.");
       // The header on this page reads the composed name from the server.
       router.refresh();
@@ -48,7 +55,7 @@ export function NameForm({
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="firstName">First name</Label>
           <Input
@@ -60,6 +67,20 @@ export function NameForm({
           />
         </div>
         <div className="grid gap-2">
+          <Label htmlFor="firstPhonetic">
+            How you say it{" "}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            id="firstPhonetic"
+            value={firstPhonetic}
+            onChange={(e) => setFirstPhonetic(e.target.value)}
+            placeholder="JOR-dun"
+          />
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-2">
           <Label htmlFor="lastName">Last name</Label>
           <Input
             id="lastName"
@@ -69,19 +90,18 @@ export function NameForm({
             autoComplete="family-name"
           />
         </div>
-      </div>
-      <div className="grid gap-2">
-        <Label htmlFor="displayPhonetic">
-          How do you say it?{" "}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Input
-          id="displayPhonetic"
-          value={phonetic}
-          onChange={(e) => setPhonetic(e.target.value)}
-          placeholder="shiv-AWN muhr-FEE"
-          className="max-w-md"
-        />
+        <div className="grid gap-2">
+          <Label htmlFor="lastPhonetic">
+            How you say it{" "}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            id="lastPhonetic"
+            value={lastPhonetic}
+            onChange={(e) => setLastPhonetic(e.target.value)}
+            placeholder="ree-VAIR-uh"
+          />
+        </div>
       </div>
       <div>
         <Button onClick={save} disabled={saving} variant="outline">

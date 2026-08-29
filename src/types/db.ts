@@ -43,6 +43,10 @@ export type ProfileRow = {
   first_name: string | null
   last_name: string | null
   name_phonetic: string | null
+  /** How each name part is said, edited separately (0043). name_phonetic is
+   *  composed from these on save; null on rows not edited since the migration. */
+  first_name_phonetic: string | null
+  last_name_phonetic: string | null
   onboarding_complete: boolean
   university_id: string | null
   /** Founder accounts run course AI on the system env key. */

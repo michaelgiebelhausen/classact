@@ -19,7 +19,8 @@ const answersSchema = z.record(z.string(), z.string().trim().max(2000));
 export async function completeOnboarding(input: {
   firstName: string;
   lastName: string;
-  namePhonetic?: string;
+  firstNamePhonetic?: string;
+  lastNamePhonetic?: string;
   answers: Record<string, string>;
 }): Promise<ActionResult> {
   const firstName = input.firstName.trim();
@@ -28,8 +29,10 @@ export async function completeOnboarding(input: {
     return { ok: false, error: "Tell us your name — it's how classmates find you." };
   }
   const fullName = composeFullName(firstName, lastName);
-  // Optional pronunciation guide; keep it short and store null when blank.
-  const namePhonetic = (input.namePhonetic ?? "").trim().slice(0, 100);
+  // Optional pronunciation guide, edited per part, stored composed like the name.
+  const firstNamePhonetic = (input.firstNamePhonetic ?? "").trim().slice(0, 60);
+  const lastNamePhonetic = (input.lastNamePhonetic ?? "").trim().slice(0, 60);
+  const namePhonetic = composeFullName(firstNamePhonetic, lastNamePhonetic).slice(0, 100);
   const parsedAnswers = answersSchema.safeParse(input.answers);
   if (!parsedAnswers.success) {
     return { ok: false, error: "One of your answers is too long." };
@@ -77,6 +80,8 @@ export async function completeOnboarding(input: {
       first_name: firstName,
       last_name: lastName.length > 0 ? lastName : null,
       full_name: fullName,
+      first_name_phonetic: firstNamePhonetic.length > 0 ? firstNamePhonetic : null,
+      last_name_phonetic: lastNamePhonetic.length > 0 ? lastNamePhonetic : null,
       name_phonetic: namePhonetic.length > 0 ? namePhonetic : null,
       onboarding_complete: true,
     })

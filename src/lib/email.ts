@@ -285,3 +285,51 @@ export async function sendSelfRecoveryEmail(
   ]);
   return result?.sent ?? false;
 }
+
+/**
+ * Confirm a change to the account's sign-in email.
+ *
+ * Routed through Resend and carrying a `token_hash` link (not Supabase's
+ * built-in PKCE mail) for the same reason as recovery: the link must open on
+ * any device, since a university mail scanner fetches it before the person
+ * does. Two variants — the new address confirms it's really theirs; the
+ * current address (only when "Secure email change" is on) approves the move
+ * and is the security notice that someone is changing the login email.
+ */
+export async function sendEmailChangeEmail(
+  to: string,
+  link: string,
+  opts: { toCurrentAddress: boolean }
+): Promise<boolean> {
+  const text = opts.toCurrentAddress
+    ? [
+        `Someone asked to change the sign-in email on your ClassAct account.`,
+        ``,
+        `If that was you, open this link to approve it. It works on any device:`,
+        ``,
+        link,
+        ``,
+        `If it wasn't you, don't open the link — your email stays as it is, and`,
+        `you may want to change your password.`,
+      ].join("\n")
+    : [
+        `You asked to use this address to sign in to ClassAct.`,
+        ``,
+        `Open this link to confirm it. It works on any device or browser:`,
+        ``,
+        link,
+        ``,
+        `Until you do, your account keeps its current email. If you didn't ask`,
+        `for this, you can ignore it — the link expires on its own.`,
+      ].join("\n");
+
+  const [result] = await sendInviteEmails([
+    {
+      enrollmentId: "email-change",
+      to,
+      subject: "Confirm your ClassAct email change",
+      text,
+    },
+  ]);
+  return result?.sent ?? false;
+}

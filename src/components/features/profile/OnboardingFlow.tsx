@@ -24,7 +24,12 @@ import type { PhotoKind } from "@/types/db";
 interface Props {
   initialFirst: string;
   initialLast: string;
-  initialPhonetic: string;
+  initialFirstPhonetic: string;
+  initialLastPhonetic: string;
+  /** True only when the pronunciation was pre-filled from a roster/AI guess,
+   *  not from the student's own saved value — it's what the nudge copy asks
+   *  them to fix, so it must not claim to have guessed their own answer. */
+  phoneticWasGuessed: boolean;
   photoUrls: Partial<Record<PhotoKind, string>>;
   icebreakerKeys: string[];
   initialAnswers: Record<string, string>;
@@ -33,7 +38,9 @@ interface Props {
 export function OnboardingFlow({
   initialFirst,
   initialLast,
-  initialPhonetic,
+  initialFirstPhonetic,
+  initialLastPhonetic,
+  phoneticWasGuessed,
   photoUrls,
   icebreakerKeys,
   initialAnswers,
@@ -43,9 +50,9 @@ export function OnboardingFlow({
   const [step, setStep] = useState(0);
   const [firstName, setFirstName] = useState(initialFirst);
   const [lastName, setLastName] = useState(initialLast);
-  const [namePhonetic, setNamePhonetic] = useState(initialPhonetic);
-  // Was the field pre-filled with an AI-generated guess? Changes the nudge copy.
-  const guessedPhonetic = initialPhonetic.trim().length > 0;
+  const [firstPhonetic, setFirstPhonetic] = useState(initialFirstPhonetic);
+  const [lastPhonetic, setLastPhonetic] = useState(initialLastPhonetic);
+  const guessedPhonetic = phoneticWasGuessed;
   const [answers, setAnswers] = useState<Record<string, string>>(initialAnswers);
   const [finishing, setFinishing] = useState(false);
 
@@ -61,7 +68,8 @@ export function OnboardingFlow({
     const result = await completeOnboarding({
       firstName,
       lastName,
-      namePhonetic,
+      firstNamePhonetic: firstPhonetic,
+      lastNamePhonetic: lastPhonetic,
       answers,
     });
     if (result.ok) {
@@ -89,42 +97,60 @@ export function OnboardingFlow({
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-6">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="firstName">First name</Label>
-                <Input
-                  id="firstName"
-                  required
-                  placeholder="Jordan"
-                  autoComplete="given-name"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                />
+            <div className="grid gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="firstName">First name</Label>
+                  <Input
+                    id="firstName"
+                    required
+                    placeholder="Jordan"
+                    autoComplete="given-name"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="firstPhonetic">
+                    How you say it{" "}
+                    <span className="font-normal text-muted-foreground">
+                      (optional)
+                    </span>
+                  </Label>
+                  <Input
+                    id="firstPhonetic"
+                    placeholder="JOR-dun"
+                    value={firstPhonetic}
+                    onChange={(e) => setFirstPhonetic(e.target.value)}
+                  />
+                </div>
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="lastName">Last name</Label>
-                <Input
-                  id="lastName"
-                  placeholder="Rivera"
-                  autoComplete="family-name"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="lastName">Last name</Label>
+                  <Input
+                    id="lastName"
+                    placeholder="Rivera"
+                    autoComplete="family-name"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="lastPhonetic">
+                    How you say it{" "}
+                    <span className="font-normal text-muted-foreground">
+                      (optional)
+                    </span>
+                  </Label>
+                  <Input
+                    id="lastPhonetic"
+                    placeholder="ree-VAIR-uh"
+                    value={lastPhonetic}
+                    onChange={(e) => setLastPhonetic(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="namePhonetic">
-                How do you say it?{" "}
-                <span className="font-normal text-muted-foreground">
-                  (optional)
-                </span>
-              </Label>
-              <Input
-                id="namePhonetic"
-                placeholder="shiv-AWN muhr-FEE"
-                value={namePhonetic}
-                onChange={(e) => setNamePhonetic(e.target.value)}
-              />
               <p className="text-xs text-muted-foreground">
                 {guessedPhonetic
                   ? "We took a best guess — fix it if it's off so classmates say your name right."

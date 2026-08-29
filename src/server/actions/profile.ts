@@ -26,8 +26,17 @@ import type { ActionResult } from "@/server/actions/auth";
 export async function updateMyName(input: {
   firstName: string;
   lastName: string;
-  namePhonetic?: string;
-}): Promise<ActionResult<{ firstName: string; lastName: string; fullName: string }>> {
+  firstNamePhonetic?: string;
+  lastNamePhonetic?: string;
+}): Promise<
+  ActionResult<{
+    firstName: string;
+    lastName: string;
+    fullName: string;
+    firstNamePhonetic: string;
+    lastNamePhonetic: string;
+  }>
+> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -52,7 +61,10 @@ export async function updateMyName(input: {
       error: "That looks like an email — use the name you'd like classmates to see.",
     };
   }
-  const namePhonetic = (input.namePhonetic ?? "").trim().slice(0, 100);
+  // Pronunciation is edited per part but stored composed, mirroring the name.
+  const firstNamePhonetic = (input.firstNamePhonetic ?? "").trim().slice(0, 60);
+  const lastNamePhonetic = (input.lastNamePhonetic ?? "").trim().slice(0, 60);
+  const namePhonetic = composeFullName(firstNamePhonetic, lastNamePhonetic).slice(0, 100);
 
   const { error } = await supabase
     .from("profiles")
@@ -60,6 +72,8 @@ export async function updateMyName(input: {
       first_name: firstName,
       last_name: lastName.length > 0 ? lastName : null,
       full_name: fullName,
+      first_name_phonetic: firstNamePhonetic.length > 0 ? firstNamePhonetic : null,
+      last_name_phonetic: lastNamePhonetic.length > 0 ? lastNamePhonetic : null,
       name_phonetic: namePhonetic.length > 0 ? namePhonetic : null,
     })
     .eq("id", user.id);
@@ -73,7 +87,10 @@ export async function updateMyName(input: {
   for (const e of enrollments ?? []) invalidateCourseDirectory(e.course_id);
 
   revalidatePath("/profile");
-  return { ok: true, data: { firstName, lastName, fullName } };
+  return {
+    ok: true,
+    data: { firstName, lastName, fullName, firstNamePhonetic, lastNamePhonetic },
+  };
 }
 
 /**

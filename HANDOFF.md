@@ -358,6 +358,56 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Profile email fields + per-part pronunciation (0043)
+
+**Run `supabase/migrations/0043_profile_phonetic_parts.sql` BEFORE deploying.**
+It adds nullable `profiles.first_name_phonetic` and `profiles.last_name_phonetic`.
+Like 0042 this is a **write path**: `completeOnboarding` and `updateMyName` now
+write those columns, so a deploy ahead of the migration breaks finishing
+onboarding and saving a name until it's applied. The schema guard folds the two
+columns into the existing `profiles` contract entry, so the boot alert names
+0043 too. No new migration is needed for the email fields — they only read
+existing columns.
+
+**Pronunciation is now per name part.** The name card (profile + onboarding)
+shows First name / Last name each with its own "how you say it" beside it.
+`name_phonetic` stays the canonical value the name games read; it's composed
+`"first last"` from the two parts on save (blank parts drop out), exactly like
+`full_name`. `enrollments.roster_name_phonetic` (the Canvas/CSV whole-name AI
+guess) is unchanged and still the fallback beneath the profile value.
+
+**Two email fields on the profile.**
+- *Email imported from your school (Canvas)* — read-only. Sourced as
+  `profiles.school_email` (rarely set — only the founder-only Canvas match
+  writes it) **else** the most recent Canvas-synced enrollment's `roster_email`
+  (rows stamped `canvas_seen_at`, so self-join/CSV addresses are never
+  mislabeled as LMS). Blank ("Not synced from an LMS yet") for a pure
+  code/CSV joiner.
+- *Email for your ClassAct account* — the sign-in email, editable.
+
+**Changing the account email is a NEW auth flow — verify it end to end.**
+`requestEmailChange` (`src/server/actions/account.ts`) does NOT use
+`updateUser({email})` (its confirmation link, under the SSR client's forced
+PKCE, is the device-bound `?code=` link campus scanners burn on GET — the bug
+fixed twice already). It mirrors `requestPasswordReset`: admin `generateLink`
+→ `token_hash` → `/auth/callback?...&type=email_change` (the callback already
+handles that OTP type) → Resend (`sendEmailChangeEmail`). The change is
+**post-confirmation** — the login email doesn't move until the link is opened;
+the session survives.
+- **Check the Supabase "Secure email change" toggle** (Auth → Providers →
+  Email). Default is ON → both the new AND the current address must confirm.
+  The action sends a link to the new address (required) and, best-effort, one
+  to the current address (needed when the toggle is ON). If your project has it
+  OFF, the current-address link is harmless.
+- **I could not run a live email-change test from here** (no prod DB write
+  access). Do one real end-to-end change (request → click link(s) → confirm the
+  login email moved) before relying on it.
+- **Roster impact, by design:** the change does NOT rewrite
+  `enrollments.roster_email`. Existing enrollments are keyed by `profile_id` and
+  survive intact. But rejoin-by-code and Canvas resync still match on the
+  address the professor's roster has, so a student who moves away from their
+  school email may not re-match later — the UI warns them.
+
 ## Students can edit their name — first/last separately (0042)
 
 **Run `supabase/migrations/0042_profile_name_parts.sql` BEFORE deploying.**

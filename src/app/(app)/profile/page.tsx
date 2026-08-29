@@ -14,6 +14,7 @@ import { PhotoUploader } from "@/components/features/profile/PhotoUploader";
 import { DeleteDataButton } from "@/components/features/profile/DeleteDataButton";
 import { AboutMeForm } from "@/components/features/profile/AboutMeForm";
 import { NameForm } from "@/components/features/profile/NameForm";
+import { EmailForm } from "@/components/features/profile/EmailForm";
 import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
 import { UserDocUpload } from "@/components/features/profile/UserDocUpload";
 import { getMyUserDoc } from "@/server/actions/profile";
@@ -59,6 +60,45 @@ export default async function ProfilePage() {
   const { first: initialFirst, last: initialLast } = hasNameParts
     ? { first: profile.first_name ?? "", last: profile.last_name ?? "" }
     : splitForEditing(profile.full_name ?? "");
+
+  // Same lazy split for the pronunciation (0043).
+  const hasPhoneticParts =
+    Boolean(profile.first_name_phonetic?.trim()) ||
+    Boolean(profile.last_name_phonetic?.trim());
+  const { first: initialFirstPhonetic, last: initialLastPhonetic } =
+    hasPhoneticParts
+      ? {
+          first: profile.first_name_phonetic ?? "",
+          last: profile.last_name_phonetic ?? "",
+        }
+      : splitForEditing(profile.name_phonetic ?? "");
+
+  // The two emails. The account (sign-in) email is the auth identity. The LMS
+  // email is normally in a Canvas-synced enrollment, not profiles.school_email
+  // — that column is only set by the rare founder-only match — so prefer
+  // school_email but fall back to the most recent Canvas enrollment address.
+  //
+  // Gate on canvas_user_id, not canvas_seen_at: a genuine Canvas sync is the
+  // only writer of canvas_user_id, whereas the 0031 backfill stamped
+  // canvas_seen_at on pre-0031 CSV rows too — so canvas_seen_at would mislabel
+  // a CSV student's address as "from Canvas". A pure code/CSV joiner has
+  // neither and correctly shows nothing.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const accountEmail = user?.email ?? "";
+  let lmsEmail: string | null = profile.school_email ?? null;
+  if (!lmsEmail) {
+    const { data: canvasEnrollment } = await supabase
+      .from("enrollments")
+      .select("roster_email, canvas_seen_at")
+      .eq("profile_id", profile.id)
+      .not("canvas_user_id", "is", null)
+      .order("canvas_seen_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    lmsEmail = canvasEnrollment?.roster_email ?? null;
+  }
   // Its own table and its own query — deliberately not on `profiles`, which
   // getProfile() pulls in full on nearly every page.
   const userDoc = await getMyUserDoc();
@@ -105,8 +145,21 @@ export default async function ProfilePage() {
           <NameForm
             initialFirst={initialFirst}
             initialLast={initialLast}
-            initialPhonetic={profile.name_phonetic ?? ""}
+            initialFirstPhonetic={initialFirstPhonetic}
+            initialLastPhonetic={initialLastPhonetic}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Email</CardTitle>
+          <CardDescription>
+            The address your school has on file, and the one you use to sign in.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <EmailForm lmsEmail={lmsEmail} accountEmail={accountEmail} />
         </CardContent>
       </Card>
 
