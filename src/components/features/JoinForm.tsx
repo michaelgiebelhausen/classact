@@ -18,13 +18,18 @@ import { sendJoinLink, signUpAndJoin } from "@/server/actions/auth";
  * Password-first join: code + email + password creates the account (one
  * confirmation email finishes the join), and an existing account with the
  * right password joins instantly. The email-link flow stays as a fallback.
+ *
+ * With `authedEmail` set the visitor already has a session, so the form asks
+ * for the code and nothing else — no email, no password, no account creation.
  */
 export function JoinForm({
   initialCode,
   badCode,
+  authedEmail,
 }: {
   initialCode?: string;
   badCode?: boolean;
+  authedEmail?: string;
 }) {
   const [code, setCode] = useState(initialCode ?? "");
   const [email, setEmail] = useState("");
@@ -36,6 +41,11 @@ export function JoinForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    if (authedEmail) {
+      // Already signed in — the join route activates the enrollment itself.
+      window.location.assign(`/auth/join?code=${encodeURIComponent(code)}`);
+      return;
+    }
     if (magic) {
       const result = await sendJoinLink({ code, email });
       setBusy(false);
@@ -68,7 +78,9 @@ export function JoinForm({
         <CardTitle>Join your class</CardTitle>
         <CardDescription>
           {sent ??
-            "Enter the code from your professor, your school email, and a password for your new account."}
+            (authedEmail
+              ? `You're signed in as ${authedEmail} — just enter the code from your professor.`
+              : "Enter the code from your professor, your school email, and a password for your new account.")}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -95,6 +107,7 @@ export function JoinForm({
                 className="font-mono tracking-widest"
               />
             </div>
+            {!authedEmail && (
             <div className="grid gap-2">
               <Label htmlFor="email">School email</Label>
               <Input
@@ -107,7 +120,8 @@ export function JoinForm({
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-            {!magic && (
+            )}
+            {!authedEmail && !magic && (
               <div className="grid gap-2">
                 <Label htmlFor="join-password">Password</Label>
                 <Input
@@ -132,6 +146,7 @@ export function JoinForm({
                   ? "Email me a join link"
                   : "Join class"}
             </Button>
+            {!authedEmail && (
             <p className="text-center text-sm text-muted-foreground">
               <button
                 type="button"
@@ -144,6 +159,7 @@ export function JoinForm({
                 {magic ? "Use a password instead" : "Email me a join link instead"}
               </button>
             </p>
+            )}
           </form>
         )}
       </CardContent>
