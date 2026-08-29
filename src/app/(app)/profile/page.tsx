@@ -13,6 +13,7 @@ import { getSignedPhotoUrls } from "@/lib/storage";
 import { PhotoUploader } from "@/components/features/profile/PhotoUploader";
 import { DeleteDataButton } from "@/components/features/profile/DeleteDataButton";
 import { AboutMeForm } from "@/components/features/profile/AboutMeForm";
+import { NameForm } from "@/components/features/profile/NameForm";
 import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
 import { UserDocUpload } from "@/components/features/profile/UserDocUpload";
 import { getMyUserDoc } from "@/server/actions/profile";
@@ -81,6 +82,23 @@ export default async function ProfilePage() {
           {profile.full_name ?? "No name set"}
         </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Your name</CardTitle>
+          <CardDescription>
+            This is what classmates and your professor see on the seat map and
+            in the name games. Change it any time — it replaces the name your
+            class was imported or signed up with.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <NameForm
+            initialName={profile.full_name ?? ""}
+            initialPhonetic={profile.name_phonetic ?? ""}
+          />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

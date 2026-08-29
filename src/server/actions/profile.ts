@@ -5,7 +5,69 @@ import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { normalizeLinkedInUrl } from "@/lib/linkedin";
 import { validateUserDoc, byteLength } from "@/lib/usermd";
+import { isEmailAddress } from "@/lib/names";
+import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
+
+/**
+ * Change the name (and optional pronunciation) the class sees.
+ *
+ * Onboarding is the only other place this gets set, and a student who typed
+ * the wrong thing there — or goes by something other than the registrar name
+ * Canvas imported — had no way back to it. This writes the same two columns.
+ *
+ * The name shows on the seat map and in the name games, both of which read
+ * through the per-course directory cache, so every course this person is in
+ * gets its directory dropped — otherwise the room keeps showing the old name
+ * until the cache TTL lapses.
+ */
+export async function updateMyName(input: {
+  fullName: string;
+  namePhonetic?: string;
+}): Promise<ActionResult<{ fullName: string }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const fullName = input.fullName.trim();
+  if (fullName.length < 2) {
+    return {
+      ok: false,
+      error: "Tell us your name — it's how classmates find you.",
+    };
+  }
+  if (fullName.length > 80) {
+    return { ok: false, error: "That name is too long — keep it under 80 characters." };
+  }
+  if (isEmailAddress(fullName)) {
+    return {
+      ok: false,
+      error: "That looks like an email — use the name you'd like classmates to see.",
+    };
+  }
+  const namePhonetic = (input.namePhonetic ?? "").trim().slice(0, 100);
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      full_name: fullName,
+      name_phonetic: namePhonetic.length > 0 ? namePhonetic : null,
+    })
+    .eq("id", user.id);
+  if (error) return { ok: false, error: "Couldn't save your name. Try again." };
+
+  const { data: enrollments } = await supabase
+    .from("enrollments")
+    .select("course_id")
+    .eq("profile_id", user.id)
+    .neq("status", "dropped");
+  for (const e of enrollments ?? []) invalidateCourseDirectory(e.course_id);
+
+  revalidatePath("/profile");
+  return { ok: true, data: { fullName } };
+}
 
 /**
  * Save the signed-in user's profile-level icebreaker answers (0019). These

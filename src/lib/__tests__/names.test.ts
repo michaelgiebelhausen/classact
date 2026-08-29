@@ -197,12 +197,14 @@ describe("rosterDisplayName", () => {
     }
   });
 
-  it("never lets a profile name override the registrar's", () => {
-    // An imported roster name is what the professor sees in their gradebook;
-    // a student renaming themselves there would be a different feature.
-    expect(rosterDisplayName("Jordan Rivera", "DJ Riv")).toBe("Jordan Rivera");
+  it("lets a chosen profile name override an imported registrar name", () => {
+    // The student can edit their name on their profile; the class follows that
+    // choice on the seat map and in the name games. The professor's roster and
+    // gradebook still read the raw roster_name, so the registrar spelling is
+    // never lost — only what the room is shown changes.
+    expect(rosterDisplayName("Jordan Rivera", "DJ Riv")).toBe("DJ Riv");
     expect(rosterDisplayName("Alvarez-Stratton, Anneliese", "Annie")).toBe(
-      "Alvarez-Stratton, Anneliese"
+      "Annie"
     );
   });
 

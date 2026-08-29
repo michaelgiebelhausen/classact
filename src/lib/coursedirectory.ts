@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/db";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
-import { isEmailAddress, rosterDisplayName } from "@/lib/names";
+import { rosterDisplayName } from "@/lib/names";
 
 export interface DirectoryEntry {
   name: string;
@@ -105,21 +105,21 @@ async function build(
 
   const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
 
-  // Only students who joined by course code have an email where their name
-  // should be, and only they can be improved by the name they gave at
-  // onboarding. A class imported from a roster asks for nothing extra here.
-  const needName = (enrollments ?? []).filter(
-    (e) => e.profile_id && isEmailAddress(e.roster_name)
-  );
+  // Anyone signed in can have set a name on their profile that should win over
+  // the roster's — a Canvas student who goes by a nickname, not just a
+  // course-code joiner whose row is named after their email. So we look up
+  // full_name for every enrollment that has a profile, and let
+  // rosterDisplayName decide which name to show.
+  const withProfile = (enrollments ?? []).filter((e) => e.profile_id);
   const profileNames = new Map<string, string>();
-  if (needName.length > 0) {
+  if (withProfile.length > 0) {
     // Deliberately not fatal, where a failed roster query is: the worst case
-    // is that a handful of people read as `jsmith` for one TTL, and throwing
-    // to avoid that would blank every name and face in the room instead.
+    // is that a handful of people read by their roster name for one TTL, and
+    // throwing to avoid that would blank every name and face in the room.
     const { data: profiles } = await admin
       .from("profiles")
       .select("id, full_name")
-      .in("id", needName.map((e) => e.profile_id as string));
+      .in("id", withProfile.map((e) => e.profile_id as string));
     for (const p of profiles ?? []) {
       if (p.full_name) profileNames.set(p.id, p.full_name);
     }
