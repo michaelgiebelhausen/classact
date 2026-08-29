@@ -628,3 +628,47 @@ export async function markDropped(input: {
   revalidatePath(`/course/${course.id}`);
   return { ok: true, data: { dropped: (updated ?? []).length } };
 }
+
+/**
+ * Unlink THIS course from its Canvas course. Clears only the linkage columns —
+ * the professor's account-level token (professor_canvas) and every other
+ * course's link are untouched, and the roster stays exactly as synced. This is
+ * the course-scoped counterpart to disconnectCanvas, which deletes the token
+ * for the whole account.
+ */
+export async function unlinkCanvasCourse(input: {
+  courseId: string;
+}): Promise<ActionResult> {
+  const courseId = typeof input?.courseId === "string" ? input.courseId : "";
+  if (!courseId) return { ok: false, error: "Invalid unlink request." };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  // Ownership check (RLS also enforces).
+  const { data: course } = await supabase
+    .from("courses")
+    .select("id, professor_id")
+    .eq("id", courseId)
+    .single();
+  if (!course || course.professor_id !== user.id) {
+    return { ok: false, error: "Only the course owner can unlink Canvas." };
+  }
+
+  const { error } = await supabase
+    .from("courses")
+    .update({
+      canvas_course_id: null,
+      canvas_section_ids: null,
+      canvas_synced_at: null,
+    })
+    .eq("id", course.id);
+  if (error) {
+    return { ok: false, error: "Couldn't unlink Canvas — try again." };
+  }
+
+  revalidatePath(`/course/${course.id}/setup`);
+  return { ok: true };
+}

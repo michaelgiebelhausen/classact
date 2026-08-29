@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import {
   markDropped,
   syncCanvasRoster,
+  unlinkCanvasCourse,
   type DropCandidate,
 } from "@/server/actions/canvas";
 import {
@@ -59,6 +60,11 @@ export function CanvasSync({ courseId, connection, link }: Props) {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [manualId, setManualId] = useState("");
   const [disconnecting, setDisconnecting] = useState(false);
+  // Deleting the token affects EVERY course, so it never fires on one click —
+  // a professor once hit "Disconnect" in a test course's setup expecting it to
+  // apply only there.
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
   // Lets a professor connect their own account even when the server has a
   // fallback token configured — that token only ever sees its owner's
   // courses, so "connected" isn't the same as "connected as you".
@@ -269,7 +275,29 @@ export function CanvasSync({ courseId, connection, link }: Props) {
       setCourses(null);
       setPicker(null);
       setJustConnected(null);
+      setConfirmDisconnect(false);
       toast.success("Canvas disconnected — the token has been deleted.");
+      router.refresh();
+    } else {
+      toast.error(result.error);
+    }
+  }
+
+  async function handleUnlink() {
+    setUnlinking(true);
+    let result: Awaited<ReturnType<typeof unlinkCanvasCourse>>;
+    try {
+      result = await unlinkCanvasCourse({ courseId });
+    } catch {
+      toast.error("Couldn't reach the server — try again.");
+      return;
+    } finally {
+      setUnlinking(false);
+    }
+    if (result.ok) {
+      toast.success(
+        "This course is unlinked from Canvas. Your roster and account connection are untouched."
+      );
       router.refresh();
     } else {
       toast.error(result.error);
@@ -515,10 +543,10 @@ export function CanvasSync({ courseId, connection, link }: Props) {
               variant="ghost"
               size="sm"
               className="text-muted-foreground"
-              onClick={handleDisconnect}
-              disabled={disconnecting}
+              onClick={() => setConfirmDisconnect(true)}
+              disabled={disconnecting || confirmDisconnect}
             >
-              Disconnect
+              Disconnect account…
             </Button>
           ) : (
             <Button
@@ -532,6 +560,43 @@ export function CanvasSync({ courseId, connection, link }: Props) {
           )}
         </div>
       </div>
+
+      {confirmDisconnect && (
+        <div className="grid gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+          <p className="text-sm font-medium">
+            Disconnect your Canvas account from ClassAct?
+          </p>
+          <p className="text-xs text-muted-foreground">
+            This deletes your Canvas token, so{" "}
+            <span className="font-medium text-foreground">
+              every course you teach
+            </span>{" "}
+            loses the ability to sync until you reconnect. Rosters already
+            synced stay as they are. Only want Canvas out of{" "}
+            <span className="font-medium text-foreground">this</span> course?
+            Use &ldquo;Unlink this course&rdquo; instead.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+            >
+              {disconnecting ? "Disconnecting…" : "Disconnect all courses"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={() => setConfirmDisconnect(false)}
+              disabled={disconnecting}
+            >
+              Keep it connected
+            </Button>
+          </div>
+        </div>
+      )}
 
       {link && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
@@ -557,28 +622,42 @@ export function CanvasSync({ courseId, connection, link }: Props) {
               {" · resync during add/drop to pick up changes."}
             </p>
           </div>
-          <Button
-            size="sm"
-            onClick={() =>
-              void sync(
-                link.canvasCourseId,
-                link.sectionIds && link.sectionIds.length > 0
-                  ? link.sectionIds
-                  : undefined
-              )
-            }
-            disabled={syncingId !== null || checkingId !== null || dropping}
-          >
-            {syncingId === link.canvasCourseId ? (
-              <>
-                <Loader2 className="mr-2 size-4 animate-spin" /> Resyncing…
-              </>
-            ) : (
-              <>
-                <RefreshCw className="mr-2 size-4" /> Resync from Canvas
-              </>
-            )}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={() =>
+                void sync(
+                  link.canvasCourseId,
+                  link.sectionIds && link.sectionIds.length > 0
+                    ? link.sectionIds
+                    : undefined
+                )
+              }
+              disabled={
+                syncingId !== null || checkingId !== null || dropping || unlinking
+              }
+            >
+              {syncingId === link.canvasCourseId ? (
+                <>
+                  <Loader2 className="mr-2 size-4 animate-spin" /> Resyncing…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 size-4" /> Resync from Canvas
+                </>
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={handleUnlink}
+              disabled={unlinking || syncingId !== null}
+              title="Only this course stops syncing — your Canvas account stays connected and the roster stays put."
+            >
+              {unlinking ? "Unlinking…" : "Unlink this course"}
+            </Button>
+          </div>
         </div>
       )}
 
