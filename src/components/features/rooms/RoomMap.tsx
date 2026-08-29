@@ -57,6 +57,12 @@ export interface RoomMapSeatState {
   caption?: string;
   /** Needs attention (red ring) — e.g. the student is currently tabbed away. */
   alert?: boolean;
+  /**
+   * Dimmed (gray, desaturated): the student's machine went silent —
+   * laptop asleep, closed, or offline. Distinct from `alert`, which means
+   * "demonstrably browsing elsewhere"; callers set at most one of the two.
+   */
+  muted?: boolean;
   /** The cold-call pick: a big primary ring so the whole room can find them. */
   spotlight?: boolean;
   /**
@@ -492,9 +498,11 @@ export function RoomMap({
               "pointer-events-none absolute truncate text-center text-[9px] font-medium leading-tight",
               state.alert
                 ? "text-destructive"
-                : state.spotlight
-                  ? "text-primary font-semibold"
-                  : "text-muted-foreground",
+                : state.muted
+                  ? "text-muted-foreground/60"
+                  : state.spotlight
+                    ? "text-primary font-semibold"
+                    : "text-muted-foreground",
             ].join(" ")}
             style={{
               left: geo.px(seat.x) - geo.hu / 2 + 2,
@@ -571,8 +579,8 @@ export function RoomMap({
           <button
             type="button"
             aria-label={`Seat ${seat.label}, ${stateLabel}${ringLabel}${
-              state.spotlight ? ", cold call pick" : ""
-            }`}
+              state.muted ? ", disconnected" : ""
+            }${state.spotlight ? ", cold call pick" : ""}`}
             disabled={!tappable && !zoomable}
             onClick={tappable ? () => onSeatTap?.(seat) : undefined}
             className={[
@@ -592,6 +600,10 @@ export function RoomMap({
                           : "bg-card hover:border-primary hover:text-primary"
                         : "bg-card text-muted-foreground/60",
               state.pending ? "animate-pulse" : "",
+              // Dim, don't ring: a silent machine composes with the status
+              // rings above (a disconnected-but-confirmed seat keeps its
+              // green ring, just grayed out).
+              state.muted ? "opacity-50 saturate-50" : "",
               decoration,
             ].join(" ")}
             style={{

@@ -9,6 +9,15 @@ export interface FocusEventInput {
   occurred_at: string; // ISO timestamp
 }
 
+/** Client heartbeat cadence while following a live lecture. */
+export const PRESENCE_HEARTBEAT_MS = 30_000;
+/**
+ * No heartbeat for this long = the machine went silent (sleep, shutdown,
+ * network drop) — treat the student as disconnected, not away. Generous
+ * because hidden-tab timers throttle to ~1/min, worse on battery saver.
+ */
+export const PRESENCE_DISCONNECT_MS = 150_000;
+
 export interface FocusSummary {
   /** Completed + ongoing away spells (spells fully inside a pause don't count). */
   awayCount: number;
@@ -52,11 +61,21 @@ export function effectiveAwayMs(
 /**
  * Fold one student's events (any order) into a summary. Duplicate 'away' or
  * 'back' events (e.g. blur + visibilitychange both firing) collapse into one.
+ *
+ * `lastSeenAtMs` is the student's presence heartbeat (lecture_presence row).
+ * When provided, an unmatched trailing 'away' only accrues while heartbeats
+ * continued — a machine that went silent (sleep/shutdown) stops the clock at
+ * its last beat instead of charging the rest of the lecture. Omit it for
+ * pre-heartbeat lectures to keep their historical scores unchanged; `null`
+ * (heartbeats exist but this student has no row) charges nothing. Matched
+ * spells are untouched: a sleep-then-return gap is handled at write time by
+ * backdating the 'back' event, not here.
  */
 export function summarizeFocus(
   events: FocusEventInput[],
   now: Date = new Date(),
-  pauses: PauseInterval[] = []
+  pauses: PauseInterval[] = [],
+  lastSeenAtMs?: number | null
 ): FocusSummary {
   const sorted = [...events].sort(
     (a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at)
@@ -75,16 +94,22 @@ export function summarizeFocus(
   }
   const nowMs = now.getTime();
   if (awaySince !== null) {
-    spells.push({ start: awaySince, end: Math.max(awaySince, nowMs) });
+    let end = Math.max(awaySince, nowMs);
+    if (lastSeenAtMs !== undefined) {
+      end = Math.min(end, Math.max(awaySince, lastSeenAtMs ?? awaySince));
+    }
+    spells.push({ start: awaySince, end });
   }
 
   let awayCount = 0;
   let awayMs = 0;
   for (const s of spells) {
     const effective = effectiveAwayMs(s.start, s.end, pauses, nowMs);
-    // A spell the pause fully covers was sanctioned browsing — no count,
-    // no time. Untouched or partially covered spells count once.
-    if (effective > 0 || effective === s.end - s.start) awayCount += 1;
+    // Only spells with effective time count as drift: a spell the pause
+    // fully covers was sanctioned browsing, and a zero-length spell is a
+    // sleep the truncation/backdating collapsed — the design says silence
+    // scores like absence, so it must not add a drift either.
+    if (effective > 0) awayCount += 1;
     awayMs += effective;
   }
   return { awayCount, awayMs, isAway: awaySince !== null };
@@ -94,7 +119,8 @@ export function summarizeFocus(
 export function summarizeFocusByEnrollment(
   events: FocusEventInput[],
   now: Date = new Date(),
-  pauses: PauseInterval[] = []
+  pauses: PauseInterval[] = [],
+  lastSeenByEnrollment?: Map<string, number>
 ): Map<string, FocusSummary> {
   const byEnrollment = new Map<string, FocusEventInput[]>();
   for (const e of events) {
@@ -104,7 +130,7 @@ export function summarizeFocusByEnrollment(
   }
   const result = new Map<string, FocusSummary>();
   for (const [id, list] of byEnrollment) {
-    result.set(id, summarizeFocus(list, now, pauses));
+    result.set(id, summarizeFocus(list, now, pauses, lastSeenByEnrollment?.get(id)));
   }
   return result;
 }

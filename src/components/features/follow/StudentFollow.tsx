@@ -28,12 +28,19 @@ import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { NoteFeed } from "@/components/features/follow/NoteFeed";
 import type { NoteEntryData } from "@/components/features/notes/NoteEntryItem";
-import { recordFocusEvent } from "@/server/actions/lectures";
+import {
+  recordFocusEvent,
+  recordPresenceHeartbeat,
+} from "@/server/actions/lectures";
 import { submitPollAnswer } from "@/server/actions/polls";
+import { pollOptionText } from "@/lib/participate";
+import { subscribeWithRecovery } from "@/lib/live-sync";
 import {
   effectiveAwayMs,
   formatAwayDuration,
   isLecturePaused,
+  PRESENCE_DISCONNECT_MS,
+  PRESENCE_HEARTBEAT_MS,
   type PauseInterval,
 } from "@/lib/focus";
 import { capture } from "@/lib/analytics";
@@ -70,6 +77,8 @@ interface Props {
   /** Prior focus tally for this lecture (survives refreshes). */
   initialAwayCount: number;
   initialAwayMs: number;
+  /** The server still has an open away spell (e.g. sleep ate the 'back'). */
+  initialIsAway: boolean;
   /** Professor pause windows so far; open pause = lecture paused right now. */
   initialPauses: PauseInterval[];
   /** Class roster (names/photos) so partners can be shown by face. */
@@ -105,6 +114,7 @@ export function StudentFollow({
   initialEntries,
   initialAwayCount,
   initialAwayMs,
+  initialIsAway,
   initialPauses,
   roster,
   initialRound,
@@ -145,67 +155,78 @@ export function StudentFollow({
     initialExercisePrompt
   );
 
-  const isAwayRef = useRef(false);
+  // Seeded from the server: a reload wipes local state, but an away spell the
+  // sleep/close ate the 'back' for is still open in the DB — the heartbeat
+  // effect's mount reconcile closes it (the server backdates the timestamp).
+  const isAwayRef = useRef(initialIsAway);
   const awayStartRef = useRef<number | null>(null);
+  // Last local proof of life, mirroring the server heartbeat: a big gap means
+  // the machine slept, so the time between beats isn't browsing. Stamped by
+  // the heartbeat effect's first beat on mount (refs can't call Date.now()
+  // during render).
+  const lastBeatRef = useRef(0);
 
-  // ---- Slide sync: realtime on the lecture row, 5s polling fallback ----
+  // ---- Slide sync: realtime on the lecture row, resilient to sleep/wake ----
+  // subscribeWithRecovery owns the hard part: catch up on every (re)subscribe,
+  // fall back to polling while down, and rebounce onto a fresh channel when the
+  // tab returns to the foreground or the network — so a laptop that slept, shut,
+  // or dropped Wi-Fi resumes tracking instead of freezing on the last slide.
   useEffect(() => {
     const supabase = createClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    // Bumped on every realtime apply, so a slow catch-up SELECT can bow out if a
+    // fresher realtime update landed while it was in flight (no backward jump).
+    let realtimeSeq = 0;
 
-    async function poll() {
+    function applyRow(rec: {
+      current_page: number;
+      ended_at: string | null;
+      pauses?: PauseInterval[] | null;
+    }) {
+      if (rec.ended_at) {
+        router.refresh();
+        return;
+      }
+      setPage(rec.current_page);
+      applyPauses(rec.pauses ?? []);
+    }
+
+    async function catchUp() {
+      const issued = realtimeSeq;
       const { data } = await supabase
         .from("lectures")
         .select("current_page, ended_at, pauses")
         .eq("id", lectureId)
         .maybeSingle();
-      if (!data) return;
-      if (data.ended_at) {
-        router.refresh();
-        return;
-      }
-      setPage(data.current_page);
-      applyPauses(data.pauses ?? []);
+      if (!data || realtimeSeq !== issued) return;
+      applyRow(data);
     }
 
-    const channel = supabase
-      .channel(`lecture:${lectureId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "lectures",
-          filter: `id=eq.${lectureId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            current_page: number;
-            ended_at: string | null;
-            pauses?: PauseInterval[] | null;
-          };
-          if (rec.ended_at) {
-            router.refresh();
-            return;
+    return subscribeWithRecovery({
+      client: supabase,
+      topic: (g) => `lecture:${lectureId}:${g}`,
+      bind: (channel) =>
+        channel.on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "lectures",
+            filter: `id=eq.${lectureId}`,
+          },
+          (payload) => {
+            realtimeSeq++;
+            applyRow(
+              payload.new as {
+                current_page: number;
+                ended_at: string | null;
+                pauses?: PauseInterval[] | null;
+              }
+            );
           }
-          setPage(rec.current_page);
-          applyPauses(rec.pauses ?? []);
-        }
-      )
-      .subscribe((status) => {
-        const ok = status === "SUBSCRIBED";
-        setLive(ok);
-        if (!ok && !pollTimer) pollTimer = setInterval(() => void poll(), 5000);
-        if (ok && pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-        }
-      });
-
-    return () => {
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
-    };
+        ),
+      catchUp,
+      onStatus: setLive,
+    });
   }, [lectureId, router, applyPauses]);
 
   // ---- Poll sync: rounds pop in / advance stages, pairs arrive ----
@@ -213,15 +234,19 @@ export function StudentFollow({
   // so a dropped connection can't strand anyone mid-vote.
   useEffect(() => {
     const supabase = createClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    // Fresher-realtime guard (same as the slide sync): a slow catch-up defers
+    // to any realtime poll event that landed while it was in flight.
+    let realtimeSeq = 0;
 
     async function pollRound() {
+      const issued = realtimeSeq;
       const { data } = await supabase
         .from("poll_rounds")
         .select("id, prompt, options, stage, results, correct_indices")
         .eq("lecture_id", lectureId)
         .neq("stage", "closed")
         .maybeSingle();
+      if (realtimeSeq !== issued) return;
       if (!data) {
         if (roundIdRef.current) {
           roundIdRef.current = null;
@@ -248,6 +273,8 @@ export function StudentFollow({
           if (!prev || prev.id !== data.id) return prev;
           const next = {
             ...prev,
+            prompt: data.prompt,
+            options: data.options,
             stage: data.stage,
             results: data.results,
             correctIndices: data.correct_indices,
@@ -262,6 +289,10 @@ export function StudentFollow({
           .eq("round_id", data.id)
           .contains("member_ids", JSON.stringify([enrollmentId]))
           .maybeSingle();
+        // This catch-up runs on every re-subscribe, when realtime may be live
+        // and redelivering; a poll event landing during this second fetch is
+        // fresher than our partner read, so bow out rather than clobber it.
+        if (realtimeSeq !== issued) return;
         if (pair) {
           const partners = pair.member_ids.filter((id) => id !== enrollmentId);
           setPartnerIds((prev) =>
@@ -271,111 +302,111 @@ export function StudentFollow({
       }
     }
 
-    const channel = supabase
-      .channel(`polls:${lectureId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "poll_rounds",
-          filter: `lecture_id=eq.${lectureId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            id: string;
-            prompt: string;
-            options: string[];
-            stage: PollStage;
-            results: PollResults | null;
-            correct_indices: number[] | null;
-          };
-          if (!rec?.id || rec.stage === "closed") return;
-          roundIdRef.current = rec.id;
-          setRound({
-            id: rec.id,
-            prompt: rec.prompt,
-            options: rec.options,
-            stage: rec.stage,
-            results: rec.results,
-            correctIndices: rec.correct_indices,
-          });
-          setMyThink(null);
-          setMyRevote(null);
-          setPartnerIds([]);
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "poll_rounds",
-          filter: `lecture_id=eq.${lectureId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            id: string;
-            stage: PollStage;
-            results: PollResults | null;
-            correct_indices: number[] | null;
-          };
-          if (!rec?.id || rec.id !== roundIdRef.current) return;
-          if (rec.stage === "closed") {
-            roundIdRef.current = null;
-            setRound(null);
-            setPartnerIds([]);
-            return;
-          }
-          setRound((prev) =>
-            prev && prev.id === rec.id
-              ? {
-                  ...prev,
-                  stage: rec.stage,
-                  results: rec.results,
-                  correctIndices: rec.correct_indices,
-                }
-              : prev
-          );
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "poll_pairs",
-          filter: `course_id=eq.${courseId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            round_id: string;
-            member_ids: string[];
-          };
-          if (
-            rec?.round_id !== roundIdRef.current ||
-            !Array.isArray(rec.member_ids) ||
-            !rec.member_ids.includes(enrollmentId)
-          ) {
-            return;
-          }
-          setPartnerIds(rec.member_ids.filter((id) => id !== enrollmentId));
-        }
-      )
-      .subscribe((status) => {
-        const ok = status === "SUBSCRIBED";
-        if (!ok && !pollTimer) {
-          pollTimer = setInterval(() => void pollRound(), 5000);
-        }
-        if (ok && pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-        }
-      });
-    return () => {
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
-    };
+    return subscribeWithRecovery({
+      client: supabase,
+      topic: (g) => `polls:${lectureId}:${g}`,
+      bind: (channel) =>
+        channel
+          .on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "poll_rounds",
+              filter: `lecture_id=eq.${lectureId}`,
+            },
+            (payload) => {
+              realtimeSeq++;
+              const rec = payload.new as {
+                id: string;
+                prompt: string;
+                options: string[];
+                stage: PollStage;
+                results: PollResults | null;
+                correct_indices: number[] | null;
+              };
+              if (!rec?.id || rec.stage === "closed") return;
+              roundIdRef.current = rec.id;
+              setRound({
+                id: rec.id,
+                prompt: rec.prompt,
+                options: rec.options,
+                stage: rec.stage,
+                results: rec.results,
+                correctIndices: rec.correct_indices,
+              });
+              setMyThink(null);
+              setMyRevote(null);
+              setPartnerIds([]);
+            }
+          )
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "poll_rounds",
+              filter: `lecture_id=eq.${lectureId}`,
+            },
+            (payload) => {
+              realtimeSeq++;
+              const rec = payload.new as {
+                id: string;
+                prompt?: string;
+                options?: string[];
+                stage: PollStage;
+                results: PollResults | null;
+                correct_indices: number[] | null;
+              };
+              if (!rec?.id || rec.id !== roundIdRef.current) return;
+              if (rec.stage === "closed") {
+                roundIdRef.current = null;
+                setRound(null);
+                setPartnerIds([]);
+                return;
+              }
+              // Prompt/options ride along too: the professor can rewrite a
+              // quick-start poll's wording while this student is on it.
+              setRound((prev) =>
+                prev && prev.id === rec.id
+                  ? {
+                      ...prev,
+                      prompt: rec.prompt ?? prev.prompt,
+                      options: rec.options ?? prev.options,
+                      stage: rec.stage,
+                      results: rec.results,
+                      correctIndices: rec.correct_indices,
+                    }
+                  : prev
+              );
+            }
+          )
+          .on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "poll_pairs",
+              filter: `course_id=eq.${courseId}`,
+            },
+            (payload) => {
+              realtimeSeq++;
+              const rec = payload.new as {
+                round_id: string;
+                member_ids: string[];
+              };
+              if (
+                rec?.round_id !== roundIdRef.current ||
+                !Array.isArray(rec.member_ids) ||
+                !rec.member_ids.includes(enrollmentId)
+              ) {
+                return;
+              }
+              setPartnerIds(rec.member_ids.filter((id) => id !== enrollmentId));
+            }
+          ),
+      catchUp: pollRound,
+    });
   }, [lectureId, courseId, enrollmentId]);
 
   // ---- Group exercise: appear/disappear as the professor starts and ends one ----
@@ -430,6 +461,89 @@ export function StudentFollow({
     capture("poll_answered", { phase });
   }
 
+  // ---- Presence heartbeat: proves the machine is still on and connected ----
+  // Runs for the component's whole life (it only renders while the lecture is
+  // live). Hidden tabs still fire throttled timers, so a student on another
+  // site keeps beating; a sleeping machine goes silent and scoring stops
+  // charging them at the last beat.
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+    const beat = () => {
+      const now = Date.now();
+      const prev = lastBeatRef.current;
+      lastBeatRef.current = now;
+      if (prev > 0 && now - prev > PRESENCE_DISCONNECT_MS && isAwayRef.current) {
+        // The machine slept mid-away-spell and just woke with this tab still
+        // loaded. Close the stale spell BEFORE beating — the server backdates
+        // the 'back' against the pre-sleep heartbeat this beat would
+        // otherwise overwrite — then reopen it only if we're still hidden.
+        // Locally, bill the demonstrably-awake stretch and restart the clock
+        // at the wake, so the eventual return dialog covers only real
+        // browsing.
+        const start = awayStartRef.current;
+        if (start !== null) {
+          const preSleep = effectiveAwayMs(
+            start,
+            Math.max(start, prev),
+            pausesRef.current,
+            now
+          );
+          if (preSleep > 0) setAwayCount((c) => c + 1);
+          setAwayMs((ms) => ms + preSleep);
+        }
+        awayStartRef.current = now;
+        void recordFocusEvent(courseId, lectureId, "back")
+          .then(() => {
+            if (document.hidden || !document.hasFocus()) {
+              return recordFocusEvent(courseId, lectureId, "away");
+            }
+            isAwayRef.current = false;
+            awayStartRef.current = null;
+          })
+          .catch(() => {})
+          .finally(() => void recordPresenceHeartbeat(courseId, lectureId));
+        return;
+      }
+      void recordPresenceHeartbeat(courseId, lectureId);
+    };
+    const begin = () => {
+      if (cancelled) return;
+      beat();
+      timer = setInterval(beat, PRESENCE_HEARTBEAT_MS);
+    };
+    if (isAwayRef.current) {
+      // Reconcile a spell left open by a pre-reload sleep/close BEFORE the
+      // first beat: the server backdates this 'back' to the last heartbeat,
+      // so beating first would overwrite the very timestamp it needs.
+      const closeStale = recordFocusEvent(courseId, lectureId, "back");
+      if (!document.hidden && document.hasFocus()) {
+        isAwayRef.current = false;
+        void closeStale.catch(() => {}).finally(begin);
+      } else {
+        // Awake again but reading another tab: the stale spell ends where
+        // the heartbeat died; the browsing happening now starts a new one.
+        // Re-check at send time — a focus during the round-trip means the
+        // focus guard already closed everything, and reopening would wrongly
+        // flag a student who's looking right at the lecture.
+        void closeStale
+          .then(() => {
+            if (document.hidden || !document.hasFocus()) {
+              return recordFocusEvent(courseId, lectureId, "away");
+            }
+          })
+          .catch(() => {})
+          .finally(begin);
+      }
+    } else {
+      begin();
+    }
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [courseId, lectureId]);
+
   // ---- Focus guard: log tab-away / return, warn on return ----
   useEffect(() => {
     function evaluate() {
@@ -437,6 +551,7 @@ export function StudentFollow({
       if (away && !isAwayRef.current) {
         isAwayRef.current = true;
         awayStartRef.current = Date.now();
+        lastBeatRef.current = Date.now();
         capture("lecture_focus_lost", {});
         // Events are always recorded — pause windows are subtracted at
         // scoring time, so the stream stays truthful either way.
@@ -446,22 +561,35 @@ export function StudentFollow({
         const start = awayStartRef.current;
         awayStartRef.current = null;
         const nowMs = Date.now();
-        const raw = start ? nowMs - start : 0;
-        const counted = start
-          ? effectiveAwayMs(start, nowMs, pausesRef.current, nowMs)
-          : 0;
-        // Fully inside a pause window = sanctioned browsing: no tally,
-        // no warning. Anything outside a pause counts as before.
-        if (counted > 0 || counted === raw) setAwayCount((c) => c + 1);
+        // A silent gap since the last beat means the machine slept — only
+        // the stretch while it was demonstrably awake counts (the server
+        // applies the same rule by backdating the 'back' event).
+        const lastBeat = lastBeatRef.current;
+        const slept = nowMs - lastBeat > PRESENCE_DISCONNECT_MS;
+        lastBeatRef.current = nowMs;
+        void recordFocusEvent(courseId, lectureId, "back");
+        // A null start means the spell predates this page load (reload after
+        // sleep) — the server closes it; there's nothing to tally locally.
+        if (start === null) return;
+        const end = slept ? Math.max(start, lastBeat) : nowMs;
+        const raw = end - start;
+        const counted = effectiveAwayMs(start, end, pausesRef.current, nowMs);
+        // Only real away time tallies (mirrors summarizeFocus): a spell the
+        // pause fully covers was sanctioned, and a spell the sleep collapsed
+        // to nothing scores like absence.
+        if (counted > 0) setAwayCount((c) => c + 1);
         setAwayMs((ms) => ms + counted);
         if (counted > 0) {
           setWarning({ durationMs: counted });
+        } else if (slept) {
+          toast.success(
+            "Welcome back — looks like your computer was asleep, so that didn't count."
+          );
         } else if (raw > 0) {
           toast.success(
             "Welcome back — the lecture was paused, so that didn't count."
           );
         }
-        void recordFocusEvent(courseId, lectureId, "back");
       }
     }
     // blur needs a beat — focus may just be moving inside the page.
@@ -580,7 +708,7 @@ export function StudentFollow({
                 disabled={!canVote || voting}
               >
                 <span className="mr-2 font-semibold">{LETTERS[i]}.</span>
-                {option}
+                {pollOptionText(option, i)}
               </Button>
             ))}
             {round.stage === "revote" && myThink !== null && (

@@ -196,13 +196,29 @@ async function buildCourseSignals(
   const courseAnswers = (answers ?? []).filter((a) => roundIds.has(a.round_id));
   const lectureById = new Map((lectures ?? []).map((l) => [l.id, l]));
   const lectureIds = [...lectureById.keys()];
-  const { data: focusEvents } =
+  const [{ data: focusEvents }, { data: presenceRows }] =
     lectureIds.length > 0
-      ? await admin
-          .from("focus_events")
-          .select("lecture_id, enrollment_id, event_type, occurred_at")
-          .in("lecture_id", lectureIds)
-      : { data: [] as never[] };
+      ? await Promise.all([
+          admin
+            .from("focus_events")
+            .select("lecture_id, enrollment_id, event_type, occurred_at")
+            .in("lecture_id", lectureIds),
+          admin
+            .from("lecture_presence")
+            .select("lecture_id, enrollment_id, last_seen_at")
+            .in("lecture_id", lectureIds),
+        ])
+      : [{ data: [] as never[] }, { data: [] as never[] }];
+  // Last heartbeat per (lecture, student): an away spell only counts while
+  // the machine kept beating. Lectures from before the heartbeat existed
+  // have no rows and keep their original scores.
+  const lastSeenByKey = new Map<string, number>();
+  for (const p of presenceRows ?? []) {
+    lastSeenByKey.set(
+      `${p.lecture_id}|${p.enrollment_id}`,
+      Date.parse(p.last_seen_at)
+    );
+  }
 
   const teamIdSet = new Set((teamMembers ?? []).map((m) => m.team_id));
   const courseSignatures = (signatures ?? []).filter((s) => teamIdSet.has(s.team_id));
@@ -310,7 +326,12 @@ async function buildCourseSignals(
       const end = new Date(lecture.ended_at);
       const duration = end.getTime() - new Date(lecture.started_at).getTime();
       if (duration <= 0) continue;
-      const summary = summarizeFocus(events, end, lecture.pauses ?? []);
+      const summary = summarizeFocus(
+        events,
+        end,
+        lecture.pauses ?? [],
+        lastSeenByKey.get(`${lectureId}|${eid}`)
+      );
       lectureMs += duration;
       awayMs += Math.min(summary.awayMs, duration);
       driftCount += summary.awayCount;

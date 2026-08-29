@@ -603,6 +603,69 @@ export async function launchQuickPoll(input: {
 }
 
 /**
+ * Professor: rewrite a live round's question while students are on it — the
+ * quick-start flow launches with placeholder options (A–E) and the real
+ * wording is typed in while the room discusses. Updates the round snapshot
+ * (what students see) and the bank question (the record) together. Locked
+ * once results are revealed: the distributions are per option index, and
+ * re-labeling under them would misrepresent the vote.
+ */
+export async function updateLivePoll(input: {
+  courseId: string;
+  roundId: string;
+  prompt: string;
+  options: string[];
+  correctIndices: number[];
+}): Promise<ActionResult> {
+  const { supabase, error } = await requireProfessor(input.courseId);
+  if (error) return { ok: false, error };
+
+  const prompt = input.prompt.trim();
+  const options = input.options.map((o) => o.trim()).filter(Boolean);
+  const correctIndices = input.correctIndices.filter(
+    (i) => Number.isInteger(i) && i >= 0 && i < options.length
+  );
+  const invalid = validateQuestionFields({
+    prompt,
+    options,
+    correctIndices,
+    positionAfterPage: 1,
+  });
+  if (invalid) return { ok: false, error: invalid };
+
+  const { data: round } = await supabase
+    .from("poll_rounds")
+    .select("id, question_id, stage")
+    .eq("id", input.roundId)
+    .eq("course_id", input.courseId)
+    .single();
+  if (!round) return { ok: false, error: "Poll not found." };
+  if (round.stage === "reveal" || round.stage === "closed") {
+    return {
+      ok: false,
+      error: "The results are out — this question can't change anymore.",
+    };
+  }
+
+  const { error: updateError } = await supabase
+    .from("poll_rounds")
+    .update({ prompt, options })
+    .eq("id", input.roundId)
+    .eq("course_id", input.courseId);
+  if (updateError) return { ok: false, error: "Couldn't update the poll." };
+
+  if (round.question_id) {
+    await supabase
+      .from("deck_questions")
+      .update({ prompt, options, correct_indices: correctIndices })
+      .eq("id", round.question_id)
+      .eq("course_id", input.courseId);
+  }
+  revalidatePath(`/course/${input.courseId}/participate`);
+  return { ok: true };
+}
+
+/**
  * Professor: move a live round forward. Moving to `pair` assigns discussion
  * partners from today's seat map — preferring neighbors who answered
  * differently and rotating partners for variety.

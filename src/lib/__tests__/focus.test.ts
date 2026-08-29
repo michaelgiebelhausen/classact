@@ -137,6 +137,88 @@ describe("pause exclusion", () => {
   });
 });
 
+describe("presence truncation (lastSeenAtMs)", () => {
+  it("truncates an unmatched trailing away at the last heartbeat", () => {
+    // Away at T0, machine went silent at T1, lecture ran to T3.
+    const summary = summarizeFocus(
+      [ev("e1", "away", T0)],
+      new Date(T3),
+      [],
+      Date.parse(T1)
+    );
+    expect(summary.awayCount).toBe(1);
+    expect(summary.awayMs).toBe(30_000); // T0→T1, not T0→T3
+    expect(summary.isAway).toBe(true);
+  });
+
+  it("charges nothing when the last heartbeat predates the spell", () => {
+    // Slept while focused: the 'away' landed as the lid closed. Silence
+    // scores like absence — no time AND no drift count.
+    const summary = summarizeFocus(
+      [ev("e1", "away", T2)],
+      new Date(T3),
+      [],
+      Date.parse(T1)
+    );
+    expect(summary.awayCount).toBe(0);
+    expect(summary.awayMs).toBe(0);
+    expect(summary.isAway).toBe(true);
+  });
+
+  it("clamps a heartbeat newer than now back to now", () => {
+    const summary = summarizeFocus(
+      [ev("e1", "away", T0)],
+      new Date(T1),
+      [],
+      Date.parse(T3)
+    );
+    expect(summary.awayMs).toBe(30_000); // T0→now(T1)
+  });
+
+  it("null (no presence row) zeroes the trailing spell", () => {
+    const summary = summarizeFocus([ev("e1", "away", T0)], new Date(T3), [], null);
+    expect(summary.awayMs).toBe(0);
+    expect(summary.isAway).toBe(true);
+  });
+
+  it("omitting the param keeps legacy charge-to-now behavior", () => {
+    const summary = summarizeFocus([ev("e1", "away", T0)], new Date(T3));
+    expect(summary.awayMs).toBe(6 * 60_000);
+  });
+
+  it("matched spells are untouched by the heartbeat", () => {
+    // Sleep gaps inside matched spells are handled by backdating the 'back'
+    // at write time, not here.
+    const events = [ev("e1", "away", T0), ev("e1", "back", T2)];
+    expect(summarizeFocus(events, new Date(T3), [], Date.parse(T1))).toEqual(
+      summarizeFocus(events, new Date(T3))
+    );
+  });
+
+  it("still subtracts pauses from the truncated spell", () => {
+    // Away T0→(silent at T2), paused T1→T2: only T0→T1 counts.
+    const summary = summarizeFocus(
+      [ev("e1", "away", T0)],
+      new Date(T3),
+      [{ start: T1, end: T2 }],
+      Date.parse(T2)
+    );
+    expect(summary.awayCount).toBe(1);
+    expect(summary.awayMs).toBe(30_000);
+  });
+
+  it("summarizeFocusByEnrollment truncates per student", () => {
+    const map = summarizeFocusByEnrollment(
+      [ev("e1", "away", T0), ev("e2", "away", T0)],
+      new Date(T3),
+      [],
+      new Map([["e1", Date.parse(T1)]]) // e2 has no row → legacy
+    );
+    expect(map.get("e1")!.awayMs).toBe(30_000);
+    expect(map.get("e2")!.awayMs).toBe(6 * 60_000);
+  });
+});
+
 describe("formatAwayDuration", () => {
   it("formats seconds and minutes", () => {
     expect(formatAwayDuration(9_000)).toBe("9s");

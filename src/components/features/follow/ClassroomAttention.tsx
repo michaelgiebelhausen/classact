@@ -29,6 +29,8 @@ export interface AttentionRow {
   awayCount: number;
   awayMs: number;
   isAway: boolean;
+  /** Heartbeat went silent — laptop asleep/closed/offline, not browsing. */
+  disconnected: boolean;
 }
 
 interface Props {
@@ -65,6 +67,7 @@ export function ClassroomAttention({ seats, occupants, attention, paused }: Prop
   const seated = useMemo(() => new Set(Object.values(occupants)), [occupants]);
   const unseated = attention.filter((a) => !seated.has(a.enrollmentId));
   const awayNow = attention.filter((a) => a.isAway).length;
+  const disconnectedNow = attention.filter((a) => a.disconnected).length;
   const hasMap = seats.length > 0 && seated.size > 0;
 
   return (
@@ -76,9 +79,12 @@ export function ClassroomAttention({ seats, occupants, attention, paused }: Prop
         <CardDescription>
           {paused
             ? "Paused — students are free to browse; new tab-aways aren't counted."
-            : awayNow === 0
-              ? "Everyone's tab is on the lecture."
-              : `${awayNow} ${awayNow === 1 ? "student is" : "students are"} away right now.`}
+            : (awayNow === 0
+                ? "Everyone's tab is on the lecture."
+                : `${awayNow} ${awayNow === 1 ? "student is" : "students are"} away right now.`) +
+              (disconnectedNow > 0
+                ? ` ${disconnectedNow} disconnected (asleep or offline).`
+                : "")}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -101,12 +107,14 @@ export function ClassroomAttention({ seats, occupants, attention, paused }: Prop
                     photoUrl: row?.photoUrl ?? null,
                     caption: row ? `${firstName(row.name)}${tally}` : "?",
                     alert: row?.isAway ?? false,
+                    muted: row?.disconnected ?? false,
                   };
                 }}
               />
             </div>
             <p className="text-xs text-muted-foreground">
               Your view from the front · red ring = tabbed away right now ·
+              dimmed = disconnected (laptop asleep or closed) ·
               &ldquo;2×&rdquo; = times away this lecture.
             </p>
           </div>
@@ -134,6 +142,8 @@ export function ClassroomAttention({ seats, occupants, attention, paused }: Prop
                   <span className="flex-1 truncate text-sm">{a.name}</span>
                   {a.isAway ? (
                     <Badge variant="destructive">away</Badge>
+                  ) : a.disconnected ? (
+                    <Badge variant="outline">disconnected</Badge>
                   ) : a.awayCount > 0 ? (
                     <span className="text-xs text-muted-foreground">
                       {a.awayCount}× · {formatAwayDuration(a.awayMs)}

@@ -219,6 +219,17 @@ export function assignGroups(
   return groups.map((g) => g.map((i) => ordered[i].enrollmentId));
 }
 
+const OPTION_LETTERS = "ABCDEFGH";
+
+/**
+ * Option text to print after the "A." letter prefix every poll surface
+ * renders. Quick-start polls launch with placeholder options whose text IS
+ * the letter, which would read "A. A" — collapse those to the bare letter.
+ */
+export function pollOptionText(option: string, index: number): string {
+  return option.trim() === OPTION_LETTERS[index] ? "" : option;
+}
+
 /** Count votes per option index for each phase; out-of-range choices dropped. */
 export function tallyVotes(
   answers: Array<{ phase: PollPhase; choice: number }>,

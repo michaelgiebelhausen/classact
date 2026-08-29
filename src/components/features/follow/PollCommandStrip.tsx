@@ -1,5 +1,6 @@
 "use client";
 
+import { PencilLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { nextStageAction, STAGE_CHIP } from "@/lib/presenternav";
@@ -27,6 +28,8 @@ interface Props {
   onResume: () => void;
   /** Close the round and go back to slides, from any stage. */
   onEndPoll: () => void;
+  /** Reopen the live editor — absent once results are on screen. */
+  onEdit?: () => void;
 }
 
 export function PollCommandStrip({
@@ -39,6 +42,7 @@ export function PollCommandStrip({
   onReveal,
   onResume,
   onEndPoll,
+  onEdit,
 }: Props) {
   const action = nextStageAction(stage);
   if (!action) return null;
@@ -69,6 +73,12 @@ export function PollCommandStrip({
       <p className="min-w-0 flex-1 truncate text-sm" title={prompt}>
         {prompt}
       </p>
+
+      {onEdit && (
+        <Button size="sm" variant="ghost" onClick={onEdit} disabled={busy}>
+          <PencilLine className="mr-1.5 size-4" /> Edit question
+        </Button>
+      )}
 
       <span className="text-xs tabular-nums text-muted-foreground">
         {STAGE_CHIP[stage]} · {answered} of {total} answered

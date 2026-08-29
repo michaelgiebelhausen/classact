@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { DECK_BUCKET } from "@/lib/storage";
+import { PRESENCE_DISCONNECT_MS } from "@/lib/focus";
 import type { ActionResult } from "@/server/actions/auth";
 import type { LecturePause } from "@/types/db";
 
@@ -333,11 +334,71 @@ export async function recordFocusEvent(
   const { supabase, error, enrollmentId } = await requireEnrollment(courseId);
   if (error || !enrollmentId) return { ok: false, error: error ?? "No enrollment." };
 
+  // One clock for the event and its presence echo. An 'away' written as the
+  // lid closes must share its exact timestamp with last_seen_at, so a spell
+  // the sleep ate truncates to exactly zero — length 0 is what keeps it out
+  // of the drift count, and a DB-default now() would land a few ms later.
+  const nowIso = new Date().toISOString();
+
+  // A 'back' after the heartbeat went silent means the machine was asleep or
+  // shut, not browsing — close the away spell at the last proof of life so
+  // the silent stretch isn't charged as drift.
+  let occurredAt: string | null = null;
+  if (eventType === "back") {
+    const { data: presence } = await supabase
+      .from("lecture_presence")
+      .select("last_seen_at")
+      .eq("lecture_id", lectureId)
+      .eq("enrollment_id", enrollmentId)
+      .maybeSingle();
+    if (
+      presence &&
+      Date.now() - Date.parse(presence.last_seen_at) > PRESENCE_DISCONNECT_MS
+    ) {
+      occurredAt = presence.last_seen_at;
+    }
+  }
+
   const { error: insertError } = await supabase.from("focus_events").insert({
     lecture_id: lectureId,
     enrollment_id: enrollmentId,
     event_type: eventType,
+    occurred_at: occurredAt ?? nowIso,
   });
   if (insertError) return { ok: false, error: "Couldn't record the event." };
+  // Any transition proves the machine is awake — refresh presence with it so
+  // liveness never hinges on a throttled heartbeat timer.
+  await supabase.from("lecture_presence").upsert(
+    {
+      lecture_id: lectureId,
+      enrollment_id: enrollmentId,
+      last_seen_at: nowIso,
+    },
+    { onConflict: "lecture_id,enrollment_id" }
+  );
+  return { ok: true };
+}
+
+/**
+ * Student: presence heartbeat while following a live lecture. Fire-and-forget
+ * from the client; RLS silently rejects beats after the lecture ends. The
+ * explicit timestamp matters — the column default doesn't fire on the
+ * conflict-update half of an upsert.
+ */
+export async function recordPresenceHeartbeat(
+  courseId: string,
+  lectureId: string
+): Promise<ActionResult> {
+  const { supabase, error, enrollmentId } = await requireEnrollment(courseId);
+  if (error || !enrollmentId) return { ok: false, error: error ?? "No enrollment." };
+  const { error: upsertError } = await supabase.from("lecture_presence").upsert(
+    {
+      lecture_id: lectureId,
+      enrollment_id: enrollmentId,
+      last_seen_at: new Date().toISOString(),
+    },
+    { onConflict: "lecture_id,enrollment_id" }
+  );
+  if (upsertError) return { ok: false, error: "Couldn't record presence." };
   return { ok: true };
 }

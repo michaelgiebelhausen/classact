@@ -35,7 +35,11 @@ import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { ClassroomAttention } from "@/components/features/follow/ClassroomAttention";
 import type { RoomMapSeat } from "@/components/features/rooms/RoomMap";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
-import { QuickPollDialog } from "@/components/features/follow/QuickPollDialog";
+import {
+  LivePollEditDialog,
+  QUICK_POLL_DEFAULT_OPTIONS,
+  QUICK_POLL_DEFAULT_PROMPT,
+} from "@/components/features/follow/LivePollEditDialog";
 import { PollCommandStrip } from "@/components/features/follow/PollCommandStrip";
 import { PollOfferStrip } from "@/components/features/follow/PollOfferStrip";
 import { PollStageStepper } from "@/components/features/follow/PollStageStepper";
@@ -54,6 +58,7 @@ import {
 import {
   closePollRound,
   launchPollRound,
+  launchQuickPoll,
   markPollCorrect,
   revealPollResults,
   setPollStage,
@@ -62,9 +67,10 @@ import {
   effectiveAwayMs,
   formatAwayDuration,
   isLecturePaused,
+  PRESENCE_DISCONNECT_MS,
   type PauseInterval,
 } from "@/lib/focus";
-import { firstVoteGuidance, tallyVotes } from "@/lib/participate";
+import { firstVoteGuidance, pollOptionText, tallyVotes } from "@/lib/participate";
 import { decideNavigation } from "@/lib/presenternav";
 import {
   lectureChannelName,
@@ -91,6 +97,12 @@ export interface FocusStateInput {
   awayCount: number;
   awayMs: number;
   isAway: boolean;
+}
+
+/** A student's last presence heartbeat, from lecture_presence. */
+export interface PresenceInput {
+  enrollmentId: string;
+  lastSeenAt: string;
 }
 
 /** Approved bank question, ready to launch (includes the professor's key). */
@@ -131,6 +143,8 @@ interface Props {
   pageCount: number | null;
   roster: Record<string, RosterEntry>;
   initialFocus: FocusStateInput[];
+  /** Presence heartbeats at page load, for the disconnected state. */
+  initialPresence: PresenceInput[];
   /** Pause windows so far; open pause = lecture paused right now. */
   initialPauses: PauseInterval[];
   /** Room geometry for the classroom view (empty = no seat map yet). */
@@ -186,6 +200,7 @@ export function ProfessorPresenter({
   pageCount,
   roster,
   initialFocus,
+  initialPresence,
   initialPauses,
   seats,
   occupants,
@@ -214,6 +229,14 @@ export function ProfessorPresenter({
             awaySince: f.isAway ? Date.now() : null,
           },
         ])
+      )
+  );
+  // enrollmentId → last heartbeat ms. Silence past the disconnect window
+  // flips a student to "disconnected" (gray) instead of "away" (red).
+  const [presence, setPresence] = useState<Map<string, number>>(
+    () =>
+      new Map(
+        initialPresence.map((p) => [p.enrollmentId, Date.parse(p.lastSeenAt)])
       )
   );
   // Clock state so elapsed/away durations can be computed purely in render;
@@ -304,6 +327,8 @@ export function ProfessorPresenter({
       roundRef.current = p;
       setRound(p);
       broadcastPoll(p);
+      // The live editor edits the round on screen; no round, nothing to edit.
+      if (!p) setQuickPollOpen(false);
     },
     [broadcastPoll]
   );
@@ -507,6 +532,7 @@ export function ProfessorPresenter({
           const rec = payload.new as {
             enrollment_id: string;
             event_type: FocusEventType;
+            occurred_at?: string;
           };
           if (!rec?.enrollment_id) return;
           setFocus((prev) => {
@@ -526,13 +552,18 @@ export function ProfessorPresenter({
                 awaySince: Date.now(),
               });
             } else if (rec.event_type === "back" && state.awaySince !== null) {
+              // A 'back' after a sleep gap arrives backdated to the last
+              // heartbeat — honor that so the slept stretch isn't tallied.
+              const end = rec.occurred_at
+                ? Math.min(Date.parse(rec.occurred_at), Date.now())
+                : Date.now();
               next.set(rec.enrollment_id, {
                 awayCount: state.awayCount,
                 awayMs:
                   state.awayMs +
                   effectiveAwayMs(
                     state.awaySince,
-                    Date.now(),
+                    Math.max(state.awaySince, end),
                     pausesRef.current,
                     Date.now()
                   ),
@@ -544,12 +575,46 @@ export function ProfessorPresenter({
         }
       )
       .subscribe();
+    // Presence rides its OWN channel on purpose: if this deploy ever runs
+    // ahead of migration 0044, a binding for a table missing from the
+    // publication errors its whole channel — sharing one would silently kill
+    // the working away/back feed above along with it.
+    const presenceChannel = supabase
+      .channel(`lecture-presence:${lectureId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "lecture_presence",
+          filter: `lecture_id=eq.${lectureId}`,
+        },
+        (payload) => {
+          const rec = payload.new as {
+            enrollment_id?: string;
+            last_seen_at?: string;
+          };
+          if (!rec?.enrollment_id || !rec.last_seen_at) return;
+          const seen = Date.parse(rec.last_seen_at);
+          setPresence((prev) =>
+            new Map(prev).set(rec.enrollment_id!, seen)
+          );
+        }
+      )
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          console.warn(
+            "lecture_presence realtime unavailable — disconnected states will be stale (is migration 0044 applied?)"
+          );
+        }
+      });
     const firstTick = setTimeout(() => setNow(Date.now()), 0);
     const timer = setInterval(() => setNow(Date.now()), 5000);
     return () => {
       clearTimeout(firstTick);
       clearInterval(timer);
       supabase.removeChannel(channel);
+      supabase.removeChannel(presenceChannel);
     };
   }, [lectureId]);
 
@@ -672,17 +737,53 @@ export function ProfessorPresenter({
     applyRound({ ...roundRef.current, correctIndices: next });
   }
 
-  function handleQuickLaunched(
-    newRound: ActiveRound,
-    question: PresenterQuestion
-  ) {
-    setLocalQuestions((prev) => [...prev, question]);
-    ranRef.current.add(question.id);
+  /**
+   * Quick-start poll: live on every student screen with options A–E before a
+   * word is typed. The editor opens right after so the real wording can be
+   * filled in while the room is already answering.
+   */
+  async function startQuickPoll() {
+    setBusy(true);
+    const result = await launchQuickPoll({
+      courseId,
+      lectureId,
+      prompt: QUICK_POLL_DEFAULT_PROMPT,
+      options: [...QUICK_POLL_DEFAULT_OPTIONS],
+      correctIndices: [],
+    });
+    setBusy(false);
+    if (!result.ok || !result.data) {
+      toast.error(result.ok ? "Couldn't start the poll." : result.error);
+      return;
+    }
+    const { roundId, questionId } = result.data;
+    applyOffer(null);
+    setLocalQuestions((prev) => [
+      ...prev,
+      {
+        id: questionId,
+        prompt: QUICK_POLL_DEFAULT_PROMPT,
+        options: [...QUICK_POLL_DEFAULT_OPTIONS],
+        correctIndices: [],
+        positionAfterPage: pageRef.current,
+      },
+    ]);
+    ranRef.current.add(questionId);
     setRan(new Set(ranRef.current));
     advanceOnResumeRef.current = false;
     setVotes(new Map());
-    applyRound(newRound);
+    applyRound({
+      id: roundId,
+      questionId,
+      prompt: QUICK_POLL_DEFAULT_PROMPT,
+      options: [...QUICK_POLL_DEFAULT_OPTIONS],
+      stage: "think",
+      results: null,
+      correctIndices: null,
+    });
     capture("poll_launched", { quick: true });
+    setQuickPollOpen(true);
+    toast.success("Poll is live — students see A–E. Type the question whenever.");
   }
 
   async function closeRound(advance: boolean) {
@@ -727,6 +828,9 @@ export function ProfessorPresenter({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
+      // The live-poll editor is a dialog over a live round now — Escape
+      // there closes the editor (Radix handles it), never the poll.
+      if (quickPollOpen) return;
       const target = e.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
       if (roundRef.current) {
@@ -813,10 +917,22 @@ export function ProfessorPresenter({
   const attention = useMemo(() => {
     const rows = Object.entries(roster).map(([enrollmentId, entry]) => {
       const state = focus.get(enrollmentId);
+      const lastSeen = presence.get(enrollmentId) ?? null;
+      // Heartbeat silence = the machine went dark (sleep/closed/offline),
+      // not browsing: show gray instead of red, and freeze the away clock
+      // at the last beat instead of letting it tick all lecture.
+      const disconnected =
+        now !== null &&
+        lastSeen !== null &&
+        now - lastSeen > PRESENCE_DISCONNECT_MS;
+      const openSpellEnd =
+        disconnected && lastSeen !== null && state?.awaySince
+          ? Math.max(state.awaySince, lastSeen)
+          : now;
       const awayMs =
         (state?.awayMs ?? 0) +
-        (state?.awaySince && now
-          ? effectiveAwayMs(state.awaySince, now, pauses, now)
+        (state?.awaySince && now && openSpellEnd
+          ? effectiveAwayMs(state.awaySince, openSpellEnd, pauses, now)
           : 0);
       return {
         enrollmentId,
@@ -824,17 +940,19 @@ export function ProfessorPresenter({
         photoUrl: entry.photoUrl,
         awayCount: state?.awayCount ?? 0,
         awayMs,
-        isAway: Boolean(state?.awaySince),
+        isAway: Boolean(state?.awaySince) && !disconnected,
+        disconnected,
       };
     });
     rows.sort(
       (a, b) =>
         Number(b.isAway) - Number(a.isAway) ||
+        Number(b.disconnected) - Number(a.disconnected) ||
         b.awayMs - a.awayMs ||
         a.name.localeCompare(b.name)
     );
     return rows;
-  }, [roster, focus, now, pauses]);
+  }, [roster, focus, presence, now, pauses]);
   const rosterCount = Object.keys(roster).length;
 
   const queued = useMemo(
@@ -947,7 +1065,7 @@ export function ProfessorPresenter({
           busy={pollBusy}
           courseId={courseId}
           onLaunchQuestion={(q) => void launchQuestion(q, false)}
-          onWriteQuestion={() => setQuickPollOpen(true)}
+          onQuickPoll={() => void startQuickPoll()}
           onStartExercise={() => setExerciseDialogOpen(true)}
           onOpenChange={setMenuOpen}
         />
@@ -1030,6 +1148,11 @@ export function ProfessorPresenter({
           onReveal={() => void revealResults()}
           onResume={() => void closeRound(true)}
           onEndPoll={() => void closeRound(false)}
+          onEdit={
+            round.stage !== "reveal"
+              ? () => setQuickPollOpen(true)
+              : undefined
+          }
         />
       )}
       </div>
@@ -1183,7 +1306,7 @@ export function ProfessorPresenter({
                         className="flex items-center justify-between gap-2 text-sm"
                       >
                         <span className="min-w-0 truncate">
-                          {LETTERS[i]}. {option}
+                          {LETTERS[i]}. {pollOptionText(option, i)}
                           {pollStats.suggestedKey.includes(i) && (
                             <span
                               className="ml-1 text-xs text-green-700"
@@ -1324,14 +1447,29 @@ export function ProfessorPresenter({
         Mounted once, outside the card, so Run activity can reach it whatever
         the card happens to be showing.
       */}
-      <QuickPollDialog
+      <LivePollEditDialog
         courseId={courseId}
-        lectureId={lectureId}
-        disabled={pollBusy}
-        onLaunched={handleQuickLaunched}
+        round={round}
+        initialCorrectIndices={
+          allQuestions.find((q) => q.id === round?.questionId)
+            ?.correctIndices ?? []
+        }
         open={quickPollOpen}
         onOpenChange={setQuickPollOpen}
-        hideTrigger
+        onSaved={(prompt, options, correctIndices) => {
+          const current = roundRef.current;
+          if (!current) return;
+          applyRound({ ...current, prompt, options });
+          // Keep the local bank record in step so a relaunch (and the
+          // suggested-key tallies) use the edited question.
+          setLocalQuestions((prev) =>
+            prev.map((q) =>
+              q.id === current.questionId
+                ? { ...q, prompt, options, correctIndices }
+                : q
+            )
+          );
+        }}
       />
       <ExerciseLaunchDialog
         courseId={courseId}

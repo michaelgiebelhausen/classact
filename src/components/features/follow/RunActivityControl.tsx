@@ -1,6 +1,6 @@
 "use client";
 
-import { PencilLine, Sparkles, SquarePen, ExternalLink } from "lucide-react";
+import { PencilLine, Sparkles, Zap, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -31,7 +31,8 @@ interface Props {
   busy: boolean;
   courseId: string;
   onLaunchQuestion: (question: PresenterQuestion) => void;
-  onWriteQuestion: () => void;
+  /** Quick-start poll: opens on student screens with A–E before a word is typed. */
+  onQuickPoll: () => void;
   /** Omitted where the group exercise isn't wired up yet. */
   onStartExercise?: () => void;
   /** Told when the menu opens or closes, so slide keys can stand down. */
@@ -50,7 +51,7 @@ export function RunActivityControl({
   busy,
   courseId,
   onLaunchQuestion,
-  onWriteQuestion,
+  onQuickPoll,
   onStartExercise,
   onOpenChange,
   defaultOpen,
@@ -99,8 +100,17 @@ export function RunActivityControl({
 
         <DropdownMenuSeparator />
 
-        <DropdownMenuItem disabled={busy} onSelect={onWriteQuestion}>
-          <SquarePen /> Write a question now…
+        <DropdownMenuItem
+          disabled={busy}
+          onSelect={onQuickPoll}
+          className="flex-col items-start gap-0.5"
+        >
+          <span className="flex items-center gap-2">
+            <Zap className="size-4" /> Quick poll — starts now
+          </span>
+          <span className="pl-6 text-xs text-muted-foreground">
+            Students get A–E instantly; edit the question while they answer
+          </span>
         </DropdownMenuItem>
         {onStartExercise && (
           <DropdownMenuItem

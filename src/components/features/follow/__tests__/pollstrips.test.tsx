@@ -99,6 +99,24 @@ describe("PollCommandStrip", () => {
     ).toBeDisabled();
   });
 
+  it("offers the live editor while votes are still forming", () => {
+    // Quick-start polls open as A–E; this is where the real wording gets
+    // typed in while students discuss.
+    const onEdit = vi.fn();
+    renderStrip("think", { onEdit });
+    fireEvent.click(screen.getByRole("button", { name: /edit question/i }));
+    expect(onEdit).toHaveBeenCalledOnce();
+  });
+
+  it("withholds the editor when the presenter locks it", () => {
+    // The presenter drops the handler at reveal — results are per option
+    // index, so re-labeling under them would misrepresent the vote.
+    renderStrip("reveal");
+    expect(
+      screen.queryByRole("button", { name: /edit question/i })
+    ).not.toBeInTheDocument();
+  });
+
   it("renders nothing for a closed round", () => {
     const { container } = render(
       <PollCommandStrip

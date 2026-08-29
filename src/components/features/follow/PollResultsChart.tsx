@@ -2,6 +2,7 @@
 
 import { CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pollOptionText } from "@/lib/participate";
 import type { PollResults } from "@/types/db";
 
 const LETTERS = "ABCDEFGH";
@@ -55,7 +56,7 @@ export function PollResultsChart({
                   isCorrect && (dark ? "text-green-400" : "text-green-700")
                 )}
               >
-                {LETTERS[i]}. {option}
+                {LETTERS[i]}. {pollOptionText(option, i)}
                 {isCorrect && (
                   <CheckCircle2 className="ml-1.5 inline size-4 align-[-2px]" />
                 )}

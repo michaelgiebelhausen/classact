@@ -254,17 +254,38 @@ export default async function FollowAlongPage({
       for (const c of checkIns ?? []) occupants[c.seat_id] = c.enrollment_id;
     }
 
-    const { data: focusEvents } = await supabase
-      .from("focus_events")
-      .select("enrollment_id, event_type, occurred_at")
-      .eq("lecture_id", lecture.id);
+    const [{ data: focusEvents }, { data: presenceRows }] = await Promise.all([
+      supabase
+        .from("focus_events")
+        .select("enrollment_id, event_type, occurred_at")
+        .eq("lecture_id", lecture.id),
+      supabase
+        .from("lecture_presence")
+        .select("enrollment_id, last_seen_at")
+        .eq("lecture_id", lecture.id),
+    ]);
+    const lastSeenByEnrollment = new Map(
+      (presenceRows ?? []).map((p) => [
+        p.enrollment_id,
+        Date.parse(p.last_seen_at),
+      ])
+    );
     const initialFocus: FocusStateInput[] = Array.from(
-      summarizeFocusByEnrollment(focusEvents ?? [], new Date(), lecture.pauses ?? [])
+      summarizeFocusByEnrollment(
+        focusEvents ?? [],
+        new Date(),
+        lecture.pauses ?? [],
+        lastSeenByEnrollment
+      )
     ).map(([enrollmentId, s]) => ({
       enrollmentId,
       awayCount: s.awayCount,
       awayMs: s.awayMs,
       isAway: s.isAway,
+    }));
+    const initialPresence = (presenceRows ?? []).map((p) => ({
+      enrollmentId: p.enrollment_id,
+      lastSeenAt: p.last_seen_at,
     }));
 
     // Approved questions for this deck + rounds already run this lecture.
@@ -331,6 +352,7 @@ export default async function FollowAlongPage({
           pageCount={deck.page_count}
           roster={roster}
           initialFocus={initialFocus}
+          initialPresence={initialPresence}
           initialPauses={lecture.pauses ?? []}
           seats={seats}
           occupants={occupants}
@@ -395,12 +417,25 @@ export default async function FollowAlongPage({
     .eq("enrollment_id", myEnrollment.id)
     .order("created_at", { ascending: true });
 
-  const { data: myFocusEvents } = await supabase
-    .from("focus_events")
-    .select("enrollment_id, event_type, occurred_at")
-    .eq("lecture_id", lecture.id)
-    .eq("enrollment_id", myEnrollment.id);
-  const myFocus = summarizeFocus(myFocusEvents ?? [], new Date(), lecture.pauses ?? []);
+  const [{ data: myFocusEvents }, { data: myPresence }] = await Promise.all([
+    supabase
+      .from("focus_events")
+      .select("enrollment_id, event_type, occurred_at")
+      .eq("lecture_id", lecture.id)
+      .eq("enrollment_id", myEnrollment.id),
+    supabase
+      .from("lecture_presence")
+      .select("last_seen_at")
+      .eq("lecture_id", lecture.id)
+      .eq("enrollment_id", myEnrollment.id)
+      .maybeSingle(),
+  ]);
+  const myFocus = summarizeFocus(
+    myFocusEvents ?? [],
+    new Date(),
+    lecture.pauses ?? [],
+    myPresence ? Date.parse(myPresence.last_seen_at) : undefined
+  );
 
   // Open think-pair-share round (correct_indices is null until reveal).
   const { data: openRound } = await supabase
@@ -484,6 +519,7 @@ export default async function FollowAlongPage({
         }))}
         initialAwayCount={myFocus.awayCount}
         initialAwayMs={myFocus.awayMs}
+        initialIsAway={myFocus.isAway}
         initialPauses={lecture.pauses ?? []}
         roster={studentRoster}
         initialRound={initialRound}

@@ -597,6 +597,12 @@ export type FocusEventRow = {
   occurred_at: string
 }
 
+export type LecturePresenceRow = {
+  lecture_id: string
+  enrollment_id: string
+  last_seen_at: string
+}
+
 export type DeckQuestionRow = {
   id: string
   deck_id: string
@@ -796,6 +802,7 @@ export type Database = {
       lecture_note_entries: TableShape<LectureNoteEntryRow>
       ta_messages: TableShape<TaMessageRow>
       focus_events: TableShape<FocusEventRow>
+      lecture_presence: TableShape<LecturePresenceRow>
       deck_questions: TableShape<DeckQuestionRow>
       poll_rounds: TableShape<PollRoundRow>
       poll_answers: TableShape<PollAnswerRow>

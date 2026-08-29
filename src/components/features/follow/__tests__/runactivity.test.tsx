@@ -31,7 +31,7 @@ const QUESTIONS: PresenterQuestion[] = [
 function setup(overrides: Partial<React.ComponentProps<typeof RunActivityControl>> = {}) {
   const handlers = {
     onLaunchQuestion: vi.fn(),
-    onWriteQuestion: vi.fn(),
+    onQuickPoll: vi.fn(),
     onOpenChange: vi.fn(),
   };
   render(
@@ -81,13 +81,19 @@ describe("RunActivityControl", () => {
     expect(
       screen.getByText(/no approved questions for this deck yet/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/write a question now/i)).toBeInTheDocument();
+    expect(screen.getByText(/quick poll — starts now/i)).toBeInTheDocument();
   });
 
-  it("opens the write-your-own flow", () => {
-    const { onWriteQuestion } = setup();
-    fireEvent.click(screen.getByText(/write a question now/i));
-    expect(onWriteQuestion).toHaveBeenCalledOnce();
+  it("starts the quick poll the moment it is chosen", () => {
+    // No compose step: the poll goes live with A–E and gets edited in flight.
+    const { onQuickPoll } = setup();
+    fireEvent.click(screen.getByText(/quick poll — starts now/i));
+    expect(onQuickPoll).toHaveBeenCalledOnce();
+  });
+
+  it("says the quick poll starts with letter options", () => {
+    setup();
+    expect(screen.getByText(/students get a–e instantly/i)).toBeInTheDocument();
   });
 
   it("steps aside while a poll is running", () => {

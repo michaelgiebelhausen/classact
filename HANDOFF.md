@@ -358,6 +358,48 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Sleep/shutdown no longer counts as drifting off (0044)
+
+**Run `supabase/migrations/0044_lecture_presence.sql` BEFORE deploying.** It
+creates `lecture_presence` — one row per (lecture, student), a `last_seen_at`
+heartbeat the follow-along tab upserts every 30s while the lecture is live —
+with student insert/update + professor read RLS, and adds the table to the
+realtime publication. This is a **write path**: `recordPresenceHeartbeat` and
+the presence piggyback inside `recordFocusEvent` upsert into it on every
+student mid-lecture, and the professor presenter and student page both SELECT
+it, so a deploy ahead of the migration breaks focus logging for live lectures
+until it's applied.
+
+**What it changes.** Before: a laptop that slept, shut down, or dropped off
+Wi-Fi mid-lecture left an unclosed `away` event, and scoring charged the
+student away-time for the entire rest of the lecture (straight into the Focus
+signal and My Metrics); a browser closed while focused showed the student as
+present forever. Now:
+- A hidden tab keeps heartbeating (browsers throttle but don't stop background
+  timers), so **real tab-aways still count**. A silent machine stops beating;
+  after 2.5 minutes (`PRESENCE_DISCONNECT_MS` in `src/lib/focus.ts`) the
+  student turns **gray "disconnected"** on the presenter's attention map —
+  distinct from the red "away" ring — and their away clock freezes.
+- Scoring truncates an unclosed away spell at the last heartbeat instead of
+  end-of-lecture. Reopening the laptop mid-lecture writes a `back` that the
+  server **backdates to the last heartbeat**, so the slept stretch is never
+  charged either. Deliberately closing the laptop therefore scores like being
+  absent — attendance ("lectures followed") still reflects it, drift doesn't;
+  lenient on purpose since a dead battery is indistinguishable.
+- Pre-0044 lectures have no presence rows and keep their historical scores
+  exactly as they were.
+
+**Verify after deploy** (needs a live lecture + one student window):
+1. Student on the follow page → a `lecture_presence` row appears and
+   `last_seen_at` advances ~every 30s, even with the tab hidden.
+2. Hide the student tab → red ring on the presenter as before.
+3. Kill the student tab (or cut its network) → within ~2.5 min the presenter
+   shows the dimmed gray seat / "disconnected" badge and the away time stops
+   climbing.
+4. Close the laptop lid mid-lecture, reopen after 5+ min → the "Welcome back"
+   dialog does NOT bill the slept time ("looks like your computer was asleep"),
+   and the recorded away time covers only the pre-sleep stretch.
+
 ## Profile email fields + per-part pronunciation (0043)
 
 **Run `supabase/migrations/0043_profile_phonetic_parts.sql` BEFORE deploying.**
