@@ -871,7 +871,12 @@ yet; it needs a local Supabase to point at.
 ## What's already verified
 
 - Full production build (`npm run build`) is green; TypeScript strict passes.
-- 8 unit tests pass (join codes, seat grid math, neighbor coordinates).
+- 647 unit and component tests pass across 49 files (`npx vitest run`). They
+  cover the pure logic the app leans on hardest: seat rings and neighbor
+  adjacency, presenter navigation, grading bands and ranked order, the
+  schema contract, auth-callback handling, and the health verdict. What they
+  do **not** cover is anything needing a browser, a projector, or two people
+  — realtime sync, BroadcastChannel, and every latency question.
 - Atomic seat claiming is enforced by database unique constraints (two
   students tapping the same seat: exactly one wins).
 - Row-Level Security on every table; students can't see classmates' emails;

@@ -391,7 +391,12 @@ Response 200: { sent: number }
 Response 429: { error: "Rate limited" }
 
 GET /api/health
-Response 200: { ok: true }
+Auth: None (public; excluded from the proxy matcher)
+Response 200: { ok: true, schema: { status: "ok" | "unknown" } }
+Response 503: { ok: false, schema: { status: "behind",
+                gaps: [{ table, migration, detail }], migrations: string[] } }
+# "behind" = the database lacks columns this build reads (SCHEMA_CONTRACT).
+# "unknown" = no service-role key to check with; not a failure.
 ```
 
 ### Realtime Channels

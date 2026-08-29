@@ -84,6 +84,7 @@
 - [x] **TASK-013** — Health route + CI workflow.
   Files: `src/app/api/health/route.ts`, `.github/workflows/ci.yml`
   Notes: `/api/health` returns `{ ok: true }`. CI runs `tsc --noEmit`, `next lint`, `next build`, `vitest run`. Verify: `curl /api/health` → ok; CI file is valid YAML.
+  Since superseded: the endpoint now also reports the schema contract, and answers 503 when the database is behind the build — see HANDOFF, "The app now notices when the database is behind it". The verify step above still passes.
 
 - [x] **TASK-014** — Testing setup (Vitest + Testing Library).
   Files: `vitest.config.ts`, `src/test/setup.ts`, `src/lib/__tests__/utils.test.ts`
