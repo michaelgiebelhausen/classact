@@ -131,6 +131,19 @@ export function lastNameOf(fullName: string): string {
 }
 
 /**
+ * The given name to address someone by — the mirror of lastNameOf, handling
+ * the same registrar shapes:
+ *
+ * - "Robert Smith" → "Robert"
+ * - "Smith, Robert" → "Robert" (comma-first exports)
+ * - "Mary Jane Watson" → "Mary" (first token is the given name)
+ * - "jsmith" → "jsmith" (a single token is all we have)
+ */
+export function firstNameOf(fullName: string): string {
+  return splitName(fullName).first;
+}
+
+/**
  * Alphabetical by last name, then by the whole name so people who share a
  * surname stay in a stable, sensible order. Case- and accent-insensitive,
  * so "de Souza" and "De Souza" file together.

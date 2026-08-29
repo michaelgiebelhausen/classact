@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   compareByLastName,
   composeFullName,
+  firstNameOf,
   initialsOf,
   isEmailAddress,
   lastNameOf,
@@ -9,6 +10,25 @@ import {
   sortByLastName,
   splitForEditing,
 } from "@/lib/names";
+
+describe("firstNameOf", () => {
+  it("takes the first token as the given name", () => {
+    expect(firstNameOf("Emma Mabel Roethke")).toBe("Emma");
+    expect(firstNameOf("Siobhan Chen")).toBe("Siobhan");
+  });
+
+  it("reads registrar exports that are surname-first", () => {
+    expect(firstNameOf("Roethke, Emma")).toBe("Emma");
+    expect(firstNameOf("Van Der Berg, Aad")).toBe("Aad");
+  });
+
+  it("handles single names, an email local part, and blanks", () => {
+    expect(firstNameOf("Cher")).toBe("Cher");
+    expect(firstNameOf("jsmith")).toBe("jsmith");
+    expect(firstNameOf("  Ada   Lovelace  ")).toBe("Ada");
+    expect(firstNameOf("")).toBe("");
+  });
+});
 
 describe("lastNameOf", () => {
   it("takes the last token, not the second", () => {

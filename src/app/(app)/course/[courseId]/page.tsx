@@ -17,16 +17,7 @@ import { resolveEnrollmentPhotos } from "@/lib/storage";
 import { stageRoster } from "@/server/stageroster";
 import { isFounder } from "@/server/founder";
 import { StagedRoster } from "@/components/features/roster/StagedRoster";
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-}
+import { rosterDisplayName, firstNameOf, initialsOf } from "@/lib/names";
 
 export default async function CourseHomePage({
   params,
@@ -69,6 +60,36 @@ export default async function CourseHomePage({
     .order("roster_name");
 
   const photoMap = await resolveEnrollmentPhotos(directory, enrollments ?? []);
+
+  // First names for the "who's in this class" grid. roster_name is the raw
+  // registrar/email value — for a code-joiner it IS their email — so resolve a
+  // safe display name (rosterDisplayName) and reduce it to a first name,
+  // preferring the given name the student set on their profile. Read via the
+  // admin `directory` client for the same reason the enrollments are: a student
+  // can't read classmates' profile rows under RLS.
+  const profileNames = new Map<string, { firstName: string | null; fullName: string | null }>();
+  const linkedProfileIds = (enrollments ?? [])
+    .map((e) => e.profile_id)
+    .filter((id): id is string => Boolean(id));
+  if (linkedProfileIds.length > 0) {
+    const { data: profiles } = await directory
+      .from("profiles")
+      .select("id, first_name, full_name")
+      .in("id", [...new Set(linkedProfileIds)]);
+    for (const p of profiles ?? []) {
+      profileNames.set(p.id, { firstName: p.first_name, fullName: p.full_name });
+    }
+  }
+
+  function displayFirstName(e: {
+    roster_name: string;
+    profile_id: string | null;
+  }): string {
+    const linked = e.profile_id ? profileNames.get(e.profile_id) : undefined;
+    const chosen = linked?.firstName?.trim();
+    if (chosen) return chosen;
+    return firstNameOf(rosterDisplayName(e.roster_name, linked?.fullName ?? null));
+  }
 
   // Registration stages are for the professor alone. Which classmate hasn't
   // claimed an account, or signed in with a personal address, is nobody
@@ -148,16 +169,17 @@ export default async function CourseHomePage({
             <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 md:grid-cols-6">
               {enrollments.map((e) => {
                 const url = photoMap.get(e.id)?.[0];
+                const firstName = displayFirstName(e);
                 return (
                   <div
                     key={e.id}
                     className="flex flex-col items-center gap-1 text-center"
                   >
                     <Avatar className="h-14 w-14">
-                      {url && <AvatarImage src={url} alt={e.roster_name} />}
-                      <AvatarFallback>{initials(e.roster_name)}</AvatarFallback>
+                      {url && <AvatarImage src={url} alt={firstName} />}
+                      <AvatarFallback>{initialsOf(firstName)}</AvatarFallback>
                     </Avatar>
-                    <span className="text-xs">{e.roster_name}</span>
+                    <span className="text-xs">{firstName}</span>
                   </div>
                 );
               })}
