@@ -6,6 +6,7 @@ import {
   initialsOf,
   isEmailAddress,
   lastNameOf,
+  resolveDisplayName,
   rosterDisplayName,
   sortByLastName,
   splitForEditing,
@@ -235,6 +236,163 @@ describe("rosterDisplayName", () => {
       "jsmith@clemson.edu"
     );
     expect(rosterDisplayName("jsmith@clemson.edu", null)).not.toContain("@");
+  });
+});
+
+describe("resolveDisplayName", () => {
+  it("prefers the given name the student saved on their profile", () => {
+    // Someone who files as "Alvarez-Stratton, Anneliese" and goes by Annie is
+    // called Annie without having to rewrite their full name.
+    expect(
+      resolveDisplayName("Alvarez-Stratton, Anneliese", {
+        firstName: "Annie",
+        fullName: "Anneliese Alvarez-Stratton",
+      })
+    ).toEqual({ name: "Anneliese Alvarez-Stratton", firstName: "Annie" });
+  });
+
+  it("takes the given name out of the roster name when no profile part is set", () => {
+    // first_name is null until the profile is next edited (migration 0042 does
+    // not backfill), so this is the common case for a Canvas-imported class.
+    expect(resolveDisplayName("Roethke, Emma")).toEqual({
+      name: "Roethke, Emma",
+      firstName: "Emma",
+    });
+    expect(
+      resolveDisplayName("Roethke, Emma", { firstName: null, fullName: null })
+    ).toEqual({ name: "Roethke, Emma", firstName: "Emma" });
+    expect(resolveDisplayName("Roethke, Emma", { firstName: "   " })).toEqual({
+      name: "Roethke, Emma",
+      firstName: "Emma",
+    });
+  });
+
+  it("reduces a code-joiner's email to its local part, both lengths", () => {
+    expect(resolveDisplayName("jsmith@clemson.edu")).toEqual({
+      name: "jsmith",
+      firstName: "jsmith",
+    });
+  });
+
+  it("lets a joiner's profile name replace the email entirely", () => {
+    expect(
+      resolveDisplayName("jsmith@clemson.edu", {
+        firstName: "Jordan",
+        fullName: "Jordan Smith",
+      })
+    ).toEqual({ name: "Jordan Smith", firstName: "Jordan" });
+  });
+
+  it("ignores an address typed into the profile's first-name field", () => {
+    // Same reason rosterDisplayName ignores one in full_name: nobody chose to
+    // be called that, and it would walk an address back onto the seat map.
+    const resolved = resolveDisplayName("Jordan Rivera", {
+      firstName: "jsmith@clemson.edu",
+      fullName: null,
+    });
+    expect(resolved.firstName).toBe("Jordan");
+  });
+
+  it("never emits a deliverable address, whatever the inputs", () => {
+    const rosters = [
+      "jsmith@clemson.edu",
+      "a.b.c@g.clemson.edu",
+      "Jordan Rivera",
+      "Roethke, Emma",
+      "",
+    ];
+    const profiles = [
+      null,
+      { firstName: null, fullName: null },
+      { firstName: "x@y.com", fullName: "x@y.com" },
+      { firstName: "Jordan", fullName: "Jordan Smith" },
+    ];
+    for (const roster of rosters) {
+      for (const profile of profiles) {
+        const { name, firstName } = resolveDisplayName(roster, profile);
+        expect(isEmailAddress(name)).toBe(false);
+        expect(isEmailAddress(firstName)).toBe(false);
+      }
+    }
+  });
+});
+
+describe("resolveDisplayName", () => {
+  it("prefers the given name the student saved on their profile", () => {
+    // Someone who files as "Alvarez-Stratton, Anneliese" and goes by Annie is
+    // called Annie without having to rewrite their full name.
+    expect(
+      resolveDisplayName("Alvarez-Stratton, Anneliese", {
+        firstName: "Annie",
+        fullName: "Anneliese Alvarez-Stratton",
+      })
+    ).toEqual({ name: "Anneliese Alvarez-Stratton", firstName: "Annie" });
+  });
+
+  it("takes the given name out of the roster name when no profile part is set", () => {
+    // first_name is null until the profile is next edited (0042 doesn't
+    // backfill), so this is the common case for a Canvas-imported class.
+    expect(resolveDisplayName("Roethke, Emma")).toEqual({
+      name: "Roethke, Emma",
+      firstName: "Emma",
+    });
+    expect(
+      resolveDisplayName("Roethke, Emma", { firstName: null, fullName: null })
+    ).toEqual({ name: "Roethke, Emma", firstName: "Emma" });
+    expect(resolveDisplayName("Roethke, Emma", { firstName: "   " })).toEqual({
+      name: "Roethke, Emma",
+      firstName: "Emma",
+    });
+  });
+
+  it("reduces a code-joiner's email to its local part, in both lengths", () => {
+    expect(resolveDisplayName("jsmith@clemson.edu")).toEqual({
+      name: "jsmith",
+      firstName: "jsmith",
+    });
+  });
+
+  it("lets a joiner's profile name replace the email entirely", () => {
+    expect(
+      resolveDisplayName("jsmith@clemson.edu", {
+        firstName: "Jordan",
+        fullName: "Jordan Smith",
+      })
+    ).toEqual({ name: "Jordan Smith", firstName: "Jordan" });
+  });
+
+  it("ignores an address typed into the profile's first-name field", () => {
+    // Same reason rosterDisplayName ignores one in full_name: nobody chose to
+    // be called that, and it would walk an address back onto the seat map.
+    expect(
+      resolveDisplayName("Jordan Rivera", {
+        firstName: "jsmith@clemson.edu",
+        fullName: null,
+      }).firstName
+    ).toBe("Jordan");
+  });
+
+  it("never emits a deliverable address, whatever the inputs", () => {
+    const rosters = [
+      "jsmith@clemson.edu",
+      "a.b.c@g.clemson.edu",
+      "Jordan Rivera",
+      "Roethke, Emma",
+      "",
+    ];
+    const profiles = [
+      null,
+      { firstName: null, fullName: null },
+      { firstName: "x@y.com", fullName: "x@y.com" },
+      { firstName: "Jordan", fullName: "Jordan Smith" },
+    ];
+    for (const roster of rosters) {
+      for (const profile of profiles) {
+        const { name, firstName } = resolveDisplayName(roster, profile);
+        expect(isEmailAddress(name)).toBe(false);
+        expect(isEmailAddress(firstName)).toBe(false);
+      }
+    }
   });
 });
 

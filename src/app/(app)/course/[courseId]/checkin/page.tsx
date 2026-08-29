@@ -357,6 +357,7 @@ async function renderCheckIn(courseId: string) {
     .map((r) => ({
       seatId: r.seatId,
       name: directory[r.enrollmentId]?.name ?? null,
+      firstName: directory[r.enrollmentId]?.firstName ?? null,
       photoUrl: directory[r.enrollmentId]?.photoUrl ?? null,
     }));
 

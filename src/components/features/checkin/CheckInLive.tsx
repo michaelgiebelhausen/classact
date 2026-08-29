@@ -55,6 +55,8 @@ export interface OccupantInfo {
 
 export interface DirectoryEntry {
   name: string;
+  /** Given name — what a seat label or a spoken prompt calls someone. */
+  firstName: string;
   photoUrl: string | null;
 }
 
@@ -539,6 +541,7 @@ export function CheckInLive({
         seatLabel: seat.label,
         enrollmentId: occupant.enrollmentId,
         name: entry?.name ?? null,
+        firstName: entry?.firstName ?? null,
         photoUrl: entry?.photoUrl ?? null,
         firstEver: !metBefore.has(occupant.enrollmentId),
         fact: neighborFacts[occupant.enrollmentId] ?? null,
@@ -760,9 +763,7 @@ export function CheckInLive({
               tappable: canReassign
                 ? Boolean(occupant) && pendingSeat === null
                 : !occupant && pendingSeat === null && Boolean(myEnrollmentId),
-              caption: canReassign
-                ? entry?.name?.split(/\s+/)[0] ?? undefined
-                : undefined,
+              caption: canReassign ? entry?.firstName : undefined,
               highlight: canReassign
                 ? false
                 : !occupant &&

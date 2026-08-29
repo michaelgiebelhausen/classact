@@ -8,6 +8,7 @@ import {
   resolveEnrollmentPhotosByKind,
 } from "@/lib/storage";
 import { flashcardHintFields } from "@/lib/icebreakers";
+import { resolveDisplayName } from "@/lib/names";
 import { getCourseDirectory } from "@/lib/coursedirectory";
 import { loadCourseSeats, type CourseSeat } from "@/server/courseseats";
 import {
@@ -67,20 +68,32 @@ export default async function GamesPage({
     // look like their campus ID photo.
     const photoMap = await resolveEnrollmentPhotosByKind(admin, candidates);
 
-    // Pronunciation guides + LinkedIn, keyed by profile (activated students).
+    // Pronunciation guides, LinkedIn, and the name the student chose to be
+    // known by, keyed by profile (activated students). The chosen name matters
+    // here for the same reason the phonetic does: this is the page where the
+    // class learns what to call each other, and roster_name for a code-joiner
+    // is the email address they signed up with.
     const phoneticByProfile = new Map<string, string>();
     const linkedinByProfile = new Map<string, string>();
+    const namesByProfile = new Map<
+      string,
+      { firstName: string | null; fullName: string | null }
+    >();
     const activatedIds = candidates
       .map((e) => e.profile_id)
       .filter((id): id is string => Boolean(id));
     if (activatedIds.length > 0) {
       const { data: profs } = await admin
         .from("profiles")
-        .select("id, name_phonetic, linkedin_url")
+        .select("id, name_phonetic, linkedin_url, first_name, full_name")
         .in("id", activatedIds);
       for (const p of profs ?? []) {
         if (p.name_phonetic) phoneticByProfile.set(p.id, p.name_phonetic);
         if (p.linkedin_url) linkedinByProfile.set(p.id, p.linkedin_url);
+        namesByProfile.set(p.id, {
+          firstName: p.first_name,
+          fullName: p.full_name,
+        });
       }
     }
 
@@ -195,9 +208,15 @@ export default async function GamesPage({
         (e.profile_id ? phoneticByProfile.get(e.profile_id) : null) ??
         e.roster_name_phonetic ??
         null;
+      // Full name, not first: learning to put a whole name to a face is the
+      // point of the games.
+      const { name } = resolveDisplayName(
+        e.roster_name,
+        e.profile_id ? namesByProfile.get(e.profile_id) : null
+      );
       roster.push({
         enrollmentId: e.id,
-        name: e.roster_name,
+        name,
         photoUrl: urls[0] ?? null,
         photosByKind: photos?.byKind ?? {},
         rosterPhotoUrl: photos?.rosterUrl ?? null,
@@ -209,7 +228,7 @@ export default async function GamesPage({
       if (urls.length > 0) {
         players.push({
           enrollmentId: e.id,
-          name: e.roster_name,
+          name,
           photoUrls: urls,
           phonetic,
           hints: hintsByEnrollment.get(e.id) ?? [],
@@ -274,6 +293,7 @@ export default async function GamesPage({
         occupants: (rows ?? []).map((r) => ({
           seatId: r.seat_id,
           name: directory[r.enrollment_id]?.name ?? null,
+          firstName: directory[r.enrollment_id]?.firstName ?? null,
           photoUrl: directory[r.enrollment_id]?.photoUrl ?? null,
           enrollmentId: r.enrollment_id,
         })),

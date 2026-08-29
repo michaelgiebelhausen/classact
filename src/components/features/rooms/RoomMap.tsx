@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { TableFootprint } from "@/lib/roomlayout";
+import { initialsOf } from "@/lib/names";
 import {
   depthScale,
   fitScale,
@@ -131,16 +132,6 @@ const PAD_T = 1.35; // room for the front-of-room bar
 const PAD_B = 0.6;
 
 const EMPTY_STATE: RoomMapSeatState = { kind: "empty", tappable: false };
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-}
 
 export function RoomMap({
   seats,
@@ -631,7 +622,7 @@ export function RoomMap({
               <Avatar className="h-7 w-7">
                 {state.photoUrl && <AvatarImage src={state.photoUrl} alt={state.name} />}
                 <AvatarFallback className="text-[9px]">
-                  {initials(state.name)}
+                  {initialsOf(state.name)}
                 </AvatarFallback>
               </Avatar>
             ) : (
@@ -662,7 +653,7 @@ export function RoomMap({
                         <AvatarImage src={state.photoUrl} alt={state.name ?? ""} />
                       )}
                       <AvatarFallback className="text-2xl">
-                        {initials(state.name ?? "")}
+                        {initialsOf(state.name ?? "")}
                       </AvatarFallback>
                     </Avatar>
                     <span className="text-xs font-medium">{state.name}</span>

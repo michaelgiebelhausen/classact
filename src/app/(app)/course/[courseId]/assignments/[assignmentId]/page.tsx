@@ -6,10 +6,9 @@ import { resolveCourseAi, scoringPricing } from "@/server/aicreds";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import {
-  getSignedSubmissionUrl,
-  resolveEnrollmentPhotos,
-} from "@/lib/storage";
+import { getSignedSubmissionUrl } from "@/lib/storage";
+import { getCourseDirectory } from "@/lib/coursedirectory";
+import { rosterDisplayName } from "@/lib/names";
 import { readDividers, resolveSettings } from "@/lib/tastegrading";
 import { dividersFromThresholds, normalizeDividers } from "@/lib/bands";
 import { draftBody, tasteProse } from "@/lib/tasteprose";
@@ -180,9 +179,11 @@ export default async function AssignmentPage({
       const tasteByEnrollment = new Map(
         (tasteRows ?? []).map((t) => [t.enrollment_id as string, t])
       );
-      const photoMap = isConfigured.supabaseAdmin
-        ? await resolveEnrollmentPhotos(createAdminClient(), activeRoster ?? [])
-        : new Map<string, string[]>();
+      // Names and faces from the course directory: class-visible names, never
+      // the email a code-joiner's roster_name holds.
+      const directory = isConfigured.supabaseAdmin
+        ? await getCourseDirectory(createAdminClient(), courseId)
+        : {};
       const rosterRows: SubmissionRosterRow[] = (activeRoster ?? []).map((e) => {
         const sub = subByEnrollment.get(e.id);
         const taste = tasteByEnrollment.get(e.id);
@@ -195,8 +196,8 @@ export default async function AssignmentPage({
             60_000;
         return {
           enrollmentId: e.id,
-          name: e.roster_name,
-          photoUrl: photoMap.get(e.id)?.[0] ?? null,
+          name: directory[e.id]?.name ?? rosterDisplayName(e.roster_name),
+          photoUrl: directory[e.id]?.photoUrl ?? null,
           submittedAt: sub?.submitted_at ?? null,
           editedAt: edited ? sub.last_edit_at : null,
           taste: taste
@@ -290,18 +291,14 @@ export default async function AssignmentPage({
           .eq("assignment_id", assignmentId),
       ]);
 
+    // Class-visible names + one face each, from the shared course directory.
     const directory = new Map<string, { name: string; photoUrl: string | null }>();
     if (isConfigured.supabaseAdmin) {
-      const admin = createAdminClient();
-      const { data: enrollments } = await admin
-        .from("enrollments")
-        .select("id, roster_name, profile_id, roster_photo_path")
-        .eq("course_id", courseId);
-      const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
-      for (const e of enrollments ?? []) {
-        directory.set(e.id, {
-          name: e.roster_name,
-          photoUrl: photoMap.get(e.id)?.[0] ?? null,
+      const entries = await getCourseDirectory(createAdminClient(), courseId);
+      for (const [enrollmentId, entry] of Object.entries(entries)) {
+        directory.set(enrollmentId, {
+          name: entry.name,
+          photoUrl: entry.photoUrl,
         });
       }
     }

@@ -1,6 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
+import { getCourseDirectory } from "@/lib/coursedirectory";
 import { summarizeParticipation } from "@/lib/participate";
 import {
   Card,
@@ -38,7 +41,10 @@ async function loadOpenExercise(
     id: string;
     label: string;
     memberEnrollmentIds: string[];
+    /** Full class-visible names, for the professor's list of every group. */
     memberNames: string[];
+    /** Given names, for telling a student who they're working with. */
+    memberFirstNames: string[];
     response: string;
   }[];
 } | null> {
@@ -60,7 +66,7 @@ async function loadOpenExercise(
   const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
     supabase
       .from("exercise_group_members")
-      .select("group_id, enrollment_id, enrollments(roster_name)")
+      .select("group_id, enrollment_id")
       .in("group_id", groupIds),
     supabase
       .from("exercise_responses")
@@ -71,20 +77,25 @@ async function loadOpenExercise(
     (responseRows ?? []).map((r) => [r.group_id, r.content])
   );
 
+  // Names come from the course directory, not the joined roster_name: this
+  // tells a student who to go work with, and a code-joiner's roster_name is
+  // the email they signed up with.
+  const directory = isConfigured.supabaseAdmin
+    ? await getCourseDirectory(createAdminClient(), courseId)
+    : {};
+
   return {
     roundId: round.id,
     prompt: round.prompt,
     groups: (groupRows ?? []).map((g) => {
       const members = (memberRows ?? []).filter((m) => m.group_id === g.id);
+      const entries = members.map((m) => directory[m.enrollment_id]);
       return {
         id: g.id,
         label: g.label,
         memberEnrollmentIds: members.map((m) => m.enrollment_id),
-        memberNames: members.map(
-          (m) =>
-            (m.enrollments as unknown as { roster_name: string } | null)
-              ?.roster_name ?? "Someone"
-        ),
+        memberNames: entries.map((entry) => entry?.name ?? "Someone"),
+        memberFirstNames: entries.map((entry) => entry?.firstName ?? "Someone"),
         response: responseByGroup.get(g.id) ?? "",
       };
     }),
@@ -264,7 +275,7 @@ export default async function ParticipatePage({
         groupId: mine.id,
         label: mine.label,
         prompt: exercise.prompt,
-        memberNames: mine.memberNames,
+        memberNames: mine.memberFirstNames,
         response: mine.response,
       };
     } else {

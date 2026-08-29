@@ -17,7 +17,7 @@ import { resolveEnrollmentPhotos } from "@/lib/storage";
 import { stageRoster } from "@/server/stageroster";
 import { isFounder } from "@/server/founder";
 import { StagedRoster } from "@/components/features/roster/StagedRoster";
-import { rosterDisplayName, firstNameOf, initialsOf } from "@/lib/names";
+import { resolveDisplayName, initialsOf } from "@/lib/names";
 
 export default async function CourseHomePage({
   params,
@@ -63,8 +63,8 @@ export default async function CourseHomePage({
 
   // First names for the "who's in this class" grid. roster_name is the raw
   // registrar/email value — for a code-joiner it IS their email — so resolve a
-  // safe display name (rosterDisplayName) and reduce it to a first name,
-  // preferring the given name the student set on their profile. Read via the
+  // safe display name and reduce it to a first name, preferring the given name
+  // the student set on their profile. Read via the
   // admin `directory` client for the same reason the enrollments are: a student
   // can't read classmates' profile rows under RLS.
   const profileNames = new Map<string, { firstName: string | null; fullName: string | null }>();
@@ -85,10 +85,10 @@ export default async function CourseHomePage({
     roster_name: string;
     profile_id: string | null;
   }): string {
-    const linked = e.profile_id ? profileNames.get(e.profile_id) : undefined;
-    const chosen = linked?.firstName?.trim();
-    if (chosen) return chosen;
-    return firstNameOf(rosterDisplayName(e.roster_name, linked?.fullName ?? null));
+    return resolveDisplayName(
+      e.roster_name,
+      e.profile_id ? profileNames.get(e.profile_id) : null
+    ).firstName;
   }
 
   // Registration stages are for the professor alone. Which classmate hasn't

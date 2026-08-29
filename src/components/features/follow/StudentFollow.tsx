@@ -44,6 +44,7 @@ import {
   type PauseInterval,
 } from "@/lib/focus";
 import { capture } from "@/lib/analytics";
+import { initialsOf } from "@/lib/names";
 import { cn } from "@/lib/utils";
 import type { PollPhase, PollResults, PollStage } from "@/types/db";
 
@@ -82,22 +83,15 @@ interface Props {
   /** Professor pause windows so far; open pause = lecture paused right now. */
   initialPauses: PauseInterval[];
   /** Class roster (names/photos) so partners can be shown by face. */
-  roster: Record<string, { name: string; photoUrl: string | null }>;
+  roster: Record<
+    string,
+    { name: string; firstName: string; photoUrl: string | null }
+  >;
   initialRound: StudentRound | null;
   initialMyAnswers: Array<{ phase: PollPhase; choice: number }>;
   initialPartnerIds: string[];
   /** Prompt of a group exercise running right now, if any. */
   initialExercisePrompt?: string | null;
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
 }
 
 export function StudentFollow({
@@ -663,14 +657,14 @@ export function StudentFollow({
                         {partner.photoUrl && (
                           <AvatarImage
                             src={partner.photoUrl}
-                            alt={partner.name}
+                            alt={partner.firstName}
                           />
                         )}
                         <AvatarFallback className="text-[10px]">
-                          {initials(partner.name)}
+                          {initialsOf(partner.name)}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="text-sm">{partner.name}</span>
+                      <span className="text-sm">{partner.firstName}</span>
                     </div>
                   );
                 })}

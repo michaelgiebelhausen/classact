@@ -220,6 +220,41 @@ export function isEmailAddress(value: string): boolean {
   return value.indexOf("@") > 0 && /^\S+@\S+\.\S+$/.test(value.trim());
 }
 
+/** What one enrollment is called, in the two lengths the app shows. */
+export interface ResolvedName {
+  /** Full class-visible name: for lists where two Emmas must be told apart. */
+  name: string;
+  /** What a classmate is called to their face: seat labels, "pair up with". */
+  firstName: string;
+}
+
+/**
+ * Both names for one enrollment, from the roster row and the person's own
+ * profile — the single place that decides what a classmate is called.
+ *
+ * `first_name` is its own profile column, so someone who files as
+ * "Alvarez-Stratton, Anneliese" and goes by "Annie" is called Annie without
+ * having to rewrite their full name. Failing that we take the given name out
+ * of whatever `rosterDisplayName` settled on, which is where the guarantee
+ * lives: a code-code joiner with no profile yet reads as their email's local
+ * part, never as a deliverable address.
+ *
+ * An email typed into the profile's first-name field is ignored for the same
+ * reason `rosterDisplayName` ignores one in `full_name` — nobody chose to be
+ * called that, and it would walk an address straight back onto the seat map.
+ */
+export function resolveDisplayName(
+  rosterName: string,
+  profile?: { firstName?: string | null; fullName?: string | null } | null
+): ResolvedName {
+  const name = rosterDisplayName(rosterName, profile?.fullName ?? null);
+  const chosen = profile?.firstName?.trim();
+  return {
+    name,
+    firstName: chosen && !isEmailAddress(chosen) ? chosen : firstNameOf(name),
+  };
+}
+
 /**
  * Split a self-entered name into given/family parts to pre-fill the profile
  * editor's two fields, for someone who has a `full_name` but no saved parts

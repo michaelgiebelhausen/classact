@@ -21,6 +21,7 @@
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { stablePhotoUrl } from "@/lib/photopin";
+import { initialsOf } from "@/lib/names";
 
 export interface ClassmateCardData {
   name: string;
@@ -29,16 +30,6 @@ export interface ClassmateCardData {
   /** Their other photos — a face is easier to learn from more than one. */
   otherPhotoUrls?: string[];
   hints?: Array<{ label: string; value: string }>;
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
 }
 
 export function ClassmateCard({
@@ -54,7 +45,7 @@ export function ClassmateCard({
         {photoUrl && (
           <AvatarImage src={stablePhotoUrl(photoUrl) ?? photoUrl} alt={name} />
         )}
-        <AvatarFallback className="text-2xl">{initials(name)}</AvatarFallback>
+        <AvatarFallback className="text-2xl">{initialsOf(name)}</AvatarFallback>
       </Avatar>
 
       <div>
@@ -74,7 +65,7 @@ export function ClassmateCard({
                 alt=""
               />
               <AvatarFallback className="rounded-lg text-xs">
-                {initials(name)}
+                {initialsOf(name)}
               </AvatarFallback>
             </Avatar>
           ))}

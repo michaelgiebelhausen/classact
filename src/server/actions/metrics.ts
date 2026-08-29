@@ -2,6 +2,8 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
+import { getCourseDirectory } from "@/lib/coursedirectory";
+import { rosterDisplayName } from "@/lib/names";
 import { CONTRACT_TASK_TITLE } from "@/lib/projects";
 import {
   computeMemberStats,
@@ -185,6 +187,13 @@ export async function getCourseMetrics(
     (c) => c.verified || c.professor_confirmed_at != null
   ).length;
 
+  // Class-visible names: this table gets projected, and a code-joiner's
+  // roster_name is the email they signed up with. The directory needs the
+  // admin client, so without it fall back to resolving the roster name alone.
+  const directory = isConfigured.supabaseAdmin
+    ? await getCourseDirectory(createAdminClient(), courseId)
+    : {};
+
   return {
     sessionCount: (sessions ?? []).length,
     totalCheckIns,
@@ -193,7 +202,7 @@ export async function getCourseMetrics(
       const agg = byEnrollment.get(e.id)!;
       return {
         enrollmentId: e.id,
-        name: e.roster_name,
+        name: directory[e.id]?.name ?? rosterDisplayName(e.roster_name),
         checkIns: agg.checkIns,
         verified: agg.verified,
         gamesPlayed: agg.games,
@@ -306,7 +315,7 @@ export async function getCourseProjectStats(
   ] = await Promise.all([
     supabase
       .from("project_team_members")
-      .select("team_id, project_id, enrollment_id, role, enrollments(roster_name)")
+      .select("team_id, project_id, enrollment_id, role")
       .in("team_id", teamIds),
     supabase
       .from("team_tasks")
@@ -329,6 +338,10 @@ export async function getCourseProjectStats(
   const signedSet = new Set(
     (sigRows ?? []).map((s) => `${s.team_id}:${s.enrollment_id}`)
   );
+  // Class-visible names — see getCourseMetrics above.
+  const directory = isConfigured.supabaseAdmin
+    ? await getCourseDirectory(createAdminClient(), courseId)
+    : {};
 
   return (projects ?? [])
     .map((project) => {
@@ -356,9 +369,7 @@ export async function getCourseProjectStats(
         const rows: ProjectMemberStatsRow[] = members
           .map((m) => ({
             enrollmentId: m.enrollment_id,
-            name:
-              (m.enrollments as unknown as { roster_name: string } | null)
-                ?.roster_name ?? "Unknown",
+            name: directory[m.enrollment_id]?.name ?? "Unknown",
             role: m.role,
             signedContract: signedSet.has(`${team.id}:${m.enrollment_id}`),
             stats: statsByMember.get(m.enrollment_id)!,

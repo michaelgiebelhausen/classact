@@ -37,6 +37,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { stablePhotoUrl } from "@/lib/photopin";
+import { initialsOf } from "@/lib/names";
 import { isSocialMode } from "@/lib/arrivals";
 import { denySentence, relationPhrase } from "@/lib/seatrings";
 import type { SeatRelation } from "@/types/db";
@@ -45,7 +46,10 @@ export interface NeighborPromptRow {
   relation: SeatRelation;
   seatLabel: string;
   enrollmentId: string;
+  /** Full class-visible name — only for the avatar's initials. */
   name: string | null;
+  /** What you'd actually call them when you turn around and say hello. */
+  firstName: string | null;
   photoUrl: string | null;
   /** These two have never confirmed each other, in any session. */
   firstEver: boolean;
@@ -63,18 +67,9 @@ interface Props {
   onDeny: (enrollmentId: string, relation: SeatRelation) => Promise<boolean>;
 }
 
-function firstName(name: string | null): string {
-  return (name ?? "").split(/\s+/)[0] || "They";
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+/** The given name to address someone by, or a pronoun when we have none. */
+function callThem(row: { firstName: string | null }): string {
+  return row.firstName?.trim() || "They";
 }
 
 export function NeighborPrompts({
@@ -147,7 +142,7 @@ export function NeighborPrompts({
     denyOpenFor === row.enrollmentId ? (
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-muted-foreground">
-          {denySentence(firstName(row.name), row.relation)}
+          {denySentence(callThem(row), row.relation)}
         </span>
         <Button
           size="sm"
@@ -221,14 +216,14 @@ export function NeighborPrompts({
                   {row.photoUrl && (
                     <AvatarImage
                       src={stablePhotoUrl(row.photoUrl) ?? row.photoUrl}
-                      alt={row.name ?? ""}
+                      alt={row.firstName ?? ""}
                     />
                   )}
-                  <AvatarFallback>{initials(row.name ?? "?")}</AvatarFallback>
+                  <AvatarFallback>{initialsOf(row.name ?? "?")}</AvatarFallback>
                 </Avatar>
                 <div>
                   <p className="text-sm font-medium">
-                    {row.name ?? "A classmate"}
+                    {row.firstName ?? "A classmate"}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {relationPhrase(row.relation, "theirs")
@@ -277,7 +272,7 @@ export function NeighborPrompts({
                   <p className="text-sm">
                     Still next to{" "}
                     <span className="font-medium">
-                      {row.name ?? "your neighbor"}
+                      {row.firstName ?? "your neighbor"}
                     </span>
                     ?{" "}
                     <span className="text-xs text-muted-foreground">
@@ -303,7 +298,7 @@ export function NeighborPrompts({
                 <p className="text-sm">
                   Still your row:{" "}
                   <span className="font-medium">
-                    {repeats.map((r) => firstName(r.name)).join(", ")}
+                    {repeats.map((r) => callThem(r)).join(", ")}
                   </span>
                   ?
                 </p>

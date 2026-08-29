@@ -2,10 +2,12 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/db";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
-import { rosterDisplayName } from "@/lib/names";
+import { resolveDisplayName } from "@/lib/names";
 
 export interface DirectoryEntry {
   name: string;
+  /** Given name, for the surfaces that address someone rather than list them. */
+  firstName: string;
   photoUrl: string | null;
 }
 
@@ -108,30 +110,35 @@ async function build(
   // Anyone signed in can have set a name on their profile that should win over
   // the roster's — a Canvas student who goes by a nickname, not just a
   // course-code joiner whose row is named after their email. So we look up
-  // full_name for every enrollment that has a profile, and let
-  // rosterDisplayName decide which name to show.
+  // both name parts for every enrollment that has a profile, and let
+  // resolveDisplayName decide which name to show.
   const withProfile = (enrollments ?? []).filter((e) => e.profile_id);
-  const profileNames = new Map<string, string>();
+  const profileNames = new Map<
+    string,
+    { firstName: string | null; fullName: string | null }
+  >();
   if (withProfile.length > 0) {
     // Deliberately not fatal, where a failed roster query is: the worst case
     // is that a handful of people read by their roster name for one TTL, and
     // throwing to avoid that would blank every name and face in the room.
     const { data: profiles } = await admin
       .from("profiles")
-      .select("id, full_name")
+      .select("id, full_name, first_name")
       .in("id", withProfile.map((e) => e.profile_id as string));
     for (const p of profiles ?? []) {
-      if (p.full_name) profileNames.set(p.id, p.full_name);
+      profileNames.set(p.id, { firstName: p.first_name, fullName: p.full_name });
     }
   }
 
   const directory: CourseDirectory = {};
   for (const e of enrollments ?? []) {
+    const { name, firstName } = resolveDisplayName(
+      e.roster_name,
+      e.profile_id ? profileNames.get(e.profile_id) : null
+    );
     directory[e.id] = {
-      name: rosterDisplayName(
-        e.roster_name,
-        e.profile_id ? profileNames.get(e.profile_id) : null
-      ),
+      name,
+      firstName,
       photoUrl: photoMap.get(e.id)?.[0] ?? null,
     };
   }

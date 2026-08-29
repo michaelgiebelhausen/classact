@@ -35,6 +35,7 @@ import {
   type ArrivalSeat,
 } from "@/lib/arrivals";
 import { relationPhrase } from "@/lib/seatrings";
+import { firstNameOf } from "@/lib/names";
 import type { SeatRelation } from "@/types/db";
 
 interface SlimOccupant {
@@ -107,7 +108,7 @@ export function NeighborArrivalListener({
     let closed = false;
 
     const firstName = (enrollmentId: string) =>
-      (namesRef.current[enrollmentId] ?? "A classmate").split(/\s+/)[0];
+      firstNameOf(namesRef.current[enrollmentId] ?? "A classmate");
 
     const mySeatId = () => {
       for (const occ of occupantsRef.current.values()) {

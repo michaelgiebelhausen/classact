@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, CalendarDays } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
+import { getCourseDirectory } from "@/lib/coursedirectory";
 import { CONTRACT_TASK_TITLE } from "@/lib/projects";
 import {
   Card,
@@ -55,8 +58,13 @@ export default async function ProjectBoardPage({
 
   const { data: memberRows } = await supabase
     .from("project_team_members")
-    .select("team_id, enrollment_id, role, enrollments(roster_name)")
+    .select("team_id, enrollment_id, role")
     .in("team_id", teams.map((t) => t.id));
+  // Teammate names come from the course directory: a code-joiner's roster_name
+  // is the email they signed up with, and this board is shown to the team.
+  const directory = isConfigured.supabaseAdmin
+    ? await getCourseDirectory(createAdminClient(), courseId)
+    : {};
 
   // Which board? Student: their own team. Professor: ?team= or the first.
   let myEnrollmentId: string | null = null;
@@ -151,9 +159,7 @@ export default async function ProjectBoardPage({
     .filter((m) => m.team_id === activeTeam.id)
     .map((m) => ({
       enrollmentId: m.enrollment_id,
-      name:
-        (m.enrollments as unknown as { roster_name: string } | null)
-          ?.roster_name ?? "Unknown",
+      name: directory[m.enrollment_id]?.name ?? "Unknown",
       role: m.role,
     }));
 

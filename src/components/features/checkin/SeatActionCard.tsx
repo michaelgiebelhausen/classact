@@ -17,6 +17,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { stablePhotoUrl } from "@/lib/photopin";
+import { initialsOf } from "@/lib/names";
 import type { SeatRing } from "@/lib/seatrings";
 
 interface Props {
@@ -28,16 +29,6 @@ interface Props {
   busy: boolean;
   onConfirm: () => void;
   onFree: () => void;
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
 }
 
 const STATUS: Record<SeatRing, string> = {
@@ -74,7 +65,7 @@ export function SeatActionCard({
           />
         )}
         <AvatarFallback className="text-2xl">
-          {initials(name ?? "?")}
+          {initialsOf(name ?? "?")}
         </AvatarFallback>
       </Avatar>
       <div>

@@ -6,6 +6,7 @@ import type { ActionResult } from "@/server/actions/auth";
 import { flagAbsencesElsewhere } from "@/server/absences";
 import { timed } from "@/server/loadmetrics";
 import { canReleaseSeat } from "@/lib/seatrelease";
+import { rosterDisplayName } from "@/lib/names";
 import {
   seatMoveOutcome,
   SEAT_MOVE_MESSAGES,
@@ -692,5 +693,14 @@ export async function releaseSeat(
     .maybeSingle();
 
   revalidatePath(`/course/${session.course_id}/checkin`);
-  return { ok: true, data: { name: enrollment?.roster_name ?? null } };
+  // The toast naming who was freed shows on a projected page, so it gets the
+  // class-visible name rather than a code-joiner's email address.
+  return {
+    ok: true,
+    data: {
+      name: enrollment
+        ? (rosterDisplayName(enrollment.roster_name) || null)
+        : null,
+    },
+  };
 }

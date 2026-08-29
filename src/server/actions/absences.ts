@@ -29,6 +29,11 @@ import { resolveCourseAi } from "@/server/aicreds";
 import { assessAbsence } from "@/server/absenceai";
 import { checkedInElsewhere } from "@/server/absences";
 import { describeQueryFailure } from "@/lib/dberror";
+import {
+  getCourseDirectory,
+  type CourseDirectory,
+} from "@/lib/coursedirectory";
+import { rosterDisplayName } from "@/lib/names";
 import { rateLimit } from "@/lib/ratelimit";
 import { sendAbsenceAppealNotification } from "@/lib/email";
 import type { AbsenceRow, AbsenceVerdict } from "@/types/db";
@@ -485,7 +490,8 @@ export async function appealAbsence(
           to: prof.user.email,
           courseId: row.course_id,
           courseName: course.name,
-          studentName: owner?.roster_name ?? "A student",
+          studentName:
+            rosterDisplayName(owner?.roster_name ?? "") || "A student",
           date: row.absence_date,
           category: categoryLabel(row.category),
           summary: row.ai_summary,
@@ -598,21 +604,34 @@ export async function listCourseAbsences(
     }
   }
 
+  // Class-visible names: a code-joiner's roster_name is the email they signed
+  // up with, and this list gets read off a shared screen like any other.
+  const directory = isConfigured.supabaseAdmin
+    ? await getCourseDirectory(createAdminClient(), courseId)
+    : {};
+
   // Embedded joins aren't typed in the hand-written Database map; the
   // dashboard page does the same unknown-cast for courses on enrollments.
   return rows.map((r) =>
-    toView(r as unknown as AbsenceRow & { enrollments: { roster_name: string } }, attended)
+    toView(
+      r as unknown as AbsenceRow & { enrollments: { roster_name: string } },
+      attended,
+      directory
+    )
   );
 }
 
 function toView(
   r: AbsenceRow & { enrollments: { roster_name: string } },
-  attended: Set<string>
+  attended: Set<string>,
+  directory: CourseDirectory
 ): CourseAbsenceView {
   return {
     id: r.id,
     date: r.absence_date,
-    studentName: r.enrollments.roster_name,
+    studentName:
+      directory[r.enrollment_id]?.name ??
+      rosterDisplayName(r.enrollments.roster_name),
     enrollmentId: r.enrollment_id,
     category: r.category,
     categoryLabel: categoryLabel(r.category),

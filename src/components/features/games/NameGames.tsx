@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { recordGameScore } from "@/server/actions/games";
 import { capture } from "@/lib/analytics";
-import { initialsOf, sortByLastName } from "@/lib/names";
+import { firstNameOf, initialsOf, sortByLastName } from "@/lib/names";
 import {
   ClassmateCard,
   type ClassmateCardData,
@@ -40,11 +40,6 @@ export interface GamePlayer {
  */
 function pickPhoto(p: GamePlayer): string {
   return p.photoUrls[Math.floor(Math.random() * p.photoUrls.length)];
-}
-
-/** "Emma Mabel Roethke" → "Emma" — the name-tag label on a matched face. */
-function firstNameOf(name: string): string {
-  return name.split(/\s+/)[0] ?? name;
 }
 
 function shuffle<T>(arr: T[]): T[] {

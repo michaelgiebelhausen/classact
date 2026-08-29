@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
+import { getCourseDirectory } from "@/lib/coursedirectory";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ShoutOutForm } from "@/components/features/shoutouts/ShoutOutForm";
@@ -39,16 +40,24 @@ export default async function ShoutOutsPage({
   if (!course) notFound();
   const isProfessor = course.professor_id === profile.id;
 
-  // Roster names via admin (same directory pattern as check-in).
+  // Roster names via the course directory — class-visible names, never the
+  // email a code-joiner's roster_name holds. The id list stays its own query:
+  // only active students can be given a shout-out, and the directory also
+  // carries people who haven't activated yet.
   const names = new Map<string, string>();
   if (isConfigured.supabaseAdmin) {
     const admin = createAdminClient();
-    const { data: enrollments } = await admin
-      .from("enrollments")
-      .select("id, roster_name")
-      .eq("course_id", courseId)
-      .eq("status", "active");
-    for (const e of enrollments ?? []) names.set(e.id, e.roster_name);
+    const [{ data: enrollments }, directory] = await Promise.all([
+      admin
+        .from("enrollments")
+        .select("id")
+        .eq("course_id", courseId)
+        .eq("status", "active"),
+      getCourseDirectory(admin, courseId),
+    ]);
+    for (const e of enrollments ?? []) {
+      names.set(e.id, directory[e.id]?.name ?? "A classmate");
+    }
   }
 
   if (isProfessor) {

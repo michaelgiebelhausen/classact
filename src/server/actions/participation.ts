@@ -25,6 +25,8 @@ import { judgingStats, type DecidedComparison } from "@/lib/tastestats";
 import { computeMemberStats, type ProjectTaskInput } from "@/lib/projectstats";
 import { CONTRACT_TASK_TITLE } from "@/lib/projects";
 import { resolveEnrollmentPhotos } from "@/lib/storage";
+import { getCourseDirectory } from "@/lib/coursedirectory";
+import { rosterDisplayName } from "@/lib/names";
 import type { ActionResult } from "@/server/actions/auth";
 import type { PollPhase } from "@/types/db";
 
@@ -636,6 +638,9 @@ export async function getParticipationCockpit(
     ]);
 
   const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
+  // Class-visible names, not roster_name: the cockpit gets projected, and a
+  // code-joiner's roster_name is the email they signed up with.
+  const directory = await getCourseDirectory(admin, courseId);
   const weights = parseWeights(course.participation_weights, PARTICIPATION_ATTRIBUTES);
 
   const scoresByEnrollment = new Map<string, Record<string, number>>();
@@ -654,7 +659,7 @@ export async function getParticipationCockpit(
       const scores = scoresByEnrollment.get(e.id)!;
       return {
         enrollmentId: e.id,
-        name: e.roster_name,
+        name: directory[e.id]?.name ?? rosterDisplayName(e.roster_name),
         photoUrl: photoMap.get(e.id)?.[0] ?? null,
         scores,
         participation: participationScore(scores, weights),

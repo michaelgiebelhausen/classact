@@ -10,10 +10,13 @@ import {
 import { RoomMap } from "@/components/features/rooms/RoomMap";
 import type { RoomMapSeat } from "@/components/features/rooms/RoomMap";
 import { stablePhotoUrl } from "@/lib/photopin";
+import { firstNameOf } from "@/lib/names";
 
 export interface LastSessionOccupant {
   seatId: string;
   name: string | null;
+  /** Seat labels are read at a glance, so they carry the given name. */
+  firstName?: string | null;
   photoUrl: string | null;
   /** Who it was — lets a caller open that person's card from their seat. */
   enrollmentId?: string;
@@ -100,7 +103,9 @@ export function LastSessionMap({
                 // Pinned so the periodic page refresh (which re-signs photo
                 // URLs) doesn't make last class's faces blink out and back.
                 photoUrl: stablePhotoUrl(who?.photoUrl),
-                caption: who?.name?.split(/\s+/)[0] ?? undefined,
+                caption:
+                  who?.firstName ??
+                  (who?.name ? firstNameOf(who.name) : undefined),
                 tappable: tappable && Boolean(who),
               };
             }}

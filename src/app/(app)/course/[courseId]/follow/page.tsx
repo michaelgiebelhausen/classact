@@ -7,8 +7,8 @@ import {
   getSignedDeckDownloadUrl,
   getSignedDeckUrl,
   getSignedMaterialDownloadUrl,
-  resolveEnrollmentPhotos,
 } from "@/lib/storage";
+import { getCourseDirectory } from "@/lib/coursedirectory";
 import { summarizeFocus, summarizeFocusByEnrollment } from "@/lib/focus";
 import { loadCourseSeats } from "@/server/courseseats";
 import {
@@ -215,19 +215,16 @@ export default async function FollowAlongPage({
       );
     }
 
-    // Roster (names + one photo) via admin — membership proven above.
+    // Roster (names + one photo) via admin — membership proven above. The
+    // class-visible name, not roster_name: this view gets projected, and a
+    // code-joiner's roster_name is their email address.
     const roster: Record<string, RosterEntry> = {};
     if (isConfigured.supabaseAdmin) {
-      const admin = createAdminClient();
-      const { data: enrollments } = await admin
-        .from("enrollments")
-        .select("id, roster_name, profile_id, roster_photo_path")
-        .eq("course_id", courseId);
-      const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
-      for (const e of enrollments ?? []) {
-        roster[e.id] = {
-          name: e.roster_name,
-          photoUrl: photoMap.get(e.id)?.[0] ?? null,
+      const directory = await getCourseDirectory(createAdminClient(), courseId);
+      for (const [enrollmentId, entry] of Object.entries(directory)) {
+        roster[enrollmentId] = {
+          name: entry.name,
+          photoUrl: entry.photoUrl,
         };
       }
     }
@@ -476,23 +473,21 @@ export default async function FollowAlongPage({
     );
   }
 
-  // Roster (names + one photo) so the poll card can show partners by face —
-  // the same class-visible roster as the course directory.
+  // Roster (names + one photo) so the poll card can show partners by face.
+  // Reads the course directory rather than roster_name directly: "discuss with"
+  // is addressed to a person, so it needs the name the class knows them by —
+  // and roster_name for a code-joiner is the email they signed up with.
   const studentRoster: Record<
     string,
-    { name: string; photoUrl: string | null }
+    { name: string; firstName: string; photoUrl: string | null }
   > = {};
   if (isConfigured.supabaseAdmin) {
-    const admin = createAdminClient();
-    const { data: enrollments } = await admin
-      .from("enrollments")
-      .select("id, roster_name, profile_id, roster_photo_path")
-      .eq("course_id", courseId);
-    const photoMap = await resolveEnrollmentPhotos(admin, enrollments ?? []);
-    for (const e of enrollments ?? []) {
-      studentRoster[e.id] = {
-        name: e.roster_name,
-        photoUrl: photoMap.get(e.id)?.[0] ?? null,
+    const directory = await getCourseDirectory(createAdminClient(), courseId);
+    for (const [enrollmentId, entry] of Object.entries(directory)) {
+      studentRoster[enrollmentId] = {
+        name: entry.name,
+        firstName: entry.firstName,
+        photoUrl: entry.photoUrl,
       };
     }
   }
