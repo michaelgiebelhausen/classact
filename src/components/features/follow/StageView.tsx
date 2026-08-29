@@ -7,6 +7,8 @@ import { SlideViewer } from "@/components/features/follow/SlideViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { setLecturePage } from "@/server/actions/lectures";
 import { closePollRound } from "@/server/actions/polls";
+import { pollOptionText } from "@/lib/participate";
+import { onWake } from "@/lib/live-sync";
 import {
   lectureChannelName,
   type LectureSyncMessage,
@@ -120,89 +122,154 @@ export function StageView({
       }
     }
 
-    const channel = supabase
-      .channel(`stage-polls:${lectureId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "poll_rounds",
-          filter: `lecture_id=eq.${lectureId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            id?: string;
-            prompt?: string;
-            options?: string[];
-            stage?: PollStage;
-            results?: PollResults | null;
-            correct_indices?: number[] | null;
-          };
-          if (!rec?.id || !rec.stage) return;
-          if (rec.stage === "closed") {
-            if (pollRef.current?.roundId === rec.id) applyPoll(null);
-            return;
+    function connect() {
+      return supabase
+        .channel(`stage-polls:${lectureId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "poll_rounds",
+            filter: `lecture_id=eq.${lectureId}`,
+          },
+          (payload) => {
+            const rec = payload.new as {
+              id?: string;
+              prompt?: string;
+              options?: string[];
+              stage?: PollStage;
+              results?: PollResults | null;
+              correct_indices?: number[] | null;
+            };
+            if (!rec?.id || !rec.stage) return;
+            if (rec.stage === "closed") {
+              if (pollRef.current?.roundId === rec.id) applyPoll(null);
+              return;
+            }
+            applyPoll({
+              roundId: rec.id,
+              prompt: rec.prompt ?? pollRef.current?.prompt ?? "",
+              options: rec.options ?? pollRef.current?.options ?? [],
+              stage: rec.stage,
+              results: rec.results ?? null,
+              correctIndices: rec.correct_indices ?? null,
+            });
           }
-          applyPoll({
-            roundId: rec.id,
-            prompt: rec.prompt ?? pollRef.current?.prompt ?? "",
-            options: rec.options ?? pollRef.current?.options ?? [],
-            stage: rec.stage,
-            results: rec.results ?? null,
-            correctIndices: rec.correct_indices ?? null,
-          });
-        }
-      )
-      .subscribe((status) => {
-        const ok = status === "SUBSCRIBED";
-        if (!ok && !pollTimer) {
-          pollTimer = setInterval(() => void pollRound(), 5000);
-        }
-        if (ok && pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-        }
-      });
+        )
+        .subscribe((status) => {
+          const ok = status === "SUBSCRIBED";
+          if (!ok && !pollTimer) {
+            pollTimer = setInterval(() => void pollRound(), 5000);
+          }
+          if (ok && pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        });
+    }
+
+    let channel = connect();
+
+    let lastResync = 0;
+    const stopWake = onWake(() => {
+      const now = Date.now();
+      if (now - lastResync < 1000) return;
+      lastResync = now;
+      void pollRound();
+      supabase.removeChannel(channel);
+      channel = connect();
+    });
+
     return () => {
+      stopWake();
       if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
   }, [lectureId, applyPoll]);
 
-  // Cross-device fallback: follow the lecture row like a student would.
+  // Cross-device fallback: follow the lecture row like a student would — with
+  // a 5s poll when realtime is down and an authoritative catch-up on wake. A
+  // projector that slept or lost Wi-Fi missed every advance realtime made in
+  // the gap (postgres_changes never replays), so it must re-read the current
+  // slide on return rather than trust a possibly-zombie socket.
   useEffect(() => {
     const supabase = createClient();
-    const channel = supabase
-      .channel(`stage:${lectureId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "lectures",
-          filter: `id=eq.${lectureId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            current_page: number;
-            ended_at: string | null;
-            pauses?: Array<{ start: string; end: string | null }> | null;
-          };
-          if (rec.ended_at) {
-            setEnded(true);
-            return;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    async function poll() {
+      const { data } = await supabase
+        .from("lectures")
+        .select("current_page, ended_at, pauses")
+        .eq("id", lectureId)
+        .maybeSingle();
+      if (!data) return;
+      if (data.ended_at) {
+        setEnded(true);
+        return;
+      }
+      pageRef.current = data.current_page;
+      setPage(data.current_page);
+      const pauses = data.pauses ?? [];
+      const last = pauses[pauses.length - 1];
+      setPaused(Boolean(last && last.end === null));
+    }
+
+    function connect() {
+      return supabase
+        .channel(`stage:${lectureId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "lectures",
+            filter: `id=eq.${lectureId}`,
+          },
+          (payload) => {
+            const rec = payload.new as {
+              current_page: number;
+              ended_at: string | null;
+              pauses?: Array<{ start: string; end: string | null }> | null;
+            };
+            if (rec.ended_at) {
+              setEnded(true);
+              return;
+            }
+            pageRef.current = rec.current_page;
+            setPage(rec.current_page);
+            if (rec.pauses) {
+              const last = rec.pauses[rec.pauses.length - 1];
+              setPaused(Boolean(last && last.end === null));
+            }
           }
-          pageRef.current = rec.current_page;
-          setPage(rec.current_page);
-          if (rec.pauses) {
-            const last = rec.pauses[rec.pauses.length - 1];
-            setPaused(Boolean(last && last.end === null));
+        )
+        .subscribe((status) => {
+          const ok = status === "SUBSCRIBED";
+          if (!ok && !pollTimer) pollTimer = setInterval(() => void poll(), 5000);
+          if (ok && pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
           }
-        }
-      )
-      .subscribe();
+        });
+    }
+
+    let channel = connect();
+
+    let lastResync = 0;
+    const stopWake = onWake(() => {
+      // focus + visibilitychange can both fire on one wake; collapse the burst.
+      const now = Date.now();
+      if (now - lastResync < 1000) return;
+      lastResync = now;
+      void poll();
+      supabase.removeChannel(channel);
+      channel = connect();
+    });
+
     return () => {
+      stopWake();
+      if (pollTimer) clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
   }, [lectureId]);
@@ -362,7 +429,7 @@ export function StageView({
                       <span className="mr-3 font-semibold text-white/60">
                         {LETTERS[i]}.
                       </span>
-                      {option}
+                      {pollOptionText(option, i)}
                     </li>
                   ))}
                 </ul>
