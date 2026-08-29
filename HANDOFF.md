@@ -189,20 +189,41 @@ npx tsx --env-file=.env.local scripts/seed-demo.ts you@clemson.edu
 4. To use **classact.college**: Vercel project → Settings → Domains → add it,
    then follow Vercel's DNS instructions at your domain registrar.
 
-## 5. Email — Resend (10 min, can wait)
+## 5. Email — Resend — DONE
 
-Until this is done, invite emails won't send — but the app already falls back
-to a **copyable join link**, so you can pilot without it.
+All of this is live as of 2026-08-28. Kept here because it describes how mail
+works now, not because there is anything to do.
 
-1. resend.com → create account → Domains → add `classact.college` → add the
-   DNS records they show you at your registrar → verify.
-2. API Keys → create one → put in `RESEND_API_KEY` (locally and in Vercel).
-3. `EMAIL_FROM` is already set to `ClassAct <noreply@classact.college>`.
+1. ✅ `classact.college` is verified at Resend. DNS shows the DKIM record at
+   `resend._domainkey`, SPF `include:amazonses.com` and the feedback MX on
+   `send.classact.college`, and DMARC at `p=none`.
+2. ✅ `RESEND_API_KEY` is set locally and in Vercel. It is a **send-only
+   restricted key** — it cannot read domains or account settings, which is
+   the right shape for a key that only ever sends.
+3. ✅ `EMAIL_FROM` is `ClassAct <noreply@classact.college>`.
+4. ✅ **Supabase custom SMTP points at Resend.** Host `smtp.resend.com`,
+   port 465, username `resend`, password = the API key.
 
-**Also recommended:** Supabase → Auth → SMTP settings → point Supabase's
-magic-link emails at Resend too, so sign-in emails come from your domain and
-don't hit Supabase's low free-tier email limits (important before 40 students
-sign in at once).
+**Two senders, and you can tell them apart in the Resend log by subject.**
+The app sends invites and its own sign-in links through the Resend *API*
+(`src/lib/email.ts`) — subjects "Your ClassAct sign-in link" and
+"{course} is using ClassAct — join the class". Supabase sends the
+`signInWithOtp` magic links through *SMTP* — subject "Your sign-in link",
+from Supabase's own template. A bare "Your sign-in link" in the Resend
+dashboard is the proof that custom SMTP is wired; the app never sends that
+subject.
+
+**Still worth reading before class: Supabase → Authentication → Rate
+Limits → "Rate limit for sending emails".** Pointing SMTP at Resend does not
+touch it; it is a separate field and it defaults to **30 per hour**. Forty
+students signing in during one arrival window is exactly the shape that hits
+it, and student 31 gets silence — no error in the room, nothing in Sentry.
+Read the field; raise it if it is still at the default.
+
+**What this now costs:** sign-in depends on Resend. A Resend outage or a
+domain suspension takes out login, not just invites. That is the right
+trade for deliverability at forty students, but it is a single point of
+failure worth knowing you have.
 
 ## 6. Analytics & error tracking (5 min, optional but recommended)
 
@@ -865,8 +886,9 @@ yet; it needs a local Supabase to point at.
   live Supabase.
 - **CI**: `.github/workflows/ci.yml` runs typecheck/lint/tests/build on every
   push once the repo is on GitHub.
-- Supabase magic-link emails use Supabase's built-in sender until you complete
-  step 5 — fine for testing, upgrade before the real class.
+- Supabase's auth email rate limit (Authentication → Rate Limits) has not been
+  read since custom SMTP was wired. Default is 30/hour; forty students check
+  in inside one window. See step 5.
 
 ## What's already verified
 
