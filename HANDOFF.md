@@ -217,8 +217,15 @@ Both are silent no-ops until their keys exist — nothing breaks without them.
 
 ## 7. Pilot smoke test (15 min — do this before the first real class)
 
-Use two browsers (or one normal + one incognito) so you can be professor and
-student at once:
+Start with the one check that needs no browser at all — if the database is
+behind this build, everything below will look like an empty classroom rather
+than a failure:
+
+- [ ] `curl https://classact.college/api/health` → `"status":"ok"`. Anything
+      else names the migration to run.
+
+Then use two browsers (or one normal + one incognito) so you can be professor
+and student at once:
 
 - [ ] Professor: sign in → create course → Setup → build your real room's grid
 - [ ] Professor: Roster tab → upload a CSV (`name,email` — export from Canvas)
@@ -292,9 +299,33 @@ per table (`select … limit(0)`) asks the database whether they're there:
   migration filename; students get told their attendance is safe and that
   their professor can fix it. Better an admission than a convincing lie
   about who is in the room.
+- **`GET /api/health`** — answers with the same verdict, so you can ask from
+  outside the app without signing in:
 
-**It cannot cry wolf.** Only two SQLSTATEs count as a gap: `42703` (no such
-column) and `42P01` (no such table) — Postgres stating a fact. A timeout, a
+  ```
+  {"ok":true,"schema":{"status":"ok"}}                              200
+  {"ok":false,"schema":{"status":"behind",
+    "gaps":[{"table":…,"migration":…,"detail":…}],
+    "migrations":["0038_note_entries.sql"]}}                        503
+  ```
+
+  It used to return a hardcoded `{"ok": true}`, which is why the 0038 deploy
+  on 2026-08-28 looked healthy for hours while the notes feature ran against
+  a database that had never seen its migration. `status` is `unknown` (with
+  `ok: true`, and 200) when there is no service-role key to check with — a
+  developer without one has an unaskable question, not a broken deployment.
+
+  **Nothing is wired to this endpoint yet.** Point an uptime monitor at it
+  and an unapplied migration will page you, which is the intent — but it
+  also means a hand-applied migration you haven't got to yet can now set off
+  an alarm. Decide that on purpose. It is cheap to poll: a healthy answer is
+  cached for the life of the server instance and the probe times out at 3s.
+
+**It cannot cry wolf.** Only three error codes count as a gap: `42703` (no
+such column) and `42P01` (no such table), Postgres stating a fact, plus
+PostgREST's own `PGRST205` — a missing *table* never reaches Postgres at
+all, so watching only for 42P01 left every table-level contract entry
+undetectable. A timeout, a
 dropped connection, a missing service-role key: all reported healthy on
 purpose, because blanking a working seat map mid-class over a network blip
 would be worse than the bug being guarded. A healthy answer is cached for
