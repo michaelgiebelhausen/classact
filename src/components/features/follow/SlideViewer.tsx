@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -39,8 +39,22 @@ export function SlideViewer({
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  // Once a page has rendered we never blank the deck again: a background
+  // reload keeps the last frame on screen instead of flashing a placeholder.
+  const [everReady, setEverReady] = useState(false);
   const [docVersion, setDocVersion] = useState(0);
   const [resizeTick, setResizeTick] = useState(0);
+
+  // The document's identity is the storage object, not the signed URL. Every
+  // server render (e.g. any router.refresh() in the course) mints a fresh
+  // signed URL with a new ?token — the same PDF. Reloading pdf.js on that
+  // churn is what made the slide vanish behind "Loading slides…" mid-lecture.
+  // Key the load on the path alone; load with whatever URL is current.
+  const docKey = useMemo(() => fileUrl.split("?")[0], [fileUrl]);
+  const fileUrlRef = useRef(fileUrl);
+  useEffect(() => {
+    fileUrlRef.current = fileUrl;
+  }, [fileUrl]);
 
   // Re-render on window resize (e.g. the stage window dragged to a projector).
   useEffect(() => {
@@ -56,19 +70,26 @@ export function SlideViewer({
     };
   }, []);
 
-  // Load the document once per file URL.
+  // Load the document once per storage object (not per signed-URL token).
   useEffect(() => {
     let cancelled = false;
+    // Hold onto the previously loaded doc so a genuine deck swap keeps its
+    // last frame on the canvas until the new one is ready, rather than
+    // clearing to a placeholder.
+    const previousDoc = docRef.current;
+    const previousTask = loadingTaskRef.current;
     (async () => {
       try {
         const pdfjs = await import("pdfjs-dist");
         if (cancelled) return;
-        setStatus("loading");
+        // Only show the placeholder on the very first load; a reload keeps
+        // the current slide visible.
+        if (!docRef.current) setStatus("loading");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url
         ).toString();
-        const loadingTask = pdfjs.getDocument({ url: fileUrl });
+        const loadingTask = pdfjs.getDocument({ url: fileUrlRef.current });
         loadingTaskRef.current = loadingTask;
         const doc = await loadingTask.promise;
         if (cancelled) {
@@ -79,6 +100,9 @@ export function SlideViewer({
         onPageCount?.(doc.numPages);
         setDocVersion((v) => v + 1);
         setStatus("ready");
+        setEverReady(true);
+        // Retire the old document only now that its replacement can render.
+        if (previousDoc && previousDoc !== doc) void previousTask?.destroy();
       } catch {
         if (!cancelled) setStatus("error");
       }
@@ -86,13 +110,21 @@ export function SlideViewer({
     return () => {
       cancelled = true;
       renderTaskRef.current?.cancel();
+    };
+    // onPageCount is intentionally not a dependency — reload only on a new
+    // storage object, not on signed-URL token rotation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docKey]);
+
+  // Tear down pdf.js only on unmount — never on token churn.
+  useEffect(() => {
+    return () => {
+      renderTaskRef.current?.cancel();
       void loadingTaskRef.current?.destroy();
       loadingTaskRef.current = null;
       docRef.current = null;
     };
-    // onPageCount is intentionally not a dependency — reload only on new file.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileUrl]);
+  }, []);
 
   // Render the requested page whenever it (or the doc) changes.
   useEffect(() => {
@@ -138,12 +170,12 @@ export function SlideViewer({
 
   return (
     <div ref={containerRef} className={className}>
-      {status === "loading" && (
+      {status === "loading" && !everReady && (
         <div className="grid aspect-video place-items-center rounded-lg bg-muted text-sm text-muted-foreground">
           Loading slides…
         </div>
       )}
-      {status === "error" && (
+      {status === "error" && !everReady && (
         <div className="grid aspect-video place-items-center rounded-lg bg-muted text-sm text-muted-foreground">
           Couldn&apos;t load the deck. Refresh to retry.
         </div>
@@ -151,7 +183,7 @@ export function SlideViewer({
       <canvas
         ref={canvasRef}
         className={
-          status !== "ready"
+          !everReady
             ? "hidden"
             : fit === "contain"
               ? "max-h-full max-w-full"
