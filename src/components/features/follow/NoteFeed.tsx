@@ -196,10 +196,10 @@ export function NoteFeed({ courseId, lectureId, page, initialEntries }: Props) {
     };
   }, [commit]);
 
-  // New notes land at the bottom; keep them in view.
+  // New notes land at the top, right under the entry box; keep them in view.
   useEffect(() => {
     const list = listRef.current;
-    if (list) list.scrollTop = list.scrollHeight;
+    if (list) list.scrollTop = 0;
   }, [entries.length]);
 
   const statusLine =
@@ -228,35 +228,6 @@ export function NoteFeed({ courseId, lectureId, page, initialEntries }: Props) {
       </CardHeader>
 
       <CardContent className="grid gap-3">
-        {entries.length > 0 ? (
-          <ul
-            ref={listRef}
-            className="grid max-h-72 gap-2 overflow-y-auto pr-1"
-          >
-            {entries.map((entry) => (
-              <NoteEntryItem
-                key={entry.id}
-                courseId={courseId}
-                entry={entry}
-                onUpdated={(id, content) =>
-                  setEntries((prev) =>
-                    prev.map((e) => (e.id === id ? { ...e, content } : e))
-                  )
-                }
-                onDeleted={(id) =>
-                  setEntries((prev) => prev.filter((e) => e.id !== id))
-                }
-              />
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Notes you take here are saved to your account and stamped with the
-            slide you were on. You can export them as Markdown or email them to
-            yourself anytime.
-          </p>
-        )}
-
         <div className="grid gap-2">
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="font-normal">
@@ -288,6 +259,41 @@ export function NoteFeed({ courseId, lectureId, page, initialEntries }: Props) {
             </Button>
           </div>
         </div>
+
+        {entries.length > 0 ? (
+          // Newest first, so a note you just typed sits right under the box.
+          // The list is stored oldest-first; downloads read from the database
+          // and stay chronological regardless of what's shown here.
+          <ul
+            ref={listRef}
+            className="grid max-h-72 gap-2 overflow-y-auto pr-1"
+          >
+            {entries
+              .slice()
+              .reverse()
+              .map((entry) => (
+                <NoteEntryItem
+                  key={entry.id}
+                  courseId={courseId}
+                  entry={entry}
+                  onUpdated={(id, content) =>
+                    setEntries((prev) =>
+                      prev.map((e) => (e.id === id ? { ...e, content } : e))
+                    )
+                  }
+                  onDeleted={(id) =>
+                    setEntries((prev) => prev.filter((e) => e.id !== id))
+                  }
+                />
+              ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Notes you take here are saved to your account and stamped with the
+            slide you were on. You can export them as Markdown or email them to
+            yourself anytime — in the order the lecture happened.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
