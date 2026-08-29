@@ -9,29 +9,37 @@ import { Label } from "@/components/ui/label";
 import { updateMyName } from "@/server/actions/profile";
 
 /**
- * Edit the name (and how to say it) the class sees. Mirrors the first
- * onboarding step, so the two places you set your name look the same.
+ * Edit given and family names separately, plus how to say them. Mirrors the
+ * first onboarding step, so the two places you set your name look the same.
  */
 export function NameForm({
-  initialName,
+  initialFirst,
+  initialLast,
   initialPhonetic,
 }: {
-  initialName: string;
+  initialFirst: string;
+  initialLast: string;
   initialPhonetic: string;
 }) {
   const router = useRouter();
-  const [name, setName] = useState(initialName);
+  const [first, setFirst] = useState(initialFirst);
+  const [last, setLast] = useState(initialLast);
   const [phonetic, setPhonetic] = useState(initialPhonetic);
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
-    const result = await updateMyName({ fullName: name, namePhonetic: phonetic });
+    const result = await updateMyName({
+      firstName: first,
+      lastName: last,
+      namePhonetic: phonetic,
+    });
     setSaving(false);
     if (result.ok && result.data) {
-      setName(result.data.fullName);
+      setFirst(result.data.firstName);
+      setLast(result.data.lastName);
       toast.success("Saved — that's the name your class sees now.");
-      // The header on this page reads full_name from the server.
+      // The header on this page reads the composed name from the server.
       router.refresh();
     } else if (!result.ok) {
       toast.error(result.error);
@@ -40,16 +48,27 @@ export function NameForm({
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-2">
-        <Label htmlFor="displayName">Your name</Label>
-        <Input
-          id="displayName"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Jordan Rivera"
-          className="max-w-md"
-          autoComplete="name"
-        />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="firstName">First name</Label>
+          <Input
+            id="firstName"
+            value={first}
+            onChange={(e) => setFirst(e.target.value)}
+            placeholder="Jordan"
+            autoComplete="given-name"
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="lastName">Last name</Label>
+          <Input
+            id="lastName"
+            value={last}
+            onChange={(e) => setLast(e.target.value)}
+            placeholder="Rivera"
+            autoComplete="family-name"
+          />
+        </div>
       </div>
       <div className="grid gap-2">
         <Label htmlFor="displayPhonetic">

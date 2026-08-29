@@ -5,16 +5,18 @@ import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
 import { normalizeLinkedInUrl } from "@/lib/linkedin";
 import { validateUserDoc, byteLength } from "@/lib/usermd";
-import { isEmailAddress } from "@/lib/names";
+import { isEmailAddress, composeFullName } from "@/lib/names";
 import { invalidateCourseDirectory } from "@/lib/coursedirectory";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
  * Change the name (and optional pronunciation) the class sees.
  *
- * Onboarding is the only other place this gets set, and a student who typed
- * the wrong thing there — or goes by something other than the registrar name
- * Canvas imported — had no way back to it. This writes the same two columns.
+ * Given and family names are edited separately (0042) and composed into the
+ * canonical `full_name` the rest of the app reads. Onboarding is the only
+ * other place this gets set, and a student who typed the wrong thing there —
+ * or goes by something other than the registrar name Canvas imported — had no
+ * way back to it.
  *
  * The name shows on the seat map and in the name games, both of which read
  * through the per-course directory cache, so every course this person is in
@@ -22,26 +24,29 @@ import type { ActionResult } from "@/server/actions/auth";
  * until the cache TTL lapses.
  */
 export async function updateMyName(input: {
-  fullName: string;
+  firstName: string;
+  lastName: string;
   namePhonetic?: string;
-}): Promise<ActionResult<{ fullName: string }>> {
+}): Promise<ActionResult<{ firstName: string; lastName: string; fullName: string }>> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in first." };
 
-  const fullName = input.fullName.trim();
-  if (fullName.length < 2) {
+  const firstName = input.firstName.trim();
+  const lastName = input.lastName.trim();
+  if (firstName.length < 1) {
     return {
       ok: false,
-      error: "Tell us your name — it's how classmates find you.",
+      error: "Add your first name — it's how classmates find you.",
     };
   }
+  const fullName = composeFullName(firstName, lastName);
   if (fullName.length > 80) {
     return { ok: false, error: "That name is too long — keep it under 80 characters." };
   }
-  if (isEmailAddress(fullName)) {
+  if (isEmailAddress(firstName) || isEmailAddress(lastName)) {
     return {
       ok: false,
       error: "That looks like an email — use the name you'd like classmates to see.",
@@ -52,6 +57,8 @@ export async function updateMyName(input: {
   const { error } = await supabase
     .from("profiles")
     .update({
+      first_name: firstName,
+      last_name: lastName.length > 0 ? lastName : null,
       full_name: fullName,
       name_phonetic: namePhonetic.length > 0 ? namePhonetic : null,
     })
@@ -66,7 +73,7 @@ export async function updateMyName(input: {
   for (const e of enrollments ?? []) invalidateCourseDirectory(e.course_id);
 
   revalidatePath("/profile");
-  return { ok: true, data: { fullName } };
+  return { ok: true, data: { firstName, lastName, fullName } };
 }
 
 /**

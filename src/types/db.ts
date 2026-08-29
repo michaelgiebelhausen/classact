@@ -38,6 +38,10 @@ export type ProfileRow = {
   /** @deprecated Inert since 0035 — see the note on `Role`. */
   role: Role
   full_name: string | null
+  /** Given/family names the person edits separately (0042). full_name is
+   *  composed from them on save; null on rows not edited since the migration. */
+  first_name: string | null
+  last_name: string | null
   name_phonetic: string | null
   onboarding_complete: boolean
   university_id: string | null

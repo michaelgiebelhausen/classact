@@ -206,3 +206,33 @@ export function rosterDisplayName(
 export function isEmailAddress(value: string): boolean {
   return value.indexOf("@") > 0 && /^\S+@\S+\.\S+$/.test(value.trim());
 }
+
+/**
+ * Split a self-entered name into given/family parts to pre-fill the profile
+ * editor's two fields, for someone who has a `full_name` but no saved parts
+ * yet. The last token is taken as the surname and everything before it as the
+ * given name(s); a single token is all given name.
+ *
+ * Only ever a pre-fill guess — the moment the person saves the two fields,
+ * those are stored authoritatively and this is never consulted for them again.
+ * That is the point of storing the parts: a combined string can't be split
+ * back reliably ("Mary Jane Watson"), so we guess once and then remember.
+ */
+export function splitForEditing(fullName: string): {
+  first: string;
+  last: string;
+} {
+  const tokens = (fullName ?? "").trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { first: "", last: "" };
+  if (tokens.length === 1) return { first: tokens[0], last: "" };
+  return {
+    first: tokens.slice(0, -1).join(" "),
+    last: tokens[tokens.length - 1],
+  };
+}
+
+/** Compose the canonical `full_name` the rest of the app reads from the two
+ *  edited parts. A blank part simply drops out, so a mononym stays a mononym. */
+export function composeFullName(first: string, last: string): string {
+  return [first.trim(), last.trim()].filter(Boolean).join(" ");
+}

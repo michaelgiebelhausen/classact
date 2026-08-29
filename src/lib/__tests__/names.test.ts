@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   compareByLastName,
+  composeFullName,
   initialsOf,
   isEmailAddress,
   lastNameOf,
   rosterDisplayName,
   sortByLastName,
+  splitForEditing,
 } from "@/lib/names";
 
 describe("lastNameOf", () => {
@@ -213,6 +215,45 @@ describe("rosterDisplayName", () => {
       "jsmith@clemson.edu"
     );
     expect(rosterDisplayName("jsmith@clemson.edu", null)).not.toContain("@");
+  });
+});
+
+describe("splitForEditing", () => {
+  it("takes the last token as the surname and the rest as the given name", () => {
+    expect(splitForEditing("Jordan Rivera")).toEqual({
+      first: "Jordan",
+      last: "Rivera",
+    });
+    expect(splitForEditing("Mary Jane Watson")).toEqual({
+      first: "Mary Jane",
+      last: "Watson",
+    });
+  });
+
+  it("treats a single token as all given name", () => {
+    expect(splitForEditing("Cher")).toEqual({ first: "Cher", last: "" });
+  });
+
+  it("handles blank and whitespace without throwing", () => {
+    expect(splitForEditing("")).toEqual({ first: "", last: "" });
+    expect(splitForEditing("   ")).toEqual({ first: "", last: "" });
+    expect(splitForEditing("  Ada  Lovelace ")).toEqual({
+      first: "Ada",
+      last: "Lovelace",
+    });
+  });
+});
+
+describe("composeFullName", () => {
+  it("joins the two parts with a single space", () => {
+    expect(composeFullName("Jordan", "Rivera")).toBe("Jordan Rivera");
+    expect(composeFullName(" Mary Jane ", " Watson ")).toBe("Mary Jane Watson");
+  });
+
+  it("drops a blank part so a mononym stays a mononym", () => {
+    expect(composeFullName("Cher", "")).toBe("Cher");
+    expect(composeFullName("", "Rivera")).toBe("Rivera");
+    expect(composeFullName("  ", "  ")).toBe("");
   });
 });
 

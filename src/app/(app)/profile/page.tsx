@@ -18,6 +18,7 @@ import { LinkedInForm } from "@/components/features/profile/LinkedInForm";
 import { UserDocUpload } from "@/components/features/profile/UserDocUpload";
 import { getMyUserDoc } from "@/server/actions/profile";
 import { icebreakersByKey, DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
+import { splitForEditing } from "@/lib/names";
 import type { PhotoKind } from "@/types/db";
 
 export default async function ProfilePage() {
@@ -50,6 +51,14 @@ export default async function ProfilePage() {
   // sections rather than instead of them.
   const membership = await getMembership(profile.id);
   const isProfessor = membership ? teaches(membership) : false;
+
+  // Stored parts win; before this person has saved (or before 0042 ran) fall
+  // back to splitting the composed name so the two fields still pre-fill.
+  const hasNameParts =
+    Boolean(profile.first_name?.trim()) || Boolean(profile.last_name?.trim());
+  const { first: initialFirst, last: initialLast } = hasNameParts
+    ? { first: profile.first_name ?? "", last: profile.last_name ?? "" }
+    : splitForEditing(profile.full_name ?? "");
   // Its own table and its own query — deliberately not on `profiles`, which
   // getProfile() pulls in full on nearly every page.
   const userDoc = await getMyUserDoc();
@@ -94,7 +103,8 @@ export default async function ProfilePage() {
         </CardHeader>
         <CardContent>
           <NameForm
-            initialName={profile.full_name ?? ""}
+            initialFirst={initialFirst}
+            initialLast={initialLast}
             initialPhonetic={profile.name_phonetic ?? ""}
           />
         </CardContent>

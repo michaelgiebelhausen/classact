@@ -44,8 +44,8 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
   },
   {
     table: "profiles",
-    columns: ["school_email", "school_email_verified_at"],
-    migration: "0032_school_email.sql",
+    columns: ["school_email", "school_email_verified_at", "first_name", "last_name"],
+    migration: "0032_school_email.sql / 0042_profile_name_parts.sql",
   },
   {
     table: "assignments",

@@ -22,7 +22,8 @@ import { icebreakersByKey } from "@/lib/icebreakers";
 import type { PhotoKind } from "@/types/db";
 
 interface Props {
-  initialName: string;
+  initialFirst: string;
+  initialLast: string;
   initialPhonetic: string;
   photoUrls: Partial<Record<PhotoKind, string>>;
   icebreakerKeys: string[];
@@ -30,7 +31,8 @@ interface Props {
 }
 
 export function OnboardingFlow({
-  initialName,
+  initialFirst,
+  initialLast,
   initialPhonetic,
   photoUrls,
   icebreakerKeys,
@@ -39,7 +41,8 @@ export function OnboardingFlow({
   const router = useRouter();
   const fields = icebreakersByKey(icebreakerKeys);
   const [step, setStep] = useState(0);
-  const [fullName, setFullName] = useState(initialName);
+  const [firstName, setFirstName] = useState(initialFirst);
+  const [lastName, setLastName] = useState(initialLast);
   const [namePhonetic, setNamePhonetic] = useState(initialPhonetic);
   // Was the field pre-filled with an AI-generated guess? Changes the nudge copy.
   const guessedPhonetic = initialPhonetic.trim().length > 0;
@@ -49,13 +52,18 @@ export function OnboardingFlow({
   const steps = fields.length > 0 ? 2 : 1;
 
   async function finish() {
-    if (fullName.trim().length < 2) {
+    if (firstName.trim().length < 1) {
       toast.error("Tell us your name — it's how classmates find you.");
       setStep(0);
       return;
     }
     setFinishing(true);
-    const result = await completeOnboarding({ fullName, namePhonetic, answers });
+    const result = await completeOnboarding({
+      firstName,
+      lastName,
+      namePhonetic,
+      answers,
+    });
     if (result.ok) {
       capture("onboarding_completed");
       toast.success("You're set. See you in class.");
@@ -81,15 +89,28 @@ export function OnboardingFlow({
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-6">
-            <div className="grid gap-2">
-              <Label htmlFor="fullName">Your name</Label>
-              <Input
-                id="fullName"
-                required
-                placeholder="Jordan Rivera"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="firstName">First name</Label>
+                <Input
+                  id="firstName"
+                  required
+                  placeholder="Jordan"
+                  autoComplete="given-name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="lastName">Last name</Label>
+                <Input
+                  id="lastName"
+                  placeholder="Rivera"
+                  autoComplete="family-name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                />
+              </div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="namePhonetic">

@@ -358,6 +358,35 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Students can edit their name — first/last separately (0042)
+
+**Run `supabase/migrations/0042_profile_name_parts.sql` BEFORE deploying.**
+It adds nullable `profiles.first_name` and `profiles.last_name`. Unlike the
+read-only guards elsewhere, this one is a **write path**: both onboarding
+(`completeOnboarding`) and the profile editor (`updateMyName`) now write those
+columns, so a deploy that lands before the migration makes finishing
+onboarding and saving a name fail with an error toast until it's applied. The
+schema guard knows the columns (folded into the existing `profiles` contract
+entry), so the boot alert names 0042 too.
+
+**What shipped.**
+- A "Your name" card on the profile page: separate **First name** / **Last
+  name** fields plus optional pronunciation. Onboarding's name step is now the
+  same two fields.
+- `full_name` stays the single value the rest of the app displays and sorts
+  by; it's composed as `"first last"` on save (a blank part drops out, so a
+  mononym stays one). `first_name`/`last_name` are read only by the two
+  editors, which pre-fill by splitting `full_name` for anyone who hasn't saved
+  since the migration.
+- **A chosen name now replaces the roster name for the whole class** (the
+  product call from this session), not just for course-code joiners.
+  `rosterDisplayName` prefers a set `full_name` over the imported registrar
+  name; the course directory looks it up for every enrolled profile. The
+  professor's roster admin and gradebook still read the raw `roster_name`, so
+  the registrar spelling is never lost — only the live seat map and name games
+  follow the student's pick. Tradeoff accepted: the professor's live seat map
+  may not match their Canvas gradebook for a student who renames themselves.
+
 ## Transcripts, syllabus, and Ask the TA (0040 + 0041)
 
 **Run `supabase/migrations/0040_course_materials.sql` AND

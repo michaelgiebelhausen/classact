@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { getSignedPhotoUrls } from "@/lib/storage";
 import { DEFAULT_ICEBREAKER_KEYS } from "@/lib/icebreakers";
+import { splitForEditing } from "@/lib/names";
 import { OnboardingFlow } from "@/components/features/profile/OnboardingFlow";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,14 @@ export default async function OnboardingPage() {
   const icebreakerKeys =
     keySet.size > 0 ? Array.from(keySet) : DEFAULT_ICEBREAKER_KEYS;
 
+  // Prefer saved parts; otherwise split the composed name to pre-fill both
+  // fields (a returning student who onboarded before parts existed).
+  const hasNameParts =
+    Boolean(profile.first_name?.trim()) || Boolean(profile.last_name?.trim());
+  const { first: initialFirst, last: initialLast } = hasNameParts
+    ? { first: profile.first_name ?? "", last: profile.last_name ?? "" }
+    : splitForEditing(profile.full_name ?? "");
+
   // Existing photos + answers (resume support).
   const { data: photos } = await supabase
     .from("profile_photos")
@@ -77,7 +86,8 @@ export default async function OnboardingPage() {
         Welcome to ClassAct
       </h1>
       <OnboardingFlow
-        initialName={profile.full_name ?? ""}
+        initialFirst={initialFirst}
+        initialLast={initialLast}
         initialPhonetic={profile.name_phonetic || autoPhonetic}
         photoUrls={photoUrls}
         icebreakerKeys={icebreakerKeys}

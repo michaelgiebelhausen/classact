@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { ICEBREAKER_CATALOG } from "@/lib/icebreakers";
+import { composeFullName } from "@/lib/names";
 import type { ActionResult } from "@/server/actions/auth";
 
 const answersSchema = z.record(z.string(), z.string().trim().max(2000));
@@ -11,16 +12,22 @@ const answersSchema = z.record(z.string(), z.string().trim().max(2000));
 /**
  * Finish student onboarding (FR-007): save name + icebreaker answers to every
  * course the student belongs to, then mark onboarding complete.
+ *
+ * Given and family names are captured separately (0042) and composed into the
+ * canonical `full_name` the rest of the app reads.
  */
 export async function completeOnboarding(input: {
-  fullName: string;
+  firstName: string;
+  lastName: string;
   namePhonetic?: string;
   answers: Record<string, string>;
 }): Promise<ActionResult> {
-  const fullName = input.fullName.trim();
-  if (fullName.length < 2) {
+  const firstName = input.firstName.trim();
+  const lastName = input.lastName.trim();
+  if (firstName.length < 1) {
     return { ok: false, error: "Tell us your name — it's how classmates find you." };
   }
+  const fullName = composeFullName(firstName, lastName);
   // Optional pronunciation guide; keep it short and store null when blank.
   const namePhonetic = (input.namePhonetic ?? "").trim().slice(0, 100);
   const parsedAnswers = answersSchema.safeParse(input.answers);
@@ -67,6 +74,8 @@ export async function completeOnboarding(input: {
   const { error: profileError } = await supabase
     .from("profiles")
     .update({
+      first_name: firstName,
+      last_name: lastName.length > 0 ? lastName : null,
       full_name: fullName,
       name_phonetic: namePhonetic.length > 0 ? namePhonetic : null,
       onboarding_complete: true,
