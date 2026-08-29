@@ -8,7 +8,7 @@ import { PollResultsChart } from "@/components/features/follow/PollResultsChart"
 import { setLecturePage } from "@/server/actions/lectures";
 import { closePollRound } from "@/server/actions/polls";
 import { pollOptionText } from "@/lib/participate";
-import { onWake } from "@/lib/live-sync";
+import { subscribeWithRecovery } from "@/lib/live-sync";
 import {
   lectureChannelName,
   type LectureSyncMessage,
@@ -96,15 +96,19 @@ export function StageView({
   // 5s polling fallback when realtime drops (same pattern as slide sync).
   useEffect(() => {
     const supabase = createClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    // Fresher-realtime guard: a slow catch-up defers to any realtime poll event
+    // that landed while it was in flight.
+    let realtimeSeq = 0;
 
     async function pollRound() {
+      const issued = realtimeSeq;
       const { data } = await supabase
         .from("poll_rounds")
         .select("id, prompt, options, stage, results, correct_indices")
         .eq("lecture_id", lectureId)
         .neq("stage", "closed")
         .maybeSingle();
+      if (realtimeSeq !== issued) return;
       if (!data) {
         if (pollRef.current) applyPoll(null);
         return;
@@ -122,10 +126,11 @@ export function StageView({
       }
     }
 
-    function connect() {
-      return supabase
-        .channel(`stage-polls:${lectureId}`)
-        .on(
+    return subscribeWithRecovery({
+      client: supabase,
+      topic: (g) => `stage-polls:${lectureId}:${g}`,
+      bind: (channel) =>
+        channel.on(
           "postgres_changes",
           {
             event: "*",
@@ -134,6 +139,7 @@ export function StageView({
             filter: `lecture_id=eq.${lectureId}`,
           },
           (payload) => {
+            realtimeSeq++;
             const rec = payload.new as {
               id?: string;
               prompt?: string;
@@ -156,36 +162,9 @@ export function StageView({
               correctIndices: rec.correct_indices ?? null,
             });
           }
-        )
-        .subscribe((status) => {
-          const ok = status === "SUBSCRIBED";
-          if (!ok && !pollTimer) {
-            pollTimer = setInterval(() => void pollRound(), 5000);
-          }
-          if (ok && pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-          }
-        });
-    }
-
-    let channel = connect();
-
-    let lastResync = 0;
-    const stopWake = onWake(() => {
-      const now = Date.now();
-      if (now - lastResync < 1000) return;
-      lastResync = now;
-      void pollRound();
-      supabase.removeChannel(channel);
-      channel = connect();
+        ),
+      catchUp: pollRound,
     });
-
-    return () => {
-      stopWake();
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
-    };
   }, [lectureId, applyPoll]);
 
   // Cross-device fallback: follow the lecture row like a student would — with
@@ -195,30 +174,43 @@ export function StageView({
   // slide on return rather than trust a possibly-zombie socket.
   useEffect(() => {
     const supabase = createClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    // Bumped on every realtime apply, so a slow catch-up SELECT bows out if a
+    // fresher realtime update landed while it was in flight (no backward jump).
+    let realtimeSeq = 0;
 
-    async function poll() {
+    function applyRow(rec: {
+      current_page: number;
+      ended_at: string | null;
+      pauses?: Array<{ start: string; end: string | null }> | null;
+    }) {
+      if (rec.ended_at) {
+        setEnded(true);
+        return;
+      }
+      pageRef.current = rec.current_page;
+      setPage(rec.current_page);
+      if (rec.pauses) {
+        const last = rec.pauses[rec.pauses.length - 1];
+        setPaused(Boolean(last && last.end === null));
+      }
+    }
+
+    async function catchUp() {
+      const issued = realtimeSeq;
       const { data } = await supabase
         .from("lectures")
         .select("current_page, ended_at, pauses")
         .eq("id", lectureId)
         .maybeSingle();
-      if (!data) return;
-      if (data.ended_at) {
-        setEnded(true);
-        return;
-      }
-      pageRef.current = data.current_page;
-      setPage(data.current_page);
-      const pauses = data.pauses ?? [];
-      const last = pauses[pauses.length - 1];
-      setPaused(Boolean(last && last.end === null));
+      if (!data || realtimeSeq !== issued) return;
+      applyRow(data);
     }
 
-    function connect() {
-      return supabase
-        .channel(`stage:${lectureId}`)
-        .on(
+    return subscribeWithRecovery({
+      client: supabase,
+      topic: (g) => `stage:${lectureId}:${g}`,
+      bind: (channel) =>
+        channel.on(
           "postgres_changes",
           {
             event: "UPDATE",
@@ -227,51 +219,18 @@ export function StageView({
             filter: `id=eq.${lectureId}`,
           },
           (payload) => {
-            const rec = payload.new as {
-              current_page: number;
-              ended_at: string | null;
-              pauses?: Array<{ start: string; end: string | null }> | null;
-            };
-            if (rec.ended_at) {
-              setEnded(true);
-              return;
-            }
-            pageRef.current = rec.current_page;
-            setPage(rec.current_page);
-            if (rec.pauses) {
-              const last = rec.pauses[rec.pauses.length - 1];
-              setPaused(Boolean(last && last.end === null));
-            }
+            realtimeSeq++;
+            applyRow(
+              payload.new as {
+                current_page: number;
+                ended_at: string | null;
+                pauses?: Array<{ start: string; end: string | null }> | null;
+              }
+            );
           }
-        )
-        .subscribe((status) => {
-          const ok = status === "SUBSCRIBED";
-          if (!ok && !pollTimer) pollTimer = setInterval(() => void poll(), 5000);
-          if (ok && pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-          }
-        });
-    }
-
-    let channel = connect();
-
-    let lastResync = 0;
-    const stopWake = onWake(() => {
-      // focus + visibilitychange can both fire on one wake; collapse the burst.
-      const now = Date.now();
-      if (now - lastResync < 1000) return;
-      lastResync = now;
-      void poll();
-      supabase.removeChannel(channel);
-      channel = connect();
+        ),
+      catchUp,
     });
-
-    return () => {
-      stopWake();
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
-    };
   }, [lectureId]);
 
   // The professor may click through with this window focused too.
