@@ -31,7 +31,8 @@ export async function HEAD(): Promise<Response> {
  * Post-auth landing for students joining by code:
  * 1. Look up the course by join code.
  * 2. Match the authed email to a roster row -> link + activate.
- *    Off-roster -> create a pending ('invited') enrollment the professor can see.
+ *    Off-roster -> active enrollment immediately: the join code is the approval.
+ *    The course's own professor -> no enrollment at all, straight to the course.
  * 3. Send the student to onboarding.
  * Uses the admin client (join codes are pre-membership), but every write is
  * bound to the authed user's own email/profile id.
@@ -64,11 +65,27 @@ export async function GET(request: NextRequest) {
 
   const { data: course } = await admin
     .from("courses")
-    .select("id")
+    .select("id, professor_id")
     .eq("join_code", code)
     .single();
   if (!course) {
     return NextResponse.redirect(new URL("/join?error=badcode", env.siteUrl));
+  }
+
+  if (course.professor_id === user.id) {
+    // The professor used their own course's join code — usually testing it.
+    // They already have the course; enrolling them as their own student put a
+    // "Pending approval" card in "Classes I'm in" and themselves in their own
+    // approval queue. Clean up any such row from before and go to the course.
+    await admin
+      .from("enrollments")
+      .delete()
+      .eq("course_id", course.id)
+      .eq("profile_id", user.id);
+    invalidateCourseDirectory(course.id);
+    return NextResponse.redirect(
+      new URL(`/course/${course.id}`, env.siteUrl)
+    );
   }
 
   const email = user.email.toLowerCase();
@@ -99,7 +116,9 @@ export async function GET(request: NextRequest) {
         .eq("id", existing.id);
     }
   } else {
-    // Off-roster joiner: pending row the professor can approve (Open Q6).
+    // Off-roster joiner. Open Q6 is answered: holding the join code IS the
+    // approval — the professor handed it out, so whoever presents it is in,
+    // active immediately, with no queue to click through.
     //
     // Unless they are already in this course under another address. The match
     // above is by roster_email, so a student whose row carries their Canvas
@@ -113,7 +132,7 @@ export async function GET(request: NextRequest) {
     // named. Re-using the code is then a no-op rather than a duplicate.
     const { data: alreadyIn } = await admin
       .from("enrollments")
-      .select("id")
+      .select("id, status")
       .eq("course_id", course.id)
       .eq("profile_id", user.id)
       .neq("status", "dropped")
@@ -125,8 +144,14 @@ export async function GET(request: NextRequest) {
         profile_id: user.id,
         roster_name: (user.user_metadata?.full_name as string) ?? email,
         roster_email: email,
-        status: "invited",
+        status: "active",
       });
+    } else if (alreadyIn.status === "invited") {
+      // Left pending under the old approval rule — the code lets them in now.
+      await admin
+        .from("enrollments")
+        .update({ status: "active" })
+        .eq("id", alreadyIn.id);
     }
   }
 
