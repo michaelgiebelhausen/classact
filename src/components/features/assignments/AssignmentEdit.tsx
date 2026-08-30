@@ -85,6 +85,9 @@ export function AssignmentEdit({
   const [points, setPoints] = useState(initialPointsText);
   const [taste, setTaste] = useState(initialTaste);
   const [tasteReq, setTasteReq] = useState(initialTasteReq);
+  // Live grading mode drives the labels below, so the panel reflects the
+  // choice before it's saved. `gradingMode` stays the committed value.
+  const [mode, setMode] = useState(gradingMode);
   // Brief file swap: a chosen replacement, or an explicit "remove". The
   // current file itself lives in storage — only the pointer changes here.
   const briefRef = useRef<HTMLInputElement>(null);
@@ -107,6 +110,9 @@ export function AssignmentEdit({
   // what the deliverable includes after they've handed it in would fail people
   // retroactively (the server enforces the same window).
   const canEditTasteReq = state === "open";
+  // The grading mode decides whether students write taste files at all, so it
+  // can only move while the assignment is still open (same window server-side).
+  const canEditMode = state === "open";
 
   async function save() {
     const input: Parameters<typeof updateAssignment>[0] = { assignmentId };
@@ -137,12 +143,12 @@ export function AssignmentEdit({
     const tasteChanged =
       canEditTaste && taste.trim() !== initialTaste.trim();
 
-    // The taste requirement rides setGradingOptions, and only exists in tasty
-    // mode (ai_only has no student taste files).
+    // Grading mode and the taste requirement both ride setGradingOptions. The
+    // requirement only exists in tasty mode, keyed off the LIVE mode so a
+    // requirement chosen right after switching to tasty still saves.
+    const modeChanged = canEditMode && mode !== gradingMode;
     const tasteReqChanged =
-      gradingMode === "tasty" &&
-      canEditTasteReq &&
-      tasteReq !== initialTasteReq;
+      mode === "tasty" && canEditTasteReq && tasteReq !== initialTasteReq;
 
     // The brief file: replace it (a new one chosen) or remove it (explicitly
     // cleared). The upload itself waits until we're actually saving.
@@ -160,6 +166,7 @@ export function AssignmentEdit({
       !fieldsChanged &&
       !tasteChanged &&
       !tasteReqChanged &&
+      !modeChanged &&
       briefIntent === "none"
     ) {
       setOpen(false);
@@ -167,8 +174,10 @@ export function AssignmentEdit({
     }
 
     // In ai_only mode the taste file IS the rubric students are graded
-    // against — it can't be blanked. (The server refuses this too.)
-    if (tasteChanged && gradingMode === "ai_only" && !taste.trim()) {
+    // against — it must exist and can't be blanked, whether the assignment was
+    // already ai_only or is being switched to it now. (The server refuses this
+    // too.) Only relevant while open, where the taste and mode can change.
+    if (canEditTaste && mode === "ai_only" && !taste.trim()) {
       toast.error(
         "AI-only grading needs your taste file — it's the standard students are graded against."
       );
@@ -215,10 +224,14 @@ export function AssignmentEdit({
           return;
         }
       }
-      if (tasteReqChanged) {
-        const result = await setGradingOptions(assignmentId, {
-          tasteRequirement: tasteReq,
-        });
+      // One call carries both grading knobs. It runs after the taste save so
+      // that switching to ai_only sees the professor's taste file already in
+      // place (the server requires it).
+      if (modeChanged || tasteReqChanged) {
+        const gradingPatch: Parameters<typeof setGradingOptions>[1] = {};
+        if (modeChanged) gradingPatch.gradingMode = mode;
+        if (tasteReqChanged) gradingPatch.tasteRequirement = tasteReq;
+        const result = await setGradingOptions(assignmentId, gradingPatch);
         if (!result.ok) {
           toast.error(result.error);
           return;
@@ -369,7 +382,7 @@ export function AssignmentEdit({
           <p className="text-xs text-muted-foreground">
             PDF or Markdown, up to 20 MB. Replace it if the wrong file went up —
             students see the new one right away.
-            {gradingMode === "tasty" && state === "open"
+            {mode === "tasty" && state === "open"
               ? " The AI drafted each student's starting taste file from the original brief; swapping the file here doesn't redraw that."
               : ""}
           </p>
@@ -392,8 +405,39 @@ export function AssignmentEdit({
         </div>
 
         <div className="grid gap-1.5">
+          <Label>Grading mode</Label>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "tasty" ? "default" : "outline"}
+              disabled={!canEditMode}
+              onClick={() => setMode("tasty")}
+            >
+              Tasty Grading (peers + AI)
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "ai_only" ? "default" : "outline"}
+              disabled={!canEditMode}
+              onClick={() => setMode("ai_only")}
+            >
+              AI-only (no peer review)
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {!canEditMode
+              ? "Locked once grading starts — this decides whether students write taste files."
+              : mode === "tasty"
+                ? "Students write taste files, a rubric emerges from the class, and peers refine the AI's ranking."
+                : "For objective work (quiz screenshots, checklists): the AI grades every submission against your taste file — no student taste files, no peer round."}
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
           <Label htmlFor="edit-taste">
-            {gradingMode === "ai_only"
+            {mode === "ai_only"
               ? "Your taste file (the standard the AI grades against)"
               : "Your taste file"}
           </Label>
@@ -405,7 +449,7 @@ export function AssignmentEdit({
             rows={5}
             maxLength={10000}
             placeholder={
-              gradingMode === "ai_only"
+              mode === "ai_only"
                 ? "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
                 : "What would make this work genuinely good? Write it the way you'd say it out loud."
             }
@@ -414,13 +458,13 @@ export function AssignmentEdit({
           <p className="text-xs text-muted-foreground">
             {!canEditTaste
               ? "Locked — the rubric was already drawn from this at the deadline."
-              : gradingMode === "ai_only"
+              : mode === "ai_only"
                 ? "There's no emergent rubric in AI-only mode, so students are shown this — it's the standard every submission is graded against."
                 : "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."}
           </p>
         </div>
 
-        {gradingMode === "tasty" && (
+        {mode === "tasty" && (
           <div className="grid gap-1.5">
             <Label htmlFor="edit-taste-req">Students&apos; taste files</Label>
             <select
@@ -475,33 +519,35 @@ export function AssignmentEdit({
           )}
         </div>
 
-        <div className="grid gap-1.5">
-          <Label htmlFor="edit-peer-date">Peer grading closes</Label>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              id="edit-peer-date"
-              type="date"
-              value={pcDate}
-              onChange={(e) => setPcDate(e.target.value)}
-              disabled={!canEditPeerClose}
-              className="max-w-[160px]"
-            />
-            <Input
-              type="time"
-              value={pcTime}
-              onChange={(e) => setPcTime(e.target.value)}
-              disabled={!canEditPeerClose}
-              className="max-w-[120px]"
-            />
+        {mode === "tasty" && (
+          <div className="grid gap-1.5">
+            <Label htmlFor="edit-peer-date">Peer grading closes</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                id="edit-peer-date"
+                type="date"
+                value={pcDate}
+                onChange={(e) => setPcDate(e.target.value)}
+                disabled={!canEditPeerClose}
+                className="max-w-[160px]"
+              />
+              <Input
+                type="time"
+                value={pcTime}
+                onChange={(e) => setPcTime(e.target.value)}
+                disabled={!canEditPeerClose}
+                className="max-w-[120px]"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {canEditPeerClose
+                ? state === "peer_review"
+                  ? "Extend it to give judges more time — or move it to a minute from now to close peer grading early."
+                  : "Must be after the submission deadline."
+                : "Peer grading has already closed."}
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {canEditPeerClose
-              ? state === "peer_review"
-                ? "Extend it to give judges more time — or move it to a minute from now to close peer grading early."
-                : "Must be after the submission deadline."
-              : "Peer grading has already closed."}
-          </p>
-        </div>
+        )}
 
         <div className="flex gap-2">
           <Button onClick={() => void save()} disabled={saving}>

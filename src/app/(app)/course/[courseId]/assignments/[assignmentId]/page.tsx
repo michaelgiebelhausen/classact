@@ -299,7 +299,7 @@ export default async function AssignmentPage({
               )}
             </CardContent>
           </Card>
-          <SubmissionRoster rows={rosterRows} />
+          <SubmissionRoster rows={rosterRows} showTaste={gradingMode === "tasty"} />
         </div>
       );
     }

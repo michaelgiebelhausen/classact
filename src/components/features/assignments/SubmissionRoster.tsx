@@ -59,7 +59,15 @@ function tasteCell(taste: SubmissionRosterRow["taste"]) {
   );
 }
 
-export function SubmissionRoster({ rows }: { rows: SubmissionRosterRow[] }) {
+export function SubmissionRoster({
+  rows,
+  showTaste = true,
+}: {
+  rows: SubmissionRosterRow[];
+  /** AI-only assignments have no student taste files, so the column would
+   *  only ever show "—" — hide it there. */
+  showTaste?: boolean;
+}) {
   if (rows.length === 0) return null;
   const missing = rows.filter((r) => !r.submittedAt).length;
   return (
@@ -82,7 +90,7 @@ export function SubmissionRoster({ rows }: { rows: SubmissionRosterRow[] }) {
               <TableHead>Status</TableHead>
               <TableHead>Submitted</TableHead>
               <TableHead>Last edit</TableHead>
-              <TableHead>Taste file</TableHead>
+              {showTaste && <TableHead>Taste file</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -136,9 +144,11 @@ export function SubmissionRoster({ rows }: { rows: SubmissionRosterRow[] }) {
                     "—"
                   )}
                 </TableCell>
-                <TableCell className="whitespace-nowrap text-muted-foreground">
-                  {tasteCell(r.taste)}
-                </TableCell>
+                {showTaste && (
+                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                    {tasteCell(r.taste)}
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

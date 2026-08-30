@@ -17,7 +17,7 @@ import {
   type TasteRequirement,
 } from "@/lib/tastegrading";
 import type { ScoreMode } from "@/lib/bands";
-import { cleanTasteBody, isUntouchedTaste } from "@/lib/tasteprose";
+import { cleanTasteBody, isUntouchedTaste, tasteProse } from "@/lib/tasteprose";
 import { describeQueryFailure } from "@/lib/dberror";
 import {
   docKindFromPath,
@@ -580,15 +580,18 @@ export async function updateAssignment(input: {
 }
 
 /**
- * Professor: the three grading knobs, each gated by how far the assignment
- * has travelled.
+ * Professor: the grading knobs, each gated by how far the assignment has
+ * travelled.
  *
  * `tasteRequirement` closes with submissions — changing what the deliverable
  * includes after students have handed it in would retroactively fail people.
- * `scoreMode` freezes at publication, because it decides the numbers already
- * handed out. `scoreVisibility` deliberately stays editable forever: showing
- * a class the numbers behind their labels later is a normal thing to decide,
- * and it changes only what is displayed, never what was awarded.
+ * `gradingMode` closes at the same point (and for the same reason): it decides
+ * whether students write taste files at all, so it can only move while the
+ * assignment is still open. `scoreMode` freezes at publication, because it
+ * decides the numbers already handed out. `scoreVisibility` deliberately stays
+ * editable forever: showing a class the numbers behind their labels later is a
+ * normal thing to decide, and it changes only what is displayed, never what
+ * was awarded.
  */
 export async function setGradingOptions(
   assignmentId: string,
@@ -596,6 +599,7 @@ export async function setGradingOptions(
     scoreMode?: ScoreMode;
     scoreVisibility?: ScoreVisibility;
     tasteRequirement?: TasteRequirement;
+    gradingMode?: "tasty" | "ai_only";
   }
 ): Promise<ActionResult> {
   const { supabase, user } = await requireUser();
@@ -642,6 +646,40 @@ export async function setGradingOptions(
       };
     }
     merged.tasteRequirement = patch.tasteRequirement;
+  }
+
+  if (patch.gradingMode !== undefined) {
+    if (patch.gradingMode !== "tasty" && patch.gradingMode !== "ai_only") {
+      return { ok: false, error: "Unknown grading mode." };
+    }
+    if (assignment.state !== "open") {
+      return {
+        ok: false,
+        error: "Grading has started — the grading mode can't change now.",
+      };
+    }
+    if (patch.gradingMode === "ai_only") {
+      // ai_only makes the professor's taste file the entire rubric, so it has
+      // to exist first — the same requirement createAssignment enforces.
+      const { data: profTaste } = await supabase
+        .from("taste_files")
+        .select("body, criteria, bar_statement")
+        .eq("assignment_id", assignmentId)
+        .is("enrollment_id", null)
+        .maybeSingle();
+      if (!tasteProse(profTaste).trim()) {
+        return {
+          ok: false,
+          error:
+            "AI-only grading needs your taste file first — it's the standard students are graded against.",
+        };
+      }
+      merged.gradingMode = "ai_only";
+    } else {
+      // tasty is the absence of the flag (matches createAssignment), so drop
+      // it rather than storing the string.
+      delete merged.gradingMode;
+    }
   }
 
   const { error } = await supabase
