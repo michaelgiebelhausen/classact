@@ -11,8 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   saveProfessorTaste,
+  setGradingOptions,
   updateAssignment,
 } from "@/server/actions/assignments";
+import type { TasteRequirement } from "@/lib/tastegrading";
 import type { AssignmentState } from "@/types/db";
 
 const ASSIGNMENT_BUCKET = "assignment-docs";
@@ -40,6 +42,8 @@ interface Props {
   gradingMode: "tasty" | "ai_only";
   /** The professor's own taste file, as prose (empty if none written). */
   professorTaste: string;
+  /** Whether a student taste file is invited, required, or off (tasty only). */
+  tasteRequirement: TasteRequirement;
   /** For uploading a replacement brief to `{courseId}/brief/…`. */
   courseId: string;
   /** Signed URL to view the currently attached brief, or null if none. */
@@ -67,6 +71,7 @@ export function AssignmentEdit({
   peerCloseAt,
   gradingMode,
   professorTaste: initialTaste,
+  tasteRequirement: initialTasteReq,
   courseId,
   briefUrl,
   briefExt,
@@ -79,6 +84,7 @@ export function AssignmentEdit({
   const [instructions, setInstructions] = useState(initialInstructions);
   const [points, setPoints] = useState(initialPointsText);
   const [taste, setTaste] = useState(initialTaste);
+  const [tasteReq, setTasteReq] = useState(initialTasteReq);
   // Brief file swap: a chosen replacement, or an explicit "remove". The
   // current file itself lives in storage — only the pointer changes here.
   const briefRef = useRef<HTMLInputElement>(null);
@@ -97,6 +103,10 @@ export function AssignmentEdit({
   // edit would change nothing and quietly imply it had — the server refuses
   // it too. Locked exactly like the deadline once grading starts.
   const canEditTaste = state === "open";
+  // Whether a student taste file is required closes with submissions: changing
+  // what the deliverable includes after they've handed it in would fail people
+  // retroactively (the server enforces the same window).
+  const canEditTasteReq = state === "open";
 
   async function save() {
     const input: Parameters<typeof updateAssignment>[0] = { assignmentId };
@@ -127,6 +137,13 @@ export function AssignmentEdit({
     const tasteChanged =
       canEditTaste && taste.trim() !== initialTaste.trim();
 
+    // The taste requirement rides setGradingOptions, and only exists in tasty
+    // mode (ai_only has no student taste files).
+    const tasteReqChanged =
+      gradingMode === "tasty" &&
+      canEditTasteReq &&
+      tasteReq !== initialTasteReq;
+
     // The brief file: replace it (a new one chosen) or remove it (explicitly
     // cleared). The upload itself waits until we're actually saving.
     const briefIntent: "replace" | "remove" | "none" = briefFile
@@ -139,7 +156,12 @@ export function AssignmentEdit({
     // keys rather than naming fields, so a new field can't be forgotten here
     // and silently fail to save.
     const fieldsChanged = Object.keys(input).length > 1;
-    if (!fieldsChanged && !tasteChanged && briefIntent === "none") {
+    if (
+      !fieldsChanged &&
+      !tasteChanged &&
+      !tasteReqChanged &&
+      briefIntent === "none"
+    ) {
       setOpen(false);
       return;
     }
@@ -188,6 +210,15 @@ export function AssignmentEdit({
       }
       if (tasteChanged) {
         const result = await saveProfessorTaste(assignmentId, taste);
+        if (!result.ok) {
+          toast.error(result.error);
+          return;
+        }
+      }
+      if (tasteReqChanged) {
+        const result = await setGradingOptions(assignmentId, {
+          tasteRequirement: tasteReq,
+        });
         if (!result.ok) {
           toast.error(result.error);
           return;
@@ -388,6 +419,34 @@ export function AssignmentEdit({
                 : "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."}
           </p>
         </div>
+
+        {gradingMode === "tasty" && (
+          <div className="grid gap-1.5">
+            <Label htmlFor="edit-taste-req">Students&apos; taste files</Label>
+            <select
+              id="edit-taste-req"
+              value={tasteReq}
+              onChange={(e) => setTasteReq(e.target.value as TasteRequirement)}
+              disabled={!canEditTasteReq}
+              className="h-9 max-w-md rounded-md border bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="optional">Invited — they can write one</option>
+              <option value="required">
+                Required — part of the deliverable
+              </option>
+              <option value="off">Not this time — don&apos;t ask</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {!canEditTasteReq
+                ? "Submissions have closed — what the deliverable includes can't change now."
+                : tasteReq === "required"
+                  ? "They can't hand in the work until they've written what makes it good."
+                  : tasteReq === "off"
+                    ? "No taste editor. The rubric emerges from your taste file and the AI's draft."
+                    : "They're asked, not blocked — most classes start here."}
+            </p>
+          </div>
+        )}
 
         <div className="grid gap-1.5">
           <Label htmlFor="edit-deadline-date">Submission deadline</Label>

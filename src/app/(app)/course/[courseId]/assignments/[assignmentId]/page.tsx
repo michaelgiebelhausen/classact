@@ -255,6 +255,7 @@ export default async function AssignmentPage({
             peerCloseAt={assignment.peer_close_at}
             gradingMode={gradingMode}
             professorTaste={professorTaste}
+            tasteRequirement={settings.tasteRequirement}
             courseId={courseId}
             briefUrl={briefUrl}
             briefExt={briefExt}
@@ -394,6 +395,7 @@ export default async function AssignmentPage({
           peerCloseAt={assignment.peer_close_at}
           gradingMode={gradingMode}
           professorTaste={professorTaste}
+          tasteRequirement={settings.tasteRequirement}
           courseId={courseId}
           briefUrl={briefUrl}
           briefExt={briefExt}
