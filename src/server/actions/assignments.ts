@@ -441,6 +441,10 @@ export async function updateAssignment(input: {
   deadline?: string;
   /** ISO datetime. */
   peerCloseAt?: string;
+  /** Swap the uploaded brief file: a new `{courseId}/brief/…` path (the
+   *  browser already uploaded it), or null to remove it. Like the text
+   *  brief, this is a reference document — fixable at any point. */
+  storagePath?: string | null;
 }): Promise<ActionResult> {
   const { supabase, user } = await requireUser();
   if (!user) return { ok: false, error: "Sign in first." };
@@ -461,7 +465,12 @@ export async function updateAssignment(input: {
   const patch: Partial<
     Pick<
       AssignmentRow,
-      "title" | "deadline" | "peer_close_at" | "instructions" | "points"
+      | "title"
+      | "deadline"
+      | "peer_close_at"
+      | "instructions"
+      | "points"
+      | "storage_path"
     >
   > = {};
 
@@ -469,6 +478,23 @@ export async function updateAssignment(input: {
     const title = input.title.trim().slice(0, 200);
     if (!title) return { ok: false, error: "Give the assignment a title." };
     patch.title = title;
+  }
+
+  // The uploaded brief is a student-facing reference, not a graded input, so
+  // like the text brief it can be swapped or removed at any point — most often
+  // because the wrong file went up. The AI drafted each student's starting
+  // taste file from the ORIGINAL brief at creation and is not re-run here;
+  // swapping the file corrects the reference, not that already-drawn seed.
+  if (input.storagePath !== undefined) {
+    if (input.storagePath === null) {
+      patch.storage_path = null;
+    } else if (
+      !input.storagePath.startsWith(`${assignment.course_id}/brief/`)
+    ) {
+      return { ok: false, error: "Upload didn't complete — try again." };
+    } else {
+      patch.storage_path = input.storagePath;
+    }
   }
 
   // Neither field is state-gated. Unlike the deadline — which is baked into
@@ -645,7 +671,7 @@ export async function saveProfessorTaste(
   if (!user) return { ok: false, error: "Sign in first." };
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, state, courses!inner(professor_id)")
+    .select("id, course_id, state, settings, courses!inner(professor_id)")
     .eq("id", assignmentId)
     .single();
   if (
@@ -662,6 +688,18 @@ export async function saveProfessorTaste(
   }
 
   const text = cleanTasteBody(body);
+  // In ai_only mode the taste file IS the rubric shown to students and graded
+  // against — creation requires it, and it can't be emptied later either.
+  if (
+    !text &&
+    (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
+  ) {
+    return {
+      ok: false,
+      error:
+        "AI-only grading needs your taste file — it's the standard students are graded against.",
+    };
+  }
   const now = new Date().toISOString();
   // The partial unique index (one professor row per assignment) can't be an
   // onConflict target, so this reads before it writes — same shape as the

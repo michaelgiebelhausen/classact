@@ -1,15 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Pencil } from "lucide-react";
+import { FileText, Pencil } from "lucide-react";
+import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateAssignment } from "@/server/actions/assignments";
+import {
+  saveProfessorTaste,
+  updateAssignment,
+} from "@/server/actions/assignments";
 import type { AssignmentState } from "@/types/db";
+
+const ASSIGNMENT_BUCKET = "assignment-docs";
 
 /**
  * Edit an assignment after it exists. The rules mirror the server action:
@@ -30,6 +36,16 @@ interface Props {
   /** ISO datetimes. */
   deadline: string;
   peerCloseAt: string;
+  /** Shapes the taste-file label and whether it may be emptied. */
+  gradingMode: "tasty" | "ai_only";
+  /** The professor's own taste file, as prose (empty if none written). */
+  professorTaste: string;
+  /** For uploading a replacement brief to `{courseId}/brief/…`. */
+  courseId: string;
+  /** Signed URL to view the currently attached brief, or null if none. */
+  briefUrl: string | null;
+  /** The current brief's extension ("pdf" | "md"), for the label. */
+  briefExt: string | null;
 }
 
 function toLocalParts(iso: string): { date: string; time: string } {
@@ -49,6 +65,11 @@ export function AssignmentEdit({
   points: initialPoints,
   deadline,
   peerCloseAt,
+  gradingMode,
+  professorTaste: initialTaste,
+  courseId,
+  briefUrl,
+  briefExt,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -57,6 +78,12 @@ export function AssignmentEdit({
   const initialPointsText = initialPoints === null ? "" : String(initialPoints);
   const [instructions, setInstructions] = useState(initialInstructions);
   const [points, setPoints] = useState(initialPointsText);
+  const [taste, setTaste] = useState(initialTaste);
+  // Brief file swap: a chosen replacement, or an explicit "remove". The
+  // current file itself lives in storage — only the pointer changes here.
+  const briefRef = useRef<HTMLInputElement>(null);
+  const [briefFile, setBriefFile] = useState<File | null>(null);
+  const [removeBrief, setRemoveBrief] = useState(false);
   const dl = toLocalParts(deadline);
   const pc = toLocalParts(peerCloseAt);
   const [dlDate, setDlDate] = useState(dl.date);
@@ -66,6 +93,10 @@ export function AssignmentEdit({
 
   const canEditDeadline = state === "open";
   const canEditPeerClose = state === "open" || state === "peer_review";
+  // The rubric is emerged from the taste file at the deadline, so a later
+  // edit would change nothing and quietly imply it had — the server refuses
+  // it too. Locked exactly like the deadline once grading starts.
+  const canEditTaste = state === "open";
 
   async function save() {
     const input: Parameters<typeof updateAssignment>[0] = { assignmentId };
@@ -90,31 +121,89 @@ export function AssignmentEdit({
       }
       input.peerCloseAt = next.toISOString();
     }
-    // Only assignmentId present means nothing was actually changed. Counting
+    // The taste file rides a separate action (it lives in its own table), so
+    // track its change independently. Comparing trimmed, since both the seed
+    // and the saved body are trimmed — trailing whitespace isn't a change.
+    const tasteChanged =
+      canEditTaste && taste.trim() !== initialTaste.trim();
+
+    // The brief file: replace it (a new one chosen) or remove it (explicitly
+    // cleared). The upload itself waits until we're actually saving.
+    const briefIntent: "replace" | "remove" | "none" = briefFile
+      ? "replace"
+      : removeBrief
+        ? "remove"
+        : "none";
+
+    // Assignment fields untouched when only assignmentId is present. Counting
     // keys rather than naming fields, so a new field can't be forgotten here
     // and silently fail to save.
-    if (Object.keys(input).length <= 1) {
+    const fieldsChanged = Object.keys(input).length > 1;
+    if (!fieldsChanged && !tasteChanged && briefIntent === "none") {
       setOpen(false);
       return;
     }
 
+    // In ai_only mode the taste file IS the rubric students are graded
+    // against — it can't be blanked. (The server refuses this too.)
+    if (tasteChanged && gradingMode === "ai_only" && !taste.trim()) {
+      toast.error(
+        "AI-only grading needs your taste file — it's the standard students are graded against."
+      );
+      return;
+    }
+
     setSaving(true);
-    let result: Awaited<ReturnType<typeof updateAssignment>>;
     try {
-      result = await updateAssignment(input);
+      // Upload the replacement first, so storage_path only moves once the
+      // bytes are actually up. The path shape matches AssignmentCreate.
+      if (briefIntent === "replace" && briefFile) {
+        const supabase = createClient();
+        const isMd =
+          briefFile.name.toLowerCase().endsWith(".md") ||
+          briefFile.type === "text/markdown";
+        const path = `${courseId}/brief/${crypto.randomUUID()}.${isMd ? "md" : "pdf"}`;
+        const { error } = await supabase.storage
+          .from(ASSIGNMENT_BUCKET)
+          .upload(path, briefFile, {
+            contentType: isMd ? "text/markdown" : "application/pdf",
+          });
+        if (error) {
+          toast.error("Upload failed — try again.");
+          return;
+        }
+        input.storagePath = path;
+      } else if (briefIntent === "remove") {
+        input.storagePath = null;
+      }
+
+      // Re-check after the brief may have added a key: a brief-only change
+      // still needs updateAssignment, but a taste-only change doesn't.
+      if (Object.keys(input).length > 1) {
+        const result = await updateAssignment(input);
+        if (!result.ok) {
+          toast.error(result.error);
+          return;
+        }
+      }
+      if (tasteChanged) {
+        const result = await saveProfessorTaste(assignmentId, taste);
+        if (!result.ok) {
+          toast.error(result.error);
+          return;
+        }
+      }
     } catch {
       toast.error("Couldn't reach the server — try again.");
       return;
     } finally {
       setSaving(false);
     }
-    if (result.ok) {
-      toast.success("Assignment updated.");
-      setOpen(false);
-      router.refresh();
-    } else {
-      toast.error(result.error);
-    }
+    setBriefFile(null);
+    setRemoveBrief(false);
+    toast.success("Assignment updated.");
+    setOpen(false);
+    router.refresh();
   }
 
   if (!open) {
@@ -158,6 +247,104 @@ export function AssignmentEdit({
         </div>
 
         <div className="grid gap-1.5">
+          <Label>Brief file</Label>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {briefFile ? (
+              <span className="text-muted-foreground">
+                New file:{" "}
+                <span className="font-medium text-foreground">
+                  {briefFile.name}
+                </span>
+              </span>
+            ) : removeBrief ? (
+              <span className="text-muted-foreground">
+                The current file will be removed when you save.
+              </span>
+            ) : briefUrl ? (
+              <a
+                href={briefUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 font-medium text-primary underline"
+              >
+                <FileText className="size-4" />
+                View current {briefExt === "md" ? "Markdown" : "PDF"}
+              </a>
+            ) : (
+              <span className="text-muted-foreground">
+                No brief file uploaded.
+              </span>
+            )}
+          </div>
+          <input
+            ref={briefRef}
+            type="file"
+            accept="application/pdf,.md,text/markdown"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && f.size > 20 * 1024 * 1024) {
+                toast.error("Keep the brief under 20 MB.");
+              } else if (f) {
+                setBriefFile(f);
+                setRemoveBrief(false);
+              }
+              e.target.value = "";
+            }}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => briefRef.current?.click()}
+            >
+              {briefUrl || briefFile ? "Replace file" : "Upload file"}
+            </Button>
+            {briefFile && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => setBriefFile(null)}
+              >
+                Undo
+              </Button>
+            )}
+            {!briefFile && briefUrl && !removeBrief && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => setRemoveBrief(true)}
+              >
+                Remove file
+              </Button>
+            )}
+            {removeBrief && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => setRemoveBrief(false)}
+              >
+                Keep file
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            PDF or Markdown, up to 20 MB. Replace it if the wrong file went up —
+            students see the new one right away.
+            {gradingMode === "tasty" && state === "open"
+              ? " The AI drafted each student's starting taste file from the original brief; swapping the file here doesn't redraw that."
+              : ""}
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
           <Label htmlFor="edit-points">Points</Label>
           <Input
             id="edit-points"
@@ -170,6 +357,35 @@ export function AssignmentEdit({
           />
           <p className="text-xs text-muted-foreground">
             Leave blank if this assignment isn&apos;t worth points.
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
+          <Label htmlFor="edit-taste">
+            {gradingMode === "ai_only"
+              ? "Your taste file (the standard the AI grades against)"
+              : "Your taste file"}
+          </Label>
+          <textarea
+            id="edit-taste"
+            value={taste}
+            onChange={(e) => setTaste(e.target.value)}
+            disabled={!canEditTaste}
+            rows={5}
+            maxLength={10000}
+            placeholder={
+              gradingMode === "ai_only"
+                ? "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
+                : "What would make this work genuinely good? Write it the way you'd say it out loud."
+            }
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <p className="text-xs text-muted-foreground">
+            {!canEditTaste
+              ? "Locked — the rubric was already drawn from this at the deadline."
+              : gradingMode === "ai_only"
+                ? "There's no emergent rubric in AI-only mode, so students are shown this — it's the standard every submission is graded against."
+                : "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."}
           </p>
         </div>
 

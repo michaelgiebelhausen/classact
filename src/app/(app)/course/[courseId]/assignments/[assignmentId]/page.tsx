@@ -6,7 +6,7 @@ import { resolveCourseAi, scoringPricing } from "@/server/aicreds";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
-import { getSignedSubmissionUrl } from "@/lib/storage";
+import { getSignedBriefUrl, getSignedSubmissionUrl } from "@/lib/storage";
 import { getCourseDirectory } from "@/lib/coursedirectory";
 import { rosterDisplayName } from "@/lib/names";
 import { readDividers, resolveSettings } from "@/lib/tastegrading";
@@ -51,7 +51,7 @@ export default async function AssignmentPage({
   const { data: assignment } = await supabase
     .from("assignments")
     .select(
-      "id, course_id, title, instructions, points, deadline, peer_close_at, settings, state, analysis, published_at, courses!inner(name, professor_id, grading_defaults)"
+      "id, course_id, title, instructions, points, deadline, peer_close_at, storage_path, settings, state, analysis, published_at, courses!inner(name, professor_id, grading_defaults)"
     )
     .eq("id", assignmentId)
     .eq("course_id", courseId)
@@ -147,6 +147,30 @@ export default async function AssignmentPage({
 
   // ---------- Professor ----------
   if (isProfessor) {
+    // The professor's own taste file (the benchmark row, enrollment_id null) —
+    // theirs to view, and to edit while the assignment is still open. RLS lets
+    // the course owner read it directly; a legacy structured row renders back
+    // as prose. Loaded once here for both the open and cockpit edit panels.
+    const { data: professorTasteRow } = await supabase
+      .from("taste_files")
+      .select("body, criteria, bar_statement")
+      .eq("assignment_id", assignmentId)
+      .is("enrollment_id", null)
+      .maybeSingle();
+    const professorTaste = tasteProse(professorTasteRow);
+    const gradingMode =
+      (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
+        ? "ai_only"
+        : "tasty";
+    // The uploaded brief, so the edit panel can show what's attached and let
+    // the professor open, replace, or remove it. Only the storage path is
+    // stored, never the original filename — the extension is all we can label.
+    const briefExt =
+      assignment.storage_path?.split(".").pop()?.toLowerCase() ?? null;
+    const briefUrl = assignment.storage_path
+      ? await getSignedBriefUrl(supabase, assignment.storage_path)
+      : null;
+
     if (assignment.state === "open") {
       const [{ data: subRows }, { data: tasteRows }, { data: activeRoster }] =
         await Promise.all([
@@ -229,6 +253,11 @@ export default async function AssignmentPage({
             points={assignment.points}
             deadline={assignment.deadline}
             peerCloseAt={assignment.peer_close_at}
+            gradingMode={gradingMode}
+            professorTaste={professorTaste}
+            courseId={courseId}
+            briefUrl={briefUrl}
+            briefExt={briefExt}
           />
           {!creds && (
             <Card className="border-primary/50">
@@ -363,6 +392,11 @@ export default async function AssignmentPage({
           points={assignment.points}
           deadline={assignment.deadline}
           peerCloseAt={assignment.peer_close_at}
+          gradingMode={gradingMode}
+          professorTaste={professorTaste}
+          courseId={courseId}
+          briefUrl={briefUrl}
+          briefExt={briefExt}
         />
         <GradingCockpit
           assignmentId={assignmentId}
