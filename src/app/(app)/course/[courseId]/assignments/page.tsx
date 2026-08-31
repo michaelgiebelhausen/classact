@@ -9,6 +9,7 @@ import {
   AssignmentCreate,
   type AssignmentCopyFrom,
 } from "@/components/features/assignments/AssignmentCreate";
+import { DeleteAssignmentButton } from "@/components/features/assignments/DeleteAssignmentButton";
 import { resolveGradingAxes, type TasteRequirement } from "@/lib/tastegrading";
 import type { DeliverableType } from "@/lib/submissionfile";
 
@@ -164,6 +165,9 @@ export default async function AssignmentsPage({
                     >
                       Copy
                     </Link>
+                  )}
+                  {isProfessor && (
+                    <DeleteAssignmentButton assignmentId={a.id} title={a.title} />
                   )}
                 </div>
               </div>

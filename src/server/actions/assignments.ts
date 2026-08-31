@@ -244,6 +244,49 @@ export async function createAssignment(input: {
 }
 
 /**
+ * Professor: delete an assignment and everything tied to it. The 0013 FK
+ * cascade removes the submissions, taste files, ai_scores, pairings, and
+ * rubric views with the row — no manual child cleanup. The brief file in
+ * storage is left in place on purpose: a copied assignment may share the same
+ * path (createAssignment reuses the brief by reference), so deleting the
+ * object could break another assignment. An orphaned brief is harmless.
+ */
+export async function deleteAssignment(
+  assignmentId: string
+): Promise<ActionResult> {
+  const { supabase, user } = await requireUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: assignment } = await supabase
+    .from("assignments")
+    .select("id, course_id")
+    .eq("id", assignmentId)
+    .single();
+  if (!assignment) return { ok: false, error: "Assignment not found." };
+
+  // Defense in depth over the assignments_write RLS (professor-only, FOR ALL).
+  const { data: course } = await supabase
+    .from("courses")
+    .select("professor_id")
+    .eq("id", assignment.course_id)
+    .single();
+  if (!course || course.professor_id !== user.id) {
+    return { ok: false, error: "Only the course owner can delete assignments." };
+  }
+
+  const { error } = await supabase
+    .from("assignments")
+    .delete()
+    .eq("id", assignmentId);
+  if (error) {
+    return { ok: false, error: "Couldn't delete the assignment. Try again." };
+  }
+
+  revalidatePath(`/course/${assignment.course_id}/assignments`);
+  return { ok: true };
+}
+
+/**
  * Student: save the taste file (creates it on first save). Free-flowing
  * text — say what makes the work good, however you'd say it. Locked at the
  * deadline; is_default_untouched flips once it stops matching the AI draft.
