@@ -318,11 +318,19 @@ export async function submitWork(
   // When the taste file is part of the deliverable, it is enforced here —
   // where the deliverable is handed in — not in the editor, which is a draft
   // box. The client checks first so the upload isn't wasted.
+  //
+  // Only in tasty mode: ai_only assignments have no student taste editor at
+  // all, so requiring one would deadlock the student (required to provide a
+  // taste file, with no way to write it). This mirrors the client, which gates
+  // the same check on tasty mode. A "required" flag can survive a switch to
+  // ai_only, so the mode — not the leftover flag — is what decides here.
   const settings = resolveSettings(
     (assignment.courses as unknown as { grading_defaults: unknown }).grading_defaults,
     assignment.settings
   );
-  if (settings.tasteRequirement === "required") {
+  const isAiOnly =
+    (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only";
+  if (!isAiOnly && settings.tasteRequirement === "required") {
     const { data: taste } = await supabase
       .from("taste_files")
       .select("body, criteria, bar_statement")
