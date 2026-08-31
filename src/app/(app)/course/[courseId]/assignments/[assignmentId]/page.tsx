@@ -9,13 +9,19 @@ import { getProfile } from "@/lib/auth";
 import { getSignedBriefUrl, getSignedSubmissionUrl } from "@/lib/storage";
 import { getCourseDirectory } from "@/lib/coursedirectory";
 import { rosterDisplayName } from "@/lib/names";
-import { readDividers, resolveSettings } from "@/lib/tastegrading";
+import {
+  defaultBands,
+  readBands,
+  readDividers,
+  resolveSettings,
+} from "@/lib/tastegrading";
 import { dividersFromThresholds, normalizeDividers } from "@/lib/bands";
 import { draftBody, tasteProse } from "@/lib/tasteprose";
 import { judgingStats, type DecidedComparison } from "@/lib/tastestats";
 import { Card, CardContent } from "@/components/ui/card";
 import { SubmissionEditor } from "@/components/features/assignments/SubmissionEditor";
 import { AnalysisRunner } from "@/components/features/assignments/AnalysisRunner";
+import { StartGradingButton } from "@/components/features/assignments/StartGradingButton";
 import {
   PeerReview,
   type PeerPairView,
@@ -68,8 +74,6 @@ export default async function AssignmentPage({
   const now = new Date();
   const deadlinePassed = new Date(assignment.deadline) < now;
   const peerClosed = new Date(assignment.peer_close_at) < now;
-  const analyzing =
-    (assignment.state === "open" && deadlinePassed) || assignment.state === "analyzing";
 
   const { data: myEnrollment } = await supabase
     .from("enrollments")
@@ -97,12 +101,25 @@ export default async function AssignmentPage({
     </div>
   );
 
-  // ---------- Analyzing (either role) ----------
-  if (analyzing) {
+  // ---------- Grading in progress (the professor kicked it off) ----------
+  // Grading is professor-triggered, so the deadline passing no longer starts
+  // anything on its own. Once the professor presses Start, the state is
+  // "analyzing" — only they drive the crank; a student sees a status card and
+  // never triggers analysis.
+  if (assignment.state === "analyzing") {
     return (
       <div className="grid gap-6">
         {header}
-        <AnalysisRunner assignmentId={assignmentId} />
+        {isProfessor ? (
+          <AnalysisRunner assignmentId={assignmentId} />
+        ) : (
+          <Card>
+            <CardContent className="py-12 text-center text-muted-foreground">
+              Grading is underway. Your report appears the moment your professor
+              publishes.
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }
@@ -194,6 +211,9 @@ export default async function AssignmentPage({
         ]);
       const submitted = (subRows ?? []).length;
       const tastes = (tasteRows ?? []).length;
+      const lateCount = (subRows ?? []).filter(
+        (s) => new Date(s.submitted_at) > new Date(assignment.deadline)
+      ).length;
 
       // Who's-turned-in-what roster: faces via the same resolver every other
       // photo surface uses; a missing admin config just means initials.
@@ -223,6 +243,10 @@ export default async function AssignmentPage({
           name: directory[e.id]?.name ?? rosterDisplayName(e.roster_name),
           photoUrl: directory[e.id]?.photoUrl ?? null,
           submittedAt: sub?.submitted_at ?? null,
+          // Late = the submission first landed after the deadline.
+          late: sub
+            ? new Date(sub.submitted_at) > new Date(assignment.deadline)
+            : false,
           editedAt: edited ? sub.last_edit_at : null,
           taste: taste
             ? {
@@ -281,24 +305,56 @@ export default async function AssignmentPage({
               </CardContent>
             </Card>
           )}
-          <Card>
-            <CardContent className="grid gap-1 py-10 text-center">
-              <p className="font-medium">
-                {submitted ?? 0} submissions · {tastes ?? 0} taste files started
-              </p>
-              <p className="text-sm text-muted-foreground">
-                At the deadline the AI reads the class&apos;s taste files,
-                builds the rubric, drafts the ranking, and opens peer
-                grading — nothing for you to do until then.
-              </p>
-              {estimate !== null && pricing && (
-                <p className="text-sm text-muted-foreground">
-                  Estimated scoring cost so far: ≈ ${estimate.toFixed(2)} on{" "}
-                  <span className="font-mono">{pricing.model}</span>
+          {deadlinePassed ? (
+            <Card className="border-primary/50">
+              <CardContent className="grid gap-3 py-10 text-center">
+                <p className="font-medium">
+                  The deadline has passed — ready to grade.
                 </p>
-              )}
-            </CardContent>
-          </Card>
+                <p className="text-sm text-muted-foreground">
+                  {submitted ?? 0} submissions
+                  {lateCount > 0 ? ` · ${lateCount} late` : ""}
+                  {gradingMode === "tasty" ? ` · ${tastes ?? 0} taste files` : ""}.
+                  Students can still turn work in — it&apos;s marked late — until
+                  you start. Starting grading closes submissions and{" "}
+                  {gradingMode === "tasty"
+                    ? "reads the class's taste files, builds the rubric, drafts the ranking, and opens peer grading."
+                    : "scores every submission against your taste file."}
+                </p>
+                <div className="flex justify-center">
+                  <StartGradingButton assignmentId={assignmentId} />
+                </div>
+                {estimate !== null && pricing && (
+                  <p className="text-xs text-muted-foreground">
+                    Estimated scoring cost: ≈ ${estimate.toFixed(2)} on{" "}
+                    <span className="font-mono">{pricing.model}</span>
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="grid gap-1 py-10 text-center">
+                <p className="font-medium">
+                  {submitted ?? 0} submissions
+                  {gradingMode === "tasty"
+                    ? ` · ${tastes ?? 0} taste files started`
+                    : ""}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  When the deadline passes you&apos;ll start grading here —
+                  nothing runs until you do. Students can keep submitting past
+                  the deadline (marked late) right up until you start.
+                </p>
+                {estimate !== null && pricing && (
+                  <p className="text-sm text-muted-foreground">
+                    Estimated scoring cost so far: ≈ ${estimate.toFixed(2)} on{" "}
+                    <span className="font-mono">{pricing.model}</span>
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
           <SubmissionRoster rows={rosterRows} showTaste={gradingMode === "tasty"} />
         </div>
       );
@@ -313,13 +369,21 @@ export default async function AssignmentPage({
           .eq("assignment_id", assignmentId),
         supabase
           .from("submissions")
-          .select("id, enrollment_id")
+          .select("id, enrollment_id, submitted_at")
           .eq("assignment_id", assignmentId),
         supabase
           .from("comparisons")
           .select("left_submission_id, right_submission_id, judge_enrollment_id, verdict")
           .eq("assignment_id", assignmentId),
       ]);
+
+    // Who came in after the bell — carried onto the ranked list as a badge.
+    const lateBySub = new Map(
+      (subRows ?? []).map((s) => [
+        s.id,
+        new Date(s.submitted_at) > new Date(assignment.deadline),
+      ])
+    );
 
     // Class-visible names + one face each, from the shared course directory.
     const directory = new Map<string, { name: string; photoUrl: string | null }>();
@@ -362,6 +426,7 @@ export default async function AssignmentPage({
           rank: r.final_rank ?? r.rank,
           letter: r.letter,
           comparisons: touch.get(r.submission_id) ?? 0,
+          late: lateBySub.get(r.submission_id) ?? false,
         };
       })
       .sort((a, b) => a.rank - b.rank);
@@ -381,6 +446,14 @@ export default async function AssignmentPage({
       bName: nameOfSub(p.bId),
       similarity: p.similarity,
     }));
+
+    // The bands the professor opens on: their own if they've saved any, then a
+    // course template's, then the points-scaled A+/A/B/C default — Worth
+    // pre-filled from the assignment's point total.
+    const initialBands =
+      readBands(assignment.settings) ??
+      readBands(courseMeta.grading_defaults) ??
+      defaultBands(assignment.points === null ? null : Number(assignment.points));
 
     return (
       <div className="grid gap-6">
@@ -409,15 +482,12 @@ export default async function AssignmentPage({
           }
           peerCloseAt={assignment.peer_close_at}
           students={students}
-          initialBands={settings.bands}
-          // Assignments graded before the list existed carry 0–100
-          // thresholds instead of line positions; map them onto this class's
-          // scores so the professor opens on the bands they already had.
-          // normalizeDividers is not decoration: the derived thresholds come
-          // from whatever cut points resolved, which is the five-letter
-          // default when an assignment carries bands but no legacy letters —
-          // four lines for three bands, which the cockpit rightly refuses to
-          // publish. One line fewer than there are bands, always.
+          initialBands={initialBands}
+          // Where the lines start: saved positions if the professor has any,
+          // otherwise derived from the AI's scores against the resolved cut
+          // points. normalizeDividers reconciles however many lines that
+          // produces with the band count — always one line fewer than there
+          // are bands — so the cockpit opens on a publishable shape.
           initialDividers={normalizeDividers(
             readDividers(assignment.settings) ??
               dividersFromThresholds(
@@ -425,7 +495,7 @@ export default async function AssignmentPage({
                 settings.cutPoints.map((c) => c.min)
               ),
             students.length,
-            settings.bands.length
+            initialBands.length
           )}
           scoreMode={settings.scoreMode}
           scoreVisibility={settings.scoreVisibility}

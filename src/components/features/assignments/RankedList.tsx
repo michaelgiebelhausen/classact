@@ -24,6 +24,8 @@ export interface RankedStudent {
   photoUrl: string | null;
   score: number;
   comparisons: number;
+  /** True when the work was turned in after the deadline. */
+  late?: boolean;
 }
 
 interface Props {
@@ -52,6 +54,17 @@ function initials(name: string): string {
     .slice(0, 2)
     .join("")
     .toUpperCase();
+}
+
+/**
+ * Where a drop on a full row lands: the gap above it (cursor in the top half)
+ * or the gap below it (bottom half). This turns every row into a big, forgiving
+ * drop target — dropping a grade line on the *bottom half of the last student*
+ * lands it below everyone, the move the thin gap-only zones made nearly
+ * impossible.
+ */
+function dropHalf(rect: DOMRect, clientY: number, index: number): number {
+  return clientY - rect.top > rect.height / 2 ? index + 1 : index;
 }
 
 /** The gap between two rows: where a dragged row or line comes to rest. */
@@ -97,9 +110,12 @@ function DividerRow({
   points,
   editable,
   removable,
+  armed,
   onDragStart,
   onDragEnd,
   onMove,
+  onOverHere,
+  onDropHere,
   onSetBand,
   onRemove,
 }: {
@@ -111,14 +127,29 @@ function DividerRow({
   points: number | null;
   editable: boolean;
   removable: boolean;
+  /** True while any drag is in flight — makes this line a valid drop target. */
+  armed: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onMove: (index: number, to: number) => void;
+  onOverHere: () => void;
+  onDropHere: () => void;
   onSetBand: (patch: Partial<Band>) => void;
   onRemove: () => void;
 }) {
   return (
-    <li className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-primary/50 bg-primary/5 px-2 py-1.5">
+    <li
+      onDragOver={(e) => {
+        if (!armed) return;
+        e.preventDefault();
+        onOverHere();
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDropHere();
+      }}
+      className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-primary/50 bg-primary/5 px-2 py-1.5"
+    >
       <button
         type="button"
         draggable={editable}
@@ -291,9 +322,12 @@ export function RankedList({
         points={points}
         editable={canEditBands}
         removable={bands.length > 1}
+        armed={drag !== null}
         onDragStart={() => setDrag({ kind: "divider", index: line })}
         onDragEnd={endDrag}
         onMove={moveDivider}
+        onOverHere={() => setOver(dividers[line])}
+        onDropHere={() => handleDrop(dividers[line])}
         onSetBand={(patch) => setBand(line + 1, patch)}
         onRemove={() => removeBand(line + 1)}
       />
@@ -328,17 +362,6 @@ export function RankedList({
         {points !== null && (
           <span className="text-xs text-muted-foreground">of {points}</span>
         )}
-        {canEditBands && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={addBand}
-            className="h-7 px-2"
-          >
-            <Plus className="mr-1 size-3.5" /> Add band
-          </Button>
-        )}
       </div>
 
       {!canReorder && lockedReason && (
@@ -360,12 +383,16 @@ export function RankedList({
               onDragOver={(e) => {
                 if (drag) {
                   e.preventDefault();
-                  setOver(index);
+                  setOver(
+                    dropHalf(e.currentTarget.getBoundingClientRect(), e.clientY, index)
+                  );
                 }
               }}
               onDrop={(e) => {
                 e.preventDefault();
-                handleDrop(index);
+                handleDrop(
+                  dropHalf(e.currentTarget.getBoundingClientRect(), e.clientY, index)
+                );
               }}
               className={[
                 "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
@@ -416,6 +443,14 @@ export function RankedList({
                 {student.name}
               </button>
 
+              {student.late && (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/50 text-[10px] text-amber-600 dark:text-amber-400"
+                >
+                  Late
+                </Badge>
+              )}
               {student.comparisons === 0 && (
                 <Badge variant="outline" className="text-[10px]">
                   no human eyes
@@ -440,6 +475,20 @@ export function RankedList({
           onDrop={handleDrop}
         />
       </ul>
+
+      {/* New bands land at the bottom of the list, so the button that adds
+          them lives there too. */}
+      {canEditBands && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={addBand}
+          className="w-fit"
+        >
+          <Plus className="mr-1 size-3.5" /> Add band
+        </Button>
+      )}
     </div>
   );
 }

@@ -23,6 +23,8 @@ export interface SubmissionRosterRow {
   photoUrl: string | null;
   /** Null = no submission yet. */
   submittedAt: string | null;
+  /** True when the submission first landed after the deadline. */
+  late?: boolean;
   /** Set when the submission was edited after first submitting. */
   editedAt: string | null;
   /** Null = taste file not started. */
@@ -114,21 +116,31 @@ export function SubmissionRoster({
                   </span>
                 </TableCell>
                 <TableCell>
-                  <Badge
-                    variant={
-                      r.submittedAt
-                        ? "default"
+                  <span className="flex flex-wrap items-center gap-1">
+                    <Badge
+                      variant={
+                        r.submittedAt
+                          ? "default"
+                          : r.taste && !r.taste.untouchedDefault
+                            ? "secondary"
+                            : "outline"
+                      }
+                    >
+                      {r.submittedAt
+                        ? "Submitted"
                         : r.taste && !r.taste.untouchedDefault
-                          ? "secondary"
-                          : "outline"
-                    }
-                  >
-                    {r.submittedAt
-                      ? "Submitted"
-                      : r.taste && !r.taste.untouchedDefault
-                        ? "Started"
-                        : "Nothing yet"}
-                  </Badge>
+                          ? "Started"
+                          : "Nothing yet"}
+                    </Badge>
+                    {r.late && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/50 text-amber-600 dark:text-amber-400"
+                      >
+                        Late
+                      </Badge>
+                    )}
+                  </span>
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {r.submittedAt ? (

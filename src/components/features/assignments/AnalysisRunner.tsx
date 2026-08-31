@@ -6,9 +6,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { advanceAnalysis } from "@/server/actions/grading";
 
 /**
- * Turns the analysis crank after the deadline: polls advanceAnalysis (each
- * call is one bounded chunk) until peer grading opens, then refreshes.
- * Whoever has the page open drives it — no cron, no professor required.
+ * Turns the analysis crank once the professor has kicked grading off: polls
+ * advanceAnalysis (each call is one bounded chunk) until peer grading opens,
+ * then refreshes. The professor's open page drives it — advanceAnalysis is
+ * professor-only, and this renders only for them.
  */
 
 const PHASE_LABELS: Record<string, string> = {
@@ -86,7 +87,7 @@ export function AnalysisRunner({
         )}
         {error && <p className="text-sm text-muted-foreground">{error}</p>}
         <p className="text-xs text-muted-foreground">
-          This runs on its own — keeping the page open speeds it up.
+          Keep this page open until it finishes — it grades in the background.
         </p>
       </CardContent>
     </Card>

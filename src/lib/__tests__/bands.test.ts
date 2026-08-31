@@ -14,6 +14,8 @@ import {
 import {
   DEFAULT_SETTINGS,
   bandsFromCutPoints,
+  defaultBands,
+  readBands,
   readDividers,
   resolveSettings,
 } from "@/lib/tastegrading";
@@ -323,18 +325,43 @@ describe("bandsProblem", () => {
 // ---------------------------------------------------------------------------
 
 describe("band settings", () => {
-  it("defaults to the classic letters with no values attached", () => {
+  it("defaults to A+/A/B/C with blank values (no point total known yet)", () => {
     expect(DEFAULT_SETTINGS.bands.map((b) => b.label)).toEqual([
+      "A+",
       "A",
       "B",
       "C",
-      "D",
-      "F",
     ]);
     expect(DEFAULT_SETTINGS.bands.every((b) => b.value === null)).toBe(true);
     expect(DEFAULT_SETTINGS.scoreMode).toBe("stepped");
     expect(DEFAULT_SETTINGS.scoreVisibility).toBe("both");
     expect(DEFAULT_SETTINGS.tasteRequirement).toBe("optional");
+  });
+
+  it("pre-fills default band worths as a share of the point total", () => {
+    // A+ 110%, A 100%, B 89.9%, C 79.9% of the assignment's points.
+    expect(defaultBands(10)).toEqual([
+      { label: "A+", value: 11 },
+      { label: "A", value: 10 },
+      { label: "B", value: 8.99 },
+      { label: "C", value: 7.99 },
+    ]);
+    expect(defaultBands(100)).toEqual([
+      { label: "A+", value: 110 },
+      { label: "A", value: 100 },
+      { label: "B", value: 89.9 },
+      { label: "C", value: 79.9 },
+    ]);
+    // No point value → Worth stays blank (a percentage of nothing is nothing).
+    expect(defaultBands(null).every((b) => b.value === null)).toBe(true);
+  });
+
+  it("reads a layer's own bands, or null when it sets none", () => {
+    expect(readBands({ bands: [{ label: "Pass", value: 1 }] })).toEqual([
+      { label: "Pass", value: 1 },
+    ]);
+    expect(readBands({})).toBeNull();
+    expect(readBands(null)).toBeNull();
   });
 
   it("reads an assignment's own bands", () => {

@@ -109,16 +109,10 @@ export function SubmissionEditor({
   }
 
   async function handleFile(file: File) {
-    // Check the deadline before spending the student's bandwidth. The server
-    // action checks it again — this only saves them a 20 MB upload that was
-    // always going to be refused.
-    if (new Date(deadline).getTime() < Date.now()) {
-      toast.error("The deadline has passed — this can't be submitted now.");
-      return;
-    }
+    // Past the deadline is allowed — it's a late submission, not a closed one;
+    // the server still refuses once the professor has started grading.
 
-    // Same reason: the server refuses this too, but only after the file has
-    // already gone up.
+    // The server refuses this too, but only after the file has already gone up.
     if (mode === "tasty" && tasteRequirement === "required" && tasteUnwritten) {
       toast.error(
         "Write your taste file first — it's part of what you're handing in."
@@ -154,7 +148,11 @@ export function SubmissionEditor({
     setUploading(false);
     if (result.ok) {
       toast.success(
-        submittedAt ? "Submission replaced." : "Submitted. You can replace it until the deadline."
+        submittedAt
+          ? "Submission replaced."
+          : deadlinePassed
+            ? "Submitted late — you can still replace it until grading starts."
+            : "Submitted. You can replace it until grading starts."
       );
       router.refresh();
     } else {
@@ -212,7 +210,7 @@ export function SubmissionEditor({
             this work genuinely good, and what&apos;s the bar you&apos;d be
             proud to clear? Your class&apos;s answers together become the
             rubric everyone is graded by, so write it your way. Dictate it,
-            paste it, ramble a little. Locks at the deadline.
+            paste it, ramble a little. After the deadline it counts as late.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -247,9 +245,8 @@ export function SubmissionEditor({
             One file — PDF, Markdown, or image (PNG/JPG), up to 20 MB —
             your entire submission for this assignment, so combine any
             parts into a single file. Don&apos;t put your name in it —
-            your work is judged anonymously. Resubmitting before the
-            deadline replaces the file (your last edit is what counts for
-            timeliness).
+            your work is judged anonymously. Resubmitting replaces the file
+            (your last edit is what counts for timeliness).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -258,11 +255,11 @@ export function SubmissionEditor({
           <p
             className={
               deadlinePassed
-                ? "text-sm font-medium text-destructive"
+                ? "text-sm font-medium text-amber-600 dark:text-amber-400"
                 : "text-sm text-muted-foreground"
             }
           >
-            {deadlinePassed ? "Deadline passed" : "Due"}{" "}
+            {deadlinePassed ? "Past due — submissions marked late" : "Due"}{" "}
             <LocalTime iso={deadline} />
           </p>
 
@@ -296,7 +293,6 @@ export function SubmissionEditor({
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Anything the reader should know"
-              disabled={deadlinePassed}
             />
             {submittedAt ? (
               <div className="flex items-center gap-2">
@@ -306,11 +302,11 @@ export function SubmissionEditor({
                   size="sm"
                   className="w-fit"
                   onClick={() => void saveNote()}
-                  disabled={savingNote || !noteChanged || deadlinePassed}
+                  disabled={savingNote || !noteChanged}
                 >
                   {savingNote ? "Saving…" : "Save note"}
                 </Button>
-                {noteChanged && !deadlinePassed && (
+                {noteChanged && (
                   <span className="text-xs text-muted-foreground">
                     Unsaved
                   </span>
@@ -335,7 +331,7 @@ export function SubmissionEditor({
           />
           <Button
             onClick={() => fileRef.current?.click()}
-            disabled={uploading || deadlinePassed}
+            disabled={uploading}
             className="w-fit"
           >
             {uploading
@@ -345,9 +341,10 @@ export function SubmissionEditor({
                 : "Choose your file"}
           </Button>
           {deadlinePassed && (
-            <p className="text-xs text-muted-foreground">
-              Submissions closed at the deadline. Talk to your professor if
-              something went wrong.
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              The deadline has passed, but you can still turn in your work — it
+              will be marked late. Submissions close for good once your
+              professor starts grading.
             </p>
           )}
         </CardContent>

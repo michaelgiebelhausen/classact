@@ -64,6 +64,8 @@ export interface CockpitStudent {
   rank: number;
   letter: string | null;
   comparisons: number;
+  /** True when the work was turned in after the deadline. */
+  late?: boolean;
 }
 
 interface Props {

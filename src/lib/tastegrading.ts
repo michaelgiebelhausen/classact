@@ -54,12 +54,20 @@ export interface GradingSettings {
   peerWindowDays: number;
 }
 
+// Where the starting grade lines fall. These are placement thresholds on the
+// AI's 0–100 axis, which is RELATIVE standing centred on the class average
+// (50 = the middle of the class; see lib/ranking.ts), not an absolute
+// percentage. The cuts are deliberately generous — a typical class opens
+// mostly A and B with only the lowest-ranked tail in C — because in practice
+// professors give A's and B's with the occasional C. A+ sits above the axis
+// (min 101), so nobody lands there by default; it's the professor's manual
+// bonus for a standout. There is no default D or F to assign by accident —
+// the "Add band" button adds them on the assignments that need them.
 const DEFAULT_CUT_POINTS: CutPoint[] = [
-  { letter: "A", min: 80 },
-  { letter: "B", min: 60 },
-  { letter: "C", min: 40 },
-  { letter: "D", min: 20 },
-  { letter: "F", min: 0 },
+  { letter: "A+", min: 101 },
+  { letter: "A", min: 50 },
+  { letter: "B", min: 30 },
+  { letter: "C", min: 0 },
 ];
 
 /** Legacy cut points as bands: the letter becomes a label, the value unset. */
@@ -69,12 +77,41 @@ export function bandsFromCutPoints(cutPoints: CutPoint[]): Band[] {
     .map((cut) => ({ label: cut.letter, value: null }));
 }
 
+/**
+ * Each default band's worth as a share of the assignment's total points. A+
+ * is 110% — the built-in "12 out of 10" for work that goes beyond the
+ * assignment. B and C sit just under the round tens (89.9 / 79.9) so a B
+ * reads as "in the 80s" and a C as "in the 70s".
+ */
+const DEFAULT_BAND_FRACTIONS: { label: string; fraction: number }[] = [
+  { label: "A+", fraction: 1.1 },
+  { label: "A", fraction: 1.0 },
+  { label: "B", fraction: 0.899 },
+  { label: "C", fraction: 0.799 },
+];
+
+/**
+ * The starting grade bands: A+/A/B/C, each band's Worth pre-filled as a share
+ * of the assignment's total points. Worth is blank when the assignment carries
+ * no point value — a percentage of nothing is nothing.
+ */
+export function defaultBands(points: number | null): Band[] {
+  const usable = typeof points === "number" && Number.isFinite(points);
+  return DEFAULT_BAND_FRACTIONS.map(({ label, fraction }) => ({
+    label,
+    value: usable ? Math.round((points as number) * fraction * 100) / 100 : null,
+  }));
+}
+
 export const DEFAULT_SETTINGS: GradingSettings = {
   pairMix: { exceptional: 1, self: 1, refine: 1 },
   professorWeight: 8,
   distinctivenessWeight: 0.15,
   cutPoints: DEFAULT_CUT_POINTS,
-  bands: bandsFromCutPoints(DEFAULT_CUT_POINTS),
+  // No point value known here, so the default carries labels with blank
+  // values; the cockpit fills the Worth in from the assignment via
+  // defaultBands(points).
+  bands: defaultBands(null),
   scoreMode: "stepped",
   scoreVisibility: "both",
   tasteRequirement: "optional",
@@ -188,6 +225,16 @@ export function readDividers(assignmentSettings: unknown): number[] | null {
   return raw
     .filter((n): n is number => typeof n === "number" && Number.isFinite(n))
     .map((n) => Math.max(0, Math.round(n)));
+}
+
+/**
+ * The bands a layer set explicitly, or null if it carries none — so the
+ * cockpit can tell "the professor chose these" apart from "fall back to the
+ * points-scaled default". A course template's bands count as chosen.
+ */
+export function readBands(settings: unknown): Band[] | null {
+  if (typeof settings !== "object" || settings === null) return null;
+  return parseBands((settings as Record<string, unknown>).bands);
 }
 
 /** defaults → course grading_defaults → assignment settings. */

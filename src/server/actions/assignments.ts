@@ -231,12 +231,14 @@ export async function saveTasteFile(
 
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, deadline, settings")
+    .select("id, course_id, deadline, settings, state")
     .eq("id", assignmentId)
     .single();
   if (!assignment) return { ok: false, error: "Assignment not found." };
-  if (new Date(assignment.deadline).getTime() < Date.now()) {
-    return { ok: false, error: "The deadline has passed — your taste file is locked." };
+  // The deadline marks lateness, not the lock — the taste file stays editable
+  // (and is part of a late submission) until the professor starts grading.
+  if (assignment.state !== "open") {
+    return { ok: false, error: "Grading has started — your taste file is locked." };
   }
   const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
   if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
@@ -297,12 +299,15 @@ export async function submitWork(
 
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, deadline, settings, courses!inner(grading_defaults)")
+    .select("id, course_id, deadline, settings, state, courses!inner(grading_defaults)")
     .eq("id", assignmentId)
     .single();
   if (!assignment) return { ok: false, error: "Assignment not found." };
-  if (new Date(assignment.deadline).getTime() < Date.now()) {
-    return { ok: false, error: "The deadline has passed." };
+  // Late submissions are allowed until the professor starts grading: while the
+  // assignment is still "open", a post-deadline submit is accepted and shows as
+  // late (submitted_at > deadline) in the professor's view.
+  if (assignment.state !== "open") {
+    return { ok: false, error: "Grading has started — submissions are closed." };
   }
   const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
   if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
@@ -390,12 +395,12 @@ export async function saveSubmissionNote(
 
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, deadline")
+    .select("id, course_id, deadline, state")
     .eq("id", assignmentId)
     .single();
   if (!assignment) return { ok: false, error: "Assignment not found." };
-  if (new Date(assignment.deadline).getTime() < Date.now()) {
-    return { ok: false, error: "The deadline has passed." };
+  if (assignment.state !== "open") {
+    return { ok: false, error: "Grading has started — the note is locked." };
   }
   const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
   if (!enrollmentId) {

@@ -272,9 +272,10 @@ function resolveBands(
 }
 
 /**
- * Advance the analysis one bounded chunk. Anyone in the course can turn
- * the crank once the deadline has passed (the UI polls this); all writes
- * run as service role after the membership check.
+ * Advance the analysis one bounded chunk. Grading is kicked off and driven by
+ * the PROFESSOR — the first call flips the assignment out of `open`, which is
+ * also what closes the late-submission window, so only the course owner may
+ * turn the crank. All writes run as service role after that check.
  */
 export async function advanceAnalysis(assignmentId: string): Promise<
   ActionResult<{
@@ -284,8 +285,11 @@ export async function advanceAnalysis(assignmentId: string): Promise<
     total: number;
   }>
 > {
-  const { error, assignment } = await requireMemberAssignment(assignmentId);
+  const { error, assignment, user } = await requireMemberAssignment(assignmentId);
   if (error || !assignment) return { ok: false, error: error ?? "Not found." };
+  if (!user || !isProfessorOf(assignment, user.id)) {
+    return { ok: false, error: "Only the professor can start grading." };
+  }
   if (!isConfigured.supabaseAdmin) {
     return { ok: false, error: "Server isn't configured for analysis (service role missing)." };
   }
