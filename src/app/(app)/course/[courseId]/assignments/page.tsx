@@ -5,7 +5,12 @@ import { LocalTime } from "@/components/ui/localtime";
 import { getProfile } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { AssignmentCreate } from "@/components/features/assignments/AssignmentCreate";
+import {
+  AssignmentCreate,
+  type AssignmentCopyFrom,
+} from "@/components/features/assignments/AssignmentCreate";
+import { resolveGradingAxes, type TasteRequirement } from "@/lib/tastegrading";
+import type { DeliverableType } from "@/lib/submissionfile";
 
 /**
  * Tasty Grading — assignment list. Professor sees the create form;
@@ -22,10 +27,13 @@ const STATE_LABELS: Record<string, string> = {
 
 export default async function AssignmentsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ courseId: string }>;
+  searchParams: Promise<{ copy?: string }>;
 }) {
   const { courseId } = await params;
+  const { copy: copyId } = await searchParams;
   const profile = await getProfile();
   if (!profile) redirect("/login");
 
@@ -45,6 +53,53 @@ export default async function AssignmentsPage({
     .order("deadline", { ascending: false });
   const now = new Date();
 
+  // "Copy" link → ?copy=<id>: pull the source assignment's fields (professor
+  // only, same course) and seed the create form. Everything but the deadline
+  // comes over, including the brief file (reused by reference).
+  let copyFrom: AssignmentCopyFrom | null = null;
+  if (isProfessor && copyId) {
+    const { data: src } = await supabase
+      .from("assignments")
+      .select("id, title, instructions, points, storage_path, settings")
+      .eq("id", copyId)
+      .eq("course_id", courseId)
+      .maybeSingle();
+    if (src) {
+      const axes = resolveGradingAxes(src.settings);
+      const s = (src.settings ?? {}) as Record<string, unknown>;
+      const { data: profTaste } = await supabase
+        .from("taste_files")
+        .select("body")
+        .eq("assignment_id", copyId)
+        .is("enrollment_id", null)
+        .maybeSingle();
+      const briefPath = (src.storage_path as string | null) ?? null;
+      copyFrom = {
+        fromTitle: src.title,
+        title: `${src.title} (copy)`,
+        instructions: src.instructions ?? "",
+        points: src.points != null ? String(src.points) : "",
+        peerReview: axes.peerReview,
+        tasteSource: axes.tasteSource,
+        tasteRequirement:
+          s.tasteRequirement === "required" ||
+          s.tasteRequirement === "off" ||
+          s.tasteRequirement === "optional"
+            ? (s.tasteRequirement as TasteRequirement)
+            : "optional",
+        gradingCriteria: profTaste?.body ?? "",
+        deliverableType:
+          s.deliverableType === "pdf" ||
+          s.deliverableType === "md" ||
+          s.deliverableType === "image"
+            ? (s.deliverableType as DeliverableType)
+            : "any",
+        briefPath,
+        briefKind: briefPath ? (briefPath.endsWith(".md") ? "md" : "pdf") : null,
+      };
+    }
+  }
+
   return (
     <div className="grid gap-6">
       <div>
@@ -58,9 +113,13 @@ export default async function AssignmentsPage({
 
       {isProfessor && (
         <AssignmentCreate
+          // Re-key on the copy source so the form re-seeds cleanly (including
+          // copy → blank after publishing).
+          key={`create-${copyId ?? "blank"}`}
           courseId={courseId}
           // Postgres hands back "09:30:00"; the time input wants "09:30".
           classStart={course.meeting_start?.slice(0, 5) ?? null}
+          copyFrom={copyFrom}
         />
       )}
 
@@ -81,21 +140,33 @@ export default async function AssignmentsPage({
                 ? "AI analyzing"
                 : (STATE_LABELS[a.state] ?? a.state);
             return (
-              <Link
+              <div
                 key={a.id}
-                href={`/course/${courseId}/assignments/${a.id}`}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-4 transition-colors hover:border-primary"
               >
-                <div>
+                <Link
+                  href={`/course/${courseId}/assignments/${a.id}`}
+                  className="min-w-0 flex-1"
+                >
                   <p className="font-medium">{a.title}</p>
                   <p className="text-sm text-muted-foreground">
                     Due <LocalTime iso={a.deadline} />
                   </p>
+                </Link>
+                <div className="flex items-center gap-3">
+                  <Badge variant={a.state === "published" ? "default" : "secondary"}>
+                    {stateLabel}
+                  </Badge>
+                  {isProfessor && (
+                    <Link
+                      href={`/course/${courseId}/assignments?copy=${a.id}`}
+                      className="text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      Copy
+                    </Link>
+                  )}
                 </div>
-                <Badge variant={a.state === "published" ? "default" : "secondary"}>
-                  {stateLabel}
-                </Badge>
-              </Link>
+              </div>
             );
           })}
         </div>

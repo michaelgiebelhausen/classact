@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/browser";
@@ -37,18 +38,43 @@ function formatClock(value: string): string {
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
+/** A source assignment's fields, seeded into the form by the "Copy" link. */
+export type AssignmentCopyFrom = {
+  /** The source's title, shown in the "Copying from…" banner. */
+  fromTitle: string;
+  title: string;
+  instructions: string;
+  points: string;
+  peerReview: boolean;
+  tasteSource: TasteSource;
+  tasteRequirement: TasteRequirement;
+  gradingCriteria: string;
+  deliverableType: DeliverableType;
+  /** The source's brief file, reused as-is unless replaced or removed. */
+  briefPath: string | null;
+  briefKind: "pdf" | "md" | null;
+};
+
 export function AssignmentCreate({
   courseId,
   classStart,
+  copyFrom,
 }: {
   courseId: string;
   /** The course's meeting start as "HH:MM", when it has a schedule. */
   classStart?: string | null;
+  /** When present, the form starts pre-filled from another assignment. */
+  copyFrom?: AssignmentCopyFrom | null;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(copyFrom?.title ?? "");
   const [file, setFile] = useState<File | null>(null);
+  // A copied assignment carries its brief file's storage path; a freshly
+  // chosen file replaces it, and Remove clears both.
+  const [carriedBriefPath, setCarriedBriefPath] = useState<string | null>(
+    copyFrom?.briefPath ?? null
+  );
   // Day is the professor's to choose; the time starts where it almost
   // always ends up.
   const [deadlineDate, setDeadlineDate] = useState("");
@@ -58,8 +84,10 @@ export function AssignmentCreate({
   // Two axes: do students grade each other, and where the taste comes from.
   // Only the three supported cells are offered (peer-reviewed uses co-created
   // taste; the peer + instructor cell is deferred).
-  const [peerReview, setPeerReview] = useState(true);
-  const [tasteSource, setTasteSource] = useState<TasteSource>("cocreated");
+  const [peerReview, setPeerReview] = useState(copyFrom?.peerReview ?? true);
+  const [tasteSource, setTasteSource] = useState<TasteSource>(
+    copyFrom?.tasteSource ?? "cocreated"
+  );
   const selectCell = (peer: boolean, source: TasteSource) => {
     setPeerReview(peer);
     setTasteSource(source);
@@ -70,14 +98,19 @@ export function AssignmentCreate({
   const legacyTasty = peerReview && tasteSource === "cocreated";
   // The professor's PRIVATE AI grading criteria (ai_only mode). Not the
   // student-facing brief — that is `instructions` below.
-  const [gradingCriteria, setGradingCriteria] = useState("");
-  const [tasteRequirement, setTasteRequirement] =
-    useState<TasteRequirement>("optional");
+  const [gradingCriteria, setGradingCriteria] = useState(
+    copyFrom?.gradingCriteria ?? ""
+  );
+  const [tasteRequirement, setTasteRequirement] = useState<TasteRequirement>(
+    copyFrom?.tasteRequirement ?? "optional"
+  );
   // What students hand in. "any" = the default (every supported type).
-  const [deliverableType, setDeliverableType] = useState<DeliverableType>("any");
+  const [deliverableType, setDeliverableType] = useState<DeliverableType>(
+    copyFrom?.deliverableType ?? "any"
+  );
   // 0033 — the student-facing brief. Students read this.
-  const [instructions, setInstructions] = useState("");
-  const [points, setPoints] = useState("");
+  const [instructions, setInstructions] = useState(copyFrom?.instructions ?? "");
+  const [points, setPoints] = useState(copyFrom?.points ?? "");
   const [saving, setSaving] = useState(false);
 
   async function create() {
@@ -98,7 +131,8 @@ export function AssignmentCreate({
       return;
     }
     setSaving(true);
-    let storagePath: string | null = null;
+    // Reuse the copied brief unless a new file was chosen (or it was removed).
+    let storagePath: string | null = carriedBriefPath;
     if (file) {
       const supabase = createClient();
       const isMd =
@@ -141,6 +175,7 @@ export function AssignmentCreate({
       toast.success("Assignment published — students can start their taste files now.");
       setTitle("");
       setFile(null);
+      setCarriedBriefPath(null);
       setInstructions("");
       setPoints("");
       // Clear the days, keep the times at their defaults for the next one.
@@ -148,6 +183,9 @@ export function AssignmentCreate({
       setDeadlineTime(END_OF_DAY);
       setPeerCloseDate("");
       setPeerCloseTime(END_OF_DAY);
+      // Drop any ?copy= so the form (re-keyed on it) resets to blank and the
+      // "Copying from…" banner clears; refresh pulls in the new assignment.
+      if (copyFrom) router.push(`/course/${courseId}/assignments`);
       router.refresh();
     } else {
       toast.error(result.error);
@@ -157,7 +195,7 @@ export function AssignmentCreate({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>New assignment</CardTitle>
+        <CardTitle>{copyFrom ? "New assignment (copied)" : "New assignment"}</CardTitle>
         <CardDescription>
           Upload the brief and set the deadline — the AI drafts each
           student&apos;s starting taste file, and grading runs itself from
@@ -166,6 +204,20 @@ export function AssignmentCreate({
           multi-part work, publish each part as its own assignment so every
           part gets its own standard, rubric, and peer round.
         </CardDescription>
+        {copyFrom && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Copying from{" "}
+            <span className="font-medium text-foreground">{copyFrom.fromTitle}</span>{" "}
+            — everything but the deadline came over. Review, adjust, and set a
+            new deadline before you publish.{" "}
+            <Link
+              href={`/course/${courseId}/assignments`}
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Start blank
+            </Link>
+          </p>
+        )}
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-2">
@@ -346,13 +398,31 @@ export function AssignmentCreate({
                 e.target.value = "";
               }}
             />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => fileRef.current?.click()}
-            >
-              {file ? file.name : "Choose file"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => fileRef.current?.click()}
+              >
+                {file
+                  ? file.name
+                  : carriedBriefPath
+                    ? `Copied brief (${copyFrom?.briefKind === "md" ? "Markdown" : "PDF"})`
+                    : "Choose file"}
+              </Button>
+              {(file || carriedBriefPath) && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:underline"
+                  onClick={() => {
+                    setFile(null);
+                    setCarriedBriefPath(null);
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
           {/* Date and time are separate controls so the time can carry a
               real default. A single datetime-local can't: it takes the time
