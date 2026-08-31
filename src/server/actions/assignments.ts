@@ -18,6 +18,12 @@ import {
 } from "@/lib/tastegrading";
 import type { ScoreMode } from "@/lib/bands";
 import { cleanTasteBody, isUntouchedTaste, tasteProse } from "@/lib/tasteprose";
+import {
+  DELIVERABLE_TYPES,
+  deliverableRefusal,
+  pathSatisfiesDeliverable,
+  type DeliverableType,
+} from "@/lib/submissionfile";
 import { describeQueryFailure } from "@/lib/dberror";
 import {
   docKindFromPath,
@@ -86,6 +92,8 @@ export async function createAssignment(input: {
   gradingInstructions?: string;
   /** Whether students are asked for a taste file as part of the deliverable. */
   tasteRequirement?: TasteRequirement;
+  /** What students hand in. Absent = "any" (every supported type). */
+  deliverableType?: "pdf" | "md" | "image";
 }): Promise<ActionResult<{ id: string }>> {
   const { supabase, user } = await requireUser();
   if (!user) return { ok: false, error: "Sign in first." };
@@ -184,6 +192,9 @@ export async function createAssignment(input: {
         ...(gradingMode === "ai_only" ? { gradingMode } : {}),
         ...(input.tasteRequirement && gradingMode === "tasty"
           ? { tasteRequirement: input.tasteRequirement }
+          : {}),
+        ...(input.deliverableType
+          ? { deliverableType: input.deliverableType }
           : {}),
       },
     })
@@ -313,6 +324,14 @@ export async function submitWork(
   if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
   if (!storagePath.startsWith(`${assignment.course_id}/sub/${enrollmentId}/`)) {
     return { ok: false, error: "Upload didn't complete — try again." };
+  }
+  // The professor may have declared what students hand in (e.g. a screenshot).
+  // The client narrows the picker, but storage/RLS don't enforce type — so the
+  // extension is the backstop against an off-type file.
+  const declared = ((assignment.settings as { deliverableType?: DeliverableType })
+    .deliverableType ?? "any") as DeliverableType;
+  if (!pathSatisfiesDeliverable(storagePath, declared)) {
+    return { ok: false, error: deliverableRefusal(declared) };
   }
 
   // When the taste file is part of the deliverable, it is enforced here —
@@ -613,6 +632,7 @@ export async function setGradingOptions(
     scoreVisibility?: ScoreVisibility;
     tasteRequirement?: TasteRequirement;
     gradingMode?: "tasty" | "ai_only";
+    deliverableType?: DeliverableType;
   }
 ): Promise<ActionResult> {
   const { supabase, user } = await requireUser();
@@ -693,6 +713,23 @@ export async function setGradingOptions(
       // it rather than storing the string.
       delete merged.gradingMode;
     }
+  }
+
+  if (patch.deliverableType !== undefined) {
+    if (!DELIVERABLE_TYPES.includes(patch.deliverableType)) {
+      return { ok: false, error: "Unknown deliverable type." };
+    }
+    // Closes with submissions, like tasteRequirement: it's what the deliverable
+    // must be, so it can't change once students have started handing it in.
+    if (assignment.state !== "open") {
+      return {
+        ok: false,
+        error: "Submissions have closed — what the deliverable includes can't change now.",
+      };
+    }
+    // "any" is the absence of the key (matches createAssignment).
+    if (patch.deliverableType === "any") delete merged.deliverableType;
+    else merged.deliverableType = patch.deliverableType;
   }
 
   const { error } = await supabase

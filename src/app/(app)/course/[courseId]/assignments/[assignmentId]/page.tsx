@@ -7,6 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { getSignedBriefUrl, getSignedSubmissionUrl } from "@/lib/storage";
+import type { DeliverableType } from "@/lib/submissionfile";
 import { getCourseDirectory } from "@/lib/coursedirectory";
 import { rosterDisplayName } from "@/lib/names";
 import {
@@ -179,6 +180,9 @@ export default async function AssignmentPage({
       (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
         ? "ai_only"
         : "tasty";
+    const deliverableType = ((
+      assignment.settings as { deliverableType?: DeliverableType }
+    ).deliverableType ?? "any") as DeliverableType;
     // The uploaded brief, so the edit panel can show what's attached and let
     // the professor open, replace, or remove it. Only the storage path is
     // stored, never the original filename — the extension is all we can label.
@@ -280,6 +284,7 @@ export default async function AssignmentPage({
             gradingMode={gradingMode}
             professorTaste={professorTaste}
             tasteRequirement={settings.tasteRequirement}
+            deliverableType={deliverableType}
             courseId={courseId}
             briefUrl={briefUrl}
             briefExt={briefExt}
@@ -469,6 +474,7 @@ export default async function AssignmentPage({
           gradingMode={gradingMode}
           professorTaste={professorTaste}
           tasteRequirement={settings.tasteRequirement}
+          deliverableType={deliverableType}
           courseId={courseId}
           briefUrl={briefUrl}
           briefExt={briefExt}
@@ -574,6 +580,9 @@ export default async function AssignmentPage({
         .maybeSingle();
       instructorTaste = tasteProse(professorTaste) || instructorTaste;
     }
+    const deliverableType = ((
+      assignment.settings as { deliverableType?: DeliverableType }
+    ).deliverableType ?? "any") as DeliverableType;
     return (
       <div className="grid gap-6">
         {header}
@@ -596,6 +605,7 @@ export default async function AssignmentPage({
               : "tasty"
           }
           instructorCriteria={instructorTaste}
+          deliverableType={deliverableType}
         />
       </div>
     );

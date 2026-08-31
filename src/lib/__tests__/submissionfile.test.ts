@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   classifySubmissionFile,
+  deliverableAccept,
   MAX_SUBMISSION_BYTES,
 } from "@/lib/submissionfile";
 
@@ -117,6 +118,64 @@ describe("classifySubmissionFile — refusing what would corrupt", () => {
     );
 
     expect(verdict.ok).toBe(false);
+  });
+});
+
+describe("classifySubmissionFile — a declared deliverable type", () => {
+  test("no declared type accepts every supported shape (unchanged)", () => {
+    expect(classifySubmissionFile(file("report.pdf")).ok).toBe(true);
+    expect(classifySubmissionFile(file("shot.png"), "any").ok).toBe(true);
+    expect(classifySubmissionFile(file("report.pdf"), "any").ok).toBe(true);
+  });
+
+  test("image required: accepts a PNG/JPG", () => {
+    expect(classifySubmissionFile(file("shot.png"), "image").ok).toBe(true);
+    expect(classifySubmissionFile(file("shot.jpg"), "image").ok).toBe(true);
+  });
+
+  test("image required: refuses a valid PDF, naming the fix", () => {
+    const verdict = classifySubmissionFile(file("report.pdf"), "image");
+
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) throw new Error("expected refusal");
+    expect(verdict.code).toBe("unsupported");
+    expect(verdict.message).toContain("screenshot");
+  });
+
+  test("pdf required: refuses a PNG, naming the fix", () => {
+    const verdict = classifySubmissionFile(file("shot.png"), "pdf");
+
+    if (verdict.ok) throw new Error("expected refusal");
+    expect(verdict.message).toContain("PDF");
+  });
+
+  test("md required: refuses a PDF", () => {
+    expect(classifySubmissionFile(file("report.pdf"), "md").ok).toBe(false);
+  });
+
+  test("a declared type overrides generic advice on an unsupported file", () => {
+    // A .docx under an image assignment should point at the image, not "export a PDF".
+    const verdict = classifySubmissionFile(file("essay.docx"), "image");
+
+    if (verdict.ok) throw new Error("expected refusal");
+    expect(verdict.message).toContain("screenshot");
+  });
+
+  test("size is still checked before the declared type", () => {
+    const verdict = classifySubmissionFile(
+      file("report.pdf", "application/pdf", MAX_SUBMISSION_BYTES + 1),
+      "image"
+    );
+
+    if (verdict.ok) throw new Error("expected refusal");
+    expect(verdict.code).toBe("too_large");
+  });
+
+  test("deliverableAccept narrows the picker to the declared type", () => {
+    expect(deliverableAccept("image")).not.toContain("pdf");
+    expect(deliverableAccept("pdf")).toContain("application/pdf");
+    expect(deliverableAccept("any")).toContain("image/png");
+    expect(deliverableAccept()).toContain("application/pdf");
   });
 });
 

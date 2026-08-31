@@ -21,7 +21,11 @@ import {
   saveTasteFile,
   submitWork,
 } from "@/server/actions/assignments";
-import { classifySubmissionFile } from "@/lib/submissionfile";
+import {
+  classifySubmissionFile,
+  deliverableAccept,
+  type DeliverableType,
+} from "@/lib/submissionfile";
 import type { TasteRequirement } from "@/lib/tastegrading";
 
 /**
@@ -53,6 +57,8 @@ interface Props {
   /** ai_only: no student taste file — the instructor's criteria rule. */
   mode?: "tasty" | "ai_only";
   instructorCriteria?: string;
+  /** What the professor asked students to hand in; restricts the picker. */
+  deliverableType?: DeliverableType;
 }
 
 export function SubmissionEditor({
@@ -69,6 +75,7 @@ export function SubmissionEditor({
   submittedFileExt = null,
   mode = "tasty",
   instructorCriteria = "",
+  deliverableType = "any",
 }: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -92,6 +99,17 @@ export function SubmissionEditor({
   }, [deadlineMs]);
 
   const noteChanged = note !== submissionNote;
+
+  // What the professor asked for, in plain words — drives the picker's accept
+  // filter and the card copy so the student sees the same thing everywhere.
+  const acceptLabel =
+    deliverableType === "image"
+      ? "a screenshot (PNG or JPG)"
+      : deliverableType === "pdf"
+        ? "a PDF"
+        : deliverableType === "md"
+          ? "a Markdown (.md) file"
+          : "a PDF, Markdown, or image (PNG/JPG)";
 
   // Nothing of their own on the page yet — either blank or still the draft.
   const tasteUnwritten = !taste.trim() || (tasteIsDefault && taste === initialTaste);
@@ -123,11 +141,10 @@ export function SubmissionEditor({
     // Refuse unknown types rather than guessing. A .docx used to be stored
     // as a .pdf, which "succeeded" and handed the professor a file that
     // wouldn't open.
-    const verdict = classifySubmissionFile({
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    });
+    const verdict = classifySubmissionFile(
+      { name: file.name, size: file.size, type: file.type },
+      deliverableType
+    );
     if (!verdict.ok) {
       toast.error(verdict.message);
       return;
@@ -242,11 +259,11 @@ export function SubmissionEditor({
             {submittedAt ? "Your submission" : "Submit your work"}
           </CardTitle>
           <CardDescription>
-            One file — PDF, Markdown, or image (PNG/JPG), up to 20 MB —
-            your entire submission for this assignment, so combine any
-            parts into a single file. Don&apos;t put your name in it —
-            your work is judged anonymously. Resubmitting replaces the file
-            (your last edit is what counts for timeliness).
+            One file — {acceptLabel}, up to 20 MB — your entire submission
+            for this assignment, so combine any parts into a single file.
+            Don&apos;t put your name in it — your work is judged anonymously.
+            Resubmitting replaces the file (your last edit is what counts for
+            timeliness).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -321,7 +338,7 @@ export function SubmissionEditor({
           <input
             ref={fileRef}
             type="file"
-            accept="application/pdf,.md,text/markdown,image/png,image/jpeg,.png,.jpg,.jpeg"
+            accept={deliverableAccept(deliverableType)}
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];

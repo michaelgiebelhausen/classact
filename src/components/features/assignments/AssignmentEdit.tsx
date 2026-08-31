@@ -15,6 +15,7 @@ import {
   updateAssignment,
 } from "@/server/actions/assignments";
 import type { TasteRequirement } from "@/lib/tastegrading";
+import type { DeliverableType } from "@/lib/submissionfile";
 import type { AssignmentState } from "@/types/db";
 
 const ASSIGNMENT_BUCKET = "assignment-docs";
@@ -44,6 +45,8 @@ interface Props {
   professorTaste: string;
   /** Whether a student taste file is invited, required, or off (tasty only). */
   tasteRequirement: TasteRequirement;
+  /** What students hand in — restricts the upload; "image" grades visually. */
+  deliverableType: DeliverableType;
   /** For uploading a replacement brief to `{courseId}/brief/…`. */
   courseId: string;
   /** Signed URL to view the currently attached brief, or null if none. */
@@ -72,6 +75,7 @@ export function AssignmentEdit({
   gradingMode,
   professorTaste: initialTaste,
   tasteRequirement: initialTasteReq,
+  deliverableType: initialDeliverable,
   courseId,
   briefUrl,
   briefExt,
@@ -85,6 +89,7 @@ export function AssignmentEdit({
   const [points, setPoints] = useState(initialPointsText);
   const [taste, setTaste] = useState(initialTaste);
   const [tasteReq, setTasteReq] = useState(initialTasteReq);
+  const [deliverable, setDeliverable] = useState(initialDeliverable);
   // Live grading mode drives the labels below, so the panel reflects the
   // choice before it's saved. `gradingMode` stays the committed value.
   const [mode, setMode] = useState(gradingMode);
@@ -113,6 +118,9 @@ export function AssignmentEdit({
   // The grading mode decides whether students write taste files at all, so it
   // can only move while the assignment is still open (same window server-side).
   const canEditMode = state === "open";
+  // What students hand in closes with submissions too — same window as the
+  // taste requirement (the server enforces it).
+  const canEditDeliverable = state === "open";
 
   async function save() {
     const input: Parameters<typeof updateAssignment>[0] = { assignmentId };
@@ -149,6 +157,8 @@ export function AssignmentEdit({
     const modeChanged = canEditMode && mode !== gradingMode;
     const tasteReqChanged =
       mode === "tasty" && canEditTasteReq && tasteReq !== initialTasteReq;
+    const deliverableChanged =
+      canEditDeliverable && deliverable !== initialDeliverable;
 
     // The brief file: replace it (a new one chosen) or remove it (explicitly
     // cleared). The upload itself waits until we're actually saving.
@@ -167,6 +177,7 @@ export function AssignmentEdit({
       !tasteChanged &&
       !tasteReqChanged &&
       !modeChanged &&
+      !deliverableChanged &&
       briefIntent === "none"
     ) {
       setOpen(false);
@@ -227,10 +238,11 @@ export function AssignmentEdit({
       // One call carries both grading knobs. It runs after the taste save so
       // that switching to ai_only sees the professor's taste file already in
       // place (the server requires it).
-      if (modeChanged || tasteReqChanged) {
+      if (modeChanged || tasteReqChanged || deliverableChanged) {
         const gradingPatch: Parameters<typeof setGradingOptions>[1] = {};
         if (modeChanged) gradingPatch.gradingMode = mode;
         if (tasteReqChanged) gradingPatch.tasteRequirement = tasteReq;
+        if (deliverableChanged) gradingPatch.deliverableType = deliverable;
         const result = await setGradingOptions(assignmentId, gradingPatch);
         if (!result.ok) {
           toast.error(result.error);
@@ -491,6 +503,29 @@ export function AssignmentEdit({
             </p>
           </div>
         )}
+
+        <div className="grid gap-1.5">
+          <Label htmlFor="edit-deliverable">What are students handing in?</Label>
+          <select
+            id="edit-deliverable"
+            value={deliverable}
+            onChange={(e) => setDeliverable(e.target.value as DeliverableType)}
+            disabled={!canEditDeliverable}
+            className="h-9 max-w-md rounded-md border bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <option value="any">Anything — PDF, Markdown, or image</option>
+            <option value="pdf">A PDF</option>
+            <option value="md">A Markdown file</option>
+            <option value="image">A screenshot (PNG or JPG)</option>
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {!canEditDeliverable
+              ? "Submissions have closed — what the deliverable includes can't change now."
+              : deliverable === "image"
+                ? "Students upload a screenshot; the AI assesses it visually against your taste file. Needs a vision-capable model in AI Settings."
+                : "Restricts what students can upload. Leave on “Anything” unless it must be one format."}
+          </p>
+        </div>
 
         <div className="grid gap-1.5">
           <Label htmlFor="edit-deadline-date">Submission deadline</Label>

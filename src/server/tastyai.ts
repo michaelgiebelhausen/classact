@@ -364,14 +364,20 @@ export async function scoreSubmission(
     .map((b, i) => `--- Generic answer ${i + 1} ---\n${b.slice(0, 3000)}`)
     .join("\n\n");
 
+  const isImage =
+    input.submission.kind === "png" || input.submission.kind === "jpeg";
   const system = [
-    "You are grading one student submission (attached as a PDF file or inlined Markdown) for a college assignment, against the class's emergent rubric.",
+    isImage
+      ? "You are grading one student submission that is an IMAGE (typically a screenshot) for a college assignment, against the class's emergent rubric. Assess it VISUALLY: read what is actually visible — interface elements, counts, numbers, labels, and any scores shown. When the rubric or the student's criteria name a specific visible fact (e.g. the number of sources shown, or whether a quiz score is out of 10), verify it from the image itself; never assume anything that isn't visible in the image."
+      : "You are grading one student submission (attached as a PDF file or inlined Markdown) for a college assignment, against the class's emergent rubric.",
     "Score each theme 0-10, anchored: 5 = solid/typical, 8 = clearly strong, 10 = exceptional. For each theme give one short evidence quote FROM THE SUBMISSION.",
     "overall: 0-10 holistic quality.",
     "ownBar: 0-10 — did the work meet the STUDENT'S OWN taste file (provided)?",
     "distinctiveness: 0-10 — how far does this go beyond the attached GENERIC one-shot answers? 10 = unmistakably its author's own thinking/voice/examples; 2-3 = reads like light edits of the generic answer. Judge convergence, not tool use.",
     "summary: 2-3 sentences of feedback for the student — specific, constructive, referencing the rubric.",
-    "extractedText: the submission's plain text (up to ~2000 words), for similarity analysis.",
+    isImage
+      ? "extractedText: transcribe the readable text visible in the image — labels, numbers, headings — up to ~500 words, for similarity analysis."
+      : "extractedText: the submission's plain text (up to ~2000 words), for similarity analysis.",
     'Reply with ONLY JSON: {"themeScores":[{"themeId":string,"score":number,"evidence":string}],"overall":number,"ownBar":number,"distinctiveness":number,"summary":string,"extractedText":string}',
   ].join("\n");
 

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card";
 import { createAssignment } from "@/server/actions/assignments";
 import type { TasteRequirement } from "@/lib/tastegrading";
+import type { DeliverableType } from "@/lib/submissionfile";
 
 /**
  * Professor: publish an assignment. Title + brief PDF + deadline — that's
@@ -60,6 +61,8 @@ export function AssignmentCreate({
   const [gradingCriteria, setGradingCriteria] = useState("");
   const [tasteRequirement, setTasteRequirement] =
     useState<TasteRequirement>("optional");
+  // What students hand in. "any" = the default (every supported type).
+  const [deliverableType, setDeliverableType] = useState<DeliverableType>("any");
   // 0033 — the student-facing brief. Students read this.
   const [instructions, setInstructions] = useState("");
   const [points, setPoints] = useState("");
@@ -119,6 +122,7 @@ export function AssignmentCreate({
       // The professor's taste file now counts in both modes.
       gradingInstructions: gradingCriteria || undefined,
       tasteRequirement: gradingMode === "tasty" ? tasteRequirement : undefined,
+      deliverableType: deliverableType === "any" ? undefined : deliverableType,
     });
     setSaving(false);
     if (result.ok) {
@@ -273,6 +277,28 @@ export function AssignmentCreate({
             </p>
           </div>
         )}
+
+        <div className="grid gap-2">
+          <Label htmlFor="a-deliverable">What are students handing in?</Label>
+          <select
+            id="a-deliverable"
+            value={deliverableType}
+            onChange={(e) =>
+              setDeliverableType(e.target.value as DeliverableType)
+            }
+            className="h-9 max-w-md rounded-md border bg-background px-2 text-sm"
+          >
+            <option value="any">Anything — PDF, Markdown, or image</option>
+            <option value="pdf">A PDF</option>
+            <option value="md">A Markdown file</option>
+            <option value="image">A screenshot (PNG or JPG)</option>
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {deliverableType === "image"
+              ? "Students upload a screenshot and the AI assesses it visually against your taste file (e.g. counting what's shown). Screenshot grading needs a vision-capable model in AI Settings."
+              : "Restricts what students can upload. Leave on “Anything” unless the deliverable has to be one specific format."}
+          </p>
+        </div>
 
         <div className="flex flex-wrap items-end gap-4">
           <div className="grid gap-2">
