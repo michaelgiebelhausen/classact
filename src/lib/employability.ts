@@ -53,6 +53,9 @@ export interface WorkReadinessInput {
   tastesSharpened?: number;
   /** Mean "met your own bar" 0..10; null = none graded yet. */
   avgOwnBar?: number | null;
+  /** Mean standards bar 0..10 (5 = matches the instructor's, >5 higher); the
+   *  height of the standard they set for THEMSELVES. Null = none compared. */
+  avgStandardsBar?: number | null;
   /** Mean Distinctive↔Generic 0..10; null = none graded yet. */
   avgDistinctiveness?: number | null;
   /** Mean taste-agreement 0..100 across published assignments; null = none. */
@@ -378,12 +381,16 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
     const agreement = input.avgTasteAgreement ?? null;
     const honesty = input.avgSelfHonesty ?? null;
     const ownBar = input.avgOwnBar ?? null;
+    const standardsBar = input.avgStandardsBar ?? null;
     const sharpenRate = tastesSharpened / assignmentsSubmitted;
     judgmentScore =
       (agreement !== null ? 0.4 * agreement : 0) +
       (honesty !== null ? 0.2 * honesty : 0) +
       12 * sharpenRate +
       (ownBar !== null ? 1.2 * ownBar : 0) +
+      // The bar you set for yourself vs. the instructor's (5 = matched). A high
+      // standard scores well; low-balling to game your own bar scores poorly.
+      (standardsBar !== null ? 1.2 * standardsBar : 0) +
       Math.min(8, input.rubricMinutes ?? 0);
     if (tastesSharpened > 0) {
       judgmentEvidence.push(
@@ -406,6 +413,15 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
     }
     if (ownBar !== null) {
       judgmentEvidence.push(`Met your own bar at ${ownBar.toFixed(1)}/10`);
+    }
+    if (standardsBar !== null) {
+      judgmentEvidence.push(
+        standardsBar > 5.5
+          ? "Held yourself to a higher bar than the course expects"
+          : standardsBar < 4.5
+            ? "Set a gentler bar for yourself than the course expects"
+            : "Set a bar for yourself in line with the course"
+      );
     }
   } else {
     judgmentEvidence.push(

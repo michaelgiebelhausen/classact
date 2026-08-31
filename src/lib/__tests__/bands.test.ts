@@ -17,6 +17,7 @@ import {
   defaultBands,
   readBands,
   readDividers,
+  resolveGradingAxes,
   resolveSettings,
 } from "@/lib/tastegrading";
 import {
@@ -418,6 +419,60 @@ describe("band settings", () => {
     expect(readDividers({ dividers: [] })).toEqual([]);
     expect(readDividers({})).toBeNull();
     expect(readDividers(null)).toBeNull();
+  });
+});
+
+describe("resolveGradingAxes", () => {
+  it("maps legacy ai_only to instructor taste + no peer, ungated", () => {
+    expect(resolveGradingAxes({ gradingMode: "ai_only" })).toEqual({
+      tasteSource: "instructor",
+      peerReview: false,
+      gated: false,
+    });
+  });
+
+  it("maps a legacy row with no flag to co-created + peer, ungated", () => {
+    // Absent gradingMode = today's tasty. Co-created for the pipeline, but
+    // NEVER gated — an in-flight assignment must not start locking mid-life.
+    for (const s of [{}, null, { gradingMode: "tasty" }]) {
+      expect(resolveGradingAxes(s)).toEqual({
+        tasteSource: "cocreated",
+        peerReview: true,
+        gated: false,
+      });
+    }
+  });
+
+  it("reads explicit new-style keys, gating only explicit co-created", () => {
+    expect(
+      resolveGradingAxes({ peerReview: false, tasteSource: "cocreated" })
+    ).toEqual({ tasteSource: "cocreated", peerReview: false, gated: true });
+    expect(
+      resolveGradingAxes({ peerReview: false, tasteSource: "instructor" })
+    ).toEqual({ tasteSource: "instructor", peerReview: false, gated: false });
+  });
+
+  it("lets new-style keys win over a stale legacy gradingMode", () => {
+    expect(
+      resolveGradingAxes({
+        gradingMode: "ai_only",
+        peerReview: false,
+        tasteSource: "cocreated",
+      })
+    ).toEqual({ tasteSource: "cocreated", peerReview: false, gated: true });
+  });
+
+  it("resolves partial new-style keys per key, never inferring a gate", () => {
+    // peerReview present, tasteSource absent → source falls back to legacy;
+    // gate stays false because co-created was not explicitly stored.
+    expect(resolveGradingAxes({ peerReview: false })).toEqual({
+      tasteSource: "cocreated",
+      peerReview: false,
+      gated: false,
+    });
+    expect(
+      resolveGradingAxes({ gradingMode: "ai_only", peerReview: true })
+    ).toEqual({ tasteSource: "instructor", peerReview: true, gated: false });
   });
 
   it("sorts converted bands best-first regardless of input order", () => {

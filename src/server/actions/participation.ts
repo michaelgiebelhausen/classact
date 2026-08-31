@@ -53,6 +53,7 @@ export interface StudentSignalBundle {
     assignmentsSubmitted: number;
     avgDistinctiveness: number | null;
     avgOwnBar: number | null;
+    avgStandardsBar: number | null;
     avgTasteAgreement: number | null;
     avgSelfHonesty: number | null;
     medianHoursBeforeDeadline: number | null;
@@ -170,7 +171,7 @@ async function buildCourseSignals(
       .eq("course_id", courseId),
     admin
       .from("ai_scores")
-      .select("submission_id, own_bar, distinctiveness")
+      .select("submission_id, own_bar, distinctiveness, standards_score")
       .eq("course_id", courseId),
     admin
       .from("comparisons")
@@ -375,12 +376,19 @@ async function buildCourseSignals(
       (t) => !t.is_default_untouched && submittedAssignmentIds.has(t.assignment_id)
     ).length;
     const ownBars: number[] = [];
+    const standardsBars: number[] = [];
     const distinctivenesses: number[] = [];
     const hoursBefore: number[] = [];
     for (const sub of mySubmissions) {
       const score = scoreBySubmission.get(sub.id);
       if (score?.own_bar !== null && score?.own_bar !== undefined) {
         ownBars.push(Number(score.own_bar));
+      }
+      if (
+        score?.standards_score !== null &&
+        score?.standards_score !== undefined
+      ) {
+        standardsBars.push(Number(score.standards_score));
       }
       if (score?.distinctiveness !== null && score?.distinctiveness !== undefined) {
         distinctivenesses.push(Number(score.distinctiveness));
@@ -479,6 +487,7 @@ async function buildCourseSignals(
       assignmentsSubmitted: mySubmissions.length,
       tastesSharpened,
       avgOwnBar: mean(ownBars),
+      avgStandardsBar: mean(standardsBars),
       avgDistinctiveness: mean(distinctivenesses),
       avgTasteAgreement: judge.tasteAgreement,
       avgSelfHonesty: judge.selfHonesty,
@@ -503,6 +512,7 @@ async function buildCourseSignals(
         assignmentsSubmitted: mySubmissions.length,
         avgDistinctiveness: mean(distinctivenesses),
         avgOwnBar: mean(ownBars),
+        avgStandardsBar: mean(standardsBars),
         avgTasteAgreement: judge.tasteAgreement,
         avgSelfHonesty: judge.selfHonesty,
         medianHoursBeforeDeadline: median(hoursBefore),

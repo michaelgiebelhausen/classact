@@ -358,6 +358,30 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Two grading axes, locked co-created taste, and a standards signal (0045)
+
+**Run `supabase/migrations/0045_taste_lock_standards.sql` BEFORE deploying.**
+It adds `taste_files.locked_at` (the student's seal), `ai_scores.standards_score`
++ `standards_note` (the taste-vs-instructor comparison — on ai_scores so it
+inherits that table's publish gate), and a BEFORE-UPDATE trigger that freezes a
+locked taste file's content (the student's own RLS lets them UPDATE their row,
+so the freeze must live in the database). The app SELECTs `locked_at` and
+`standards_score`, so a deploy ahead of this migration trips the schema guard
+(the boot check throws in dev, banners in prod) until it's applied.
+
+What changed in code: the single `settings.gradingMode` switch became two axes —
+`peerReview` and `tasteSource` — resolved by `resolveGradingAxes()` in
+`src/lib/tastegrading.ts`. Legacy rows still work (ai_only → instructor/no-peer,
+absent → co-created/peer), and are never "gated"; only NEW co-created
+assignments store the keys and gate. The new non-peer co-created cell lets
+students lock their taste to reveal the instructor's + open the upload, and the
+grading run gains a "standards" phase between scoring and shingle. Peer review
+(today's tasty path) is untouched.
+
+**Rollback note:** don't roll code back while an assignment sits in the new
+`analysis.phase === "standards"` — the old code treats an unknown phase as the
+pairs branch and would skip the shingle step.
+
 ## Sleep/shutdown no longer counts as drifting off (0044)
 
 **Run `supabase/migrations/0044_lecture_presence.sql` BEFORE deploying.** It

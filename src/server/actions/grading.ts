@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import {
   readDividers,
+  resolveGradingAxes,
   resolveSettings,
   seededRandom,
 } from "@/lib/tastegrading";
@@ -28,6 +29,7 @@ import {
 import { assignPeerPairs } from "@/lib/pairing";
 import { findSimilarPairs } from "@/lib/shingle";
 import {
+  compareStandards,
   docKindFromPath,
   emergeRubric,
   generateBaselines,
@@ -35,7 +37,7 @@ import {
   type DocKind,
 } from "@/server/tastyai";
 import { resolveCourseAi, type AiTask } from "@/server/aicreds";
-import { draftBody, tasteProse } from "@/lib/tasteprose";
+import { draftBody, isUntouchedTaste, tasteProse } from "@/lib/tasteprose";
 import type { ActionResult } from "@/server/actions/auth";
 import type { AssignmentState } from "@/types/db";
 
@@ -53,7 +55,14 @@ const SCORE_BATCH = 2;
 const SIGNED_URL_SECONDS = 900;
 
 interface AnalysisState {
-  phase?: "rubric" | "baselines" | "scoring" | "shingle" | "pairs" | "done";
+  phase?:
+    | "rubric"
+    | "baselines"
+    | "scoring"
+    | "standards"
+    | "shingle"
+    | "pairs"
+    | "done";
   baselines?: string[];
   /** submissionId → extracted text (cleared after the shingle phase). */
   texts?: Record<string, string>;
@@ -344,12 +353,11 @@ export async function advanceAnalysis(assignmentId: string): Promise<
     saveAnalysis({ ...patch, busyUntil: undefined }, state);
 
   const phase = analysis.phase ?? "rubric";
-  // "tasty" = taste files + peer round; "ai_only" = AI grades against the
-  // instructor's criteria, skips baselines and peer review entirely.
-  const gradingMode =
-    (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
-      ? "ai_only"
-      : "tasty";
+  // The two grading axes drive every branch below: `tasteSource` (instructor
+  // taste is the whole corpus, or co-created from the class) and `peerReview`
+  // (a peer round, or straight to finalizing). instructor-sourced also skips
+  // baselines/distinctiveness; co-created runs a standards-comparison phase.
+  const axes = resolveGradingAxes(assignment.settings);
   const { data: submissions } = await admin
     .from("submissions")
     .select("id, enrollment_id, storage_path")
@@ -364,7 +372,7 @@ export async function advanceAnalysis(assignmentId: string): Promise<
       ? "rubric"
       : phase === "baselines"
         ? "baseline"
-        : phase === "scoring"
+        : phase === "scoring" || phase === "standards"
           ? "scoring"
           : null;
   const creds = taskForPhase
@@ -386,7 +394,7 @@ export async function advanceAnalysis(assignmentId: string): Promise<
         .select("enrollment_id, body, criteria, bar_statement")
         .eq("assignment_id", assignmentId);
 
-      if (gradingMode === "ai_only") {
+      if (axes.tasteSource === "instructor") {
         // The instructor's taste file is the whole corpus. It lives in the
         // professor row now; settings.gradingInstructions is the pre-0037
         // home and stays readable for anything the backfill missed.
@@ -413,7 +421,7 @@ export async function advanceAnalysis(assignmentId: string): Promise<
         }
       }
       if (corpus.length === 0 || total === 0) {
-        const idleState = gradingMode === "ai_only" ? "finalizing" : "peer_review";
+        const idleState = axes.peerReview ? "peer_review" : "finalizing";
         await done({ error: "No submissions to analyze." }, idleState);
         return { ok: true, data: { phase: "done", state: idleState, scored: 0, total } };
       }
@@ -444,7 +452,7 @@ export async function advanceAnalysis(assignmentId: string): Promise<
     }
 
     if (phase === "baselines") {
-      if (gradingMode === "ai_only") {
+      if (axes.tasteSource === "instructor") {
         // Objective grading: no generic-answer baselines, no distinctiveness.
         await done({ phase: "scoring", baselines: [] });
         return {
@@ -481,10 +489,13 @@ export async function advanceAnalysis(assignmentId: string): Promise<
       const pending = (submissions ?? []).filter((s) => !scoredIds.has(s.id));
 
       if (pending.length === 0) {
-        await done({ phase: "shingle" });
+        // → standards (co-created: compare each taste to the instructor's);
+        // the standards phase itself skips straight to shingle when it doesn't
+        // apply.
+        await done({ phase: "standards" });
         return {
           ok: true,
-          data: { phase: "shingle", state: "analyzing", scored: total, total },
+          data: { phase: "standards", state: "analyzing", scored: total, total },
         };
       }
 
@@ -547,6 +558,77 @@ export async function advanceAnalysis(assignmentId: string): Promise<
       };
     }
 
+    if (phase === "standards") {
+      // Compare each student's own taste to the instructor's — is the bar they
+      // set for themselves above, at, or below? Only co-created assignments,
+      // and only where the instructor has a taste and the student wrote a real
+      // (non-default) one; everything else drops straight to shingle so the
+      // phase can never stall (busyUntil relies on always calling done()).
+      const advanceToShingle = async () => {
+        await done({ phase: "shingle" });
+        return {
+          ok: true as const,
+          data: { phase: "shingle", state: "analyzing", scored: total, total },
+        };
+      };
+      if (axes.tasteSource !== "cocreated") return advanceToShingle();
+
+      const { data: tasteRows } = await admin
+        .from("taste_files")
+        .select("enrollment_id, body, criteria, bar_statement, is_default_untouched")
+        .eq("assignment_id", assignmentId);
+      const instructorTaste = tasteProse(
+        (tasteRows ?? []).find((t) => t.enrollment_id === null) ?? null
+      );
+      const defaultTaste = (assignment.settings as { defaultTaste?: unknown })
+        .defaultTaste;
+      // enrollment → their own prose, qualifying rows only (their real take,
+      // not the AI draft they never touched — comparing the draft to the
+      // instructor would be noise).
+      const studentTaste = new Map<string, string>();
+      for (const t of tasteRows ?? []) {
+        if (t.enrollment_id === null) continue;
+        if (isUntouchedTaste(t, defaultTaste)) continue;
+        const text = tasteProse(t);
+        if (text) studentTaste.set(t.enrollment_id, text);
+      }
+      if (!instructorTaste || studentTaste.size === 0) return advanceToShingle();
+
+      const enrollmentBySub = new Map(
+        (submissions ?? []).map((s) => [s.id, s.enrollment_id])
+      );
+      const { data: scores } = await admin
+        .from("ai_scores")
+        .select("id, submission_id, standards_score")
+        .eq("assignment_id", assignmentId);
+      const pending = (scores ?? []).filter((sc) => {
+        if (sc.standards_score !== null) return false;
+        const enr = enrollmentBySub.get(sc.submission_id);
+        return enr != null && studentTaste.has(enr);
+      });
+      if (pending.length === 0) return advanceToShingle();
+
+      for (const sc of pending.slice(0, SCORE_BATCH)) {
+        const enr = enrollmentBySub.get(sc.submission_id);
+        const taste = enr ? studentTaste.get(enr) : undefined;
+        if (!taste) continue;
+        const cmp = await compareStandards(
+          { assignmentTitle: assignment.title, instructorTaste, studentTaste: taste },
+          creds!
+        );
+        if (!cmp.ok) continue; // retried on the next crank
+        await admin
+          .from("ai_scores")
+          .update({ standards_score: cmp.data.bar, standards_note: cmp.data.note })
+          .eq("id", sc.id);
+      }
+      await done({ phase: "standards" });
+      return {
+        ok: true,
+        data: { phase: "standards", state: "analyzing", scored: total, total },
+      };
+    }
+
     if (phase === "shingle") {
       const docs = Object.entries(analysis.texts ?? {}).map(([id, text]) => ({
         id,
@@ -559,7 +641,7 @@ export async function advanceAnalysis(assignmentId: string): Promise<
 
     // phase === "pairs": draft ranking + peer pair assignment, then open.
     await recomputeRanking(admin, assignmentId);
-    if (gradingMode === "ai_only") {
+    if (!axes.peerReview) {
       // No peer round: the ranking goes straight to the professor, so it is
       // theirs to reorder the moment they see it.
       await ensureMaterialized(admin, assignmentId);

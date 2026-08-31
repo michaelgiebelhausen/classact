@@ -77,8 +77,13 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
   },
   {
     table: "taste_files",
-    columns: ["body"],
-    migration: "0037_speed_grader.sql",
+    columns: ["body", "locked_at"],
+    migration: "0037_speed_grader.sql / 0045_taste_lock_standards.sql",
+  },
+  {
+    table: "ai_scores",
+    columns: ["standards_score", "standards_note"],
+    migration: "0045_taste_lock_standards.sql",
   },
   {
     table: "lecture_note_entries",

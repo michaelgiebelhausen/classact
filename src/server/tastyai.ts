@@ -438,3 +438,62 @@ export async function scoreSubmission(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Standards comparison (student's taste vs the instructor's)
+// ---------------------------------------------------------------------------
+
+export interface StandardsComparison {
+  /** 0–10; 5 = the student's bar matches the instructor's, >5 higher. */
+  bar: number;
+  /** One sentence to the student on where their bar sits. */
+  note: string;
+}
+
+/**
+ * How high a bar did the student set for THEMSELVES, relative to the
+ * instructor's? Judges the two taste files against each other — the standard,
+ * not the work (scoreSubmission's ownBar is the work). It's the counterweight
+ * to gaming ownBar with a deliberately low standard: a soft or gameable student
+ * taste scores low here.
+ */
+export async function compareStandards(
+  input: {
+    assignmentTitle: string;
+    instructorTaste: string;
+    studentTaste: string;
+  },
+  creds: AiCallCreds
+): Promise<AiResult<StandardsComparison>> {
+  const system = [
+    "You are comparing two 'taste files' for a college assignment — each is a person's own written standard for what makes work on it good. One is the INSTRUCTOR's, one a STUDENT's.",
+    "Judge ONLY how high and rigorous the STUDENT's standard is relative to the INSTRUCTOR's — the bar the student holds THEMSELVES to. Judge the standard itself, not the prose quality, length, or writing polish.",
+    "bar: 0-10, anchored — 5 = the student's bar matches the instructor's; 8 = clearly more demanding than the instructor's; 2 = clearly softer, vaguer, or lower than the instructor's. A vague, low-commitment, or easily-gamed student taste scores LOW.",
+    "note: ONE sentence, addressed to the student, on where their bar sits versus the course's.",
+    'Reply with ONLY JSON: {"bar":number,"note":string}',
+  ].join("\n");
+
+  const result = await callModel(
+    [
+      { role: "system", content: system },
+      {
+        role: "user",
+        content: `Assignment: "${input.assignmentTitle}".\n\nINSTRUCTOR's standard:\n${input.instructorTaste.slice(0, 8000)}\n\nSTUDENT's standard:\n${input.studentTaste.slice(0, 8000)}`,
+      },
+    ],
+    90_000,
+    "standards",
+    creds
+  );
+  if (!result.ok) return result;
+  const parsed = parseJson<{ bar?: unknown; note?: unknown }>(result.data, "standards");
+  if (!parsed) return { ok: false, error: "Standards comparison failed — try again." };
+  return {
+    ok: true,
+    data: {
+      bar: clampScore(parsed.bar),
+      note:
+        typeof parsed.note === "string" ? parsed.note.trim().slice(0, 400) : "",
+    },
+  };
+}

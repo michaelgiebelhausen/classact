@@ -14,7 +14,7 @@ import {
   setGradingOptions,
   updateAssignment,
 } from "@/server/actions/assignments";
-import type { TasteRequirement } from "@/lib/tastegrading";
+import type { TasteRequirement, TasteSource } from "@/lib/tastegrading";
 import type { DeliverableType } from "@/lib/submissionfile";
 import type { AssignmentState } from "@/types/db";
 
@@ -39,8 +39,9 @@ interface Props {
   /** ISO datetimes. */
   deadline: string;
   peerCloseAt: string;
-  /** Shapes the taste-file label and whether it may be emptied. */
-  gradingMode: "tasty" | "ai_only";
+  /** The two grading axes (resolved), driving the labels + which cell is live. */
+  peerReview: boolean;
+  tasteSource: TasteSource;
   /** The professor's own taste file, as prose (empty if none written). */
   professorTaste: string;
   /** Whether a student taste file is invited, required, or off (tasty only). */
@@ -72,7 +73,8 @@ export function AssignmentEdit({
   points: initialPoints,
   deadline,
   peerCloseAt,
-  gradingMode,
+  peerReview: initialPeer,
+  tasteSource: initialSource,
   professorTaste: initialTaste,
   tasteRequirement: initialTasteReq,
   deliverableType: initialDeliverable,
@@ -90,9 +92,17 @@ export function AssignmentEdit({
   const [taste, setTaste] = useState(initialTaste);
   const [tasteReq, setTasteReq] = useState(initialTasteReq);
   const [deliverable, setDeliverable] = useState(initialDeliverable);
-  // Live grading mode drives the labels below, so the panel reflects the
-  // choice before it's saved. `gradingMode` stays the committed value.
-  const [mode, setMode] = useState(gradingMode);
+  // Live axes drive the labels below, so the panel reflects the choice before
+  // it's saved. initialPeer/initialSource stay the committed values.
+  const [peer, setPeer] = useState(initialPeer);
+  const [source, setSource] = useState(initialSource);
+  const selectCell = (p: boolean, s: TasteSource) => {
+    setPeer(p);
+    setSource(s);
+  };
+  // Peer + co-created is today's "tasty": professor taste optional, its own
+  // taste-requirement knob. The two solo cells require the professor taste.
+  const legacyTasty = peer && source === "cocreated";
   // Brief file swap: a chosen replacement, or an explicit "remove". The
   // current file itself lives in storage — only the pointer changes here.
   const briefRef = useRef<HTMLInputElement>(null);
@@ -151,12 +161,13 @@ export function AssignmentEdit({
     const tasteChanged =
       canEditTaste && taste.trim() !== initialTaste.trim();
 
-    // Grading mode and the taste requirement both ride setGradingOptions. The
-    // requirement only exists in tasty mode, keyed off the LIVE mode so a
-    // requirement chosen right after switching to tasty still saves.
-    const modeChanged = canEditMode && mode !== gradingMode;
+    // The two axes and the taste requirement both ride setGradingOptions. The
+    // requirement only exists on legacy tasty, keyed off the LIVE cell so a
+    // requirement chosen right after switching stays consistent.
+    const axesChanged =
+      canEditMode && (peer !== initialPeer || source !== initialSource);
     const tasteReqChanged =
-      mode === "tasty" && canEditTasteReq && tasteReq !== initialTasteReq;
+      legacyTasty && canEditTasteReq && tasteReq !== initialTasteReq;
     const deliverableChanged =
       canEditDeliverable && deliverable !== initialDeliverable;
 
@@ -176,7 +187,7 @@ export function AssignmentEdit({
       !fieldsChanged &&
       !tasteChanged &&
       !tasteReqChanged &&
-      !modeChanged &&
+      !axesChanged &&
       !deliverableChanged &&
       briefIntent === "none"
     ) {
@@ -184,13 +195,12 @@ export function AssignmentEdit({
       return;
     }
 
-    // In ai_only mode the taste file IS the rubric students are graded
-    // against — it must exist and can't be blanked, whether the assignment was
-    // already ai_only or is being switched to it now. (The server refuses this
-    // too.) Only relevant while open, where the taste and mode can change.
-    if (canEditTaste && mode === "ai_only" && !taste.trim()) {
+    // The two solo cells make the professor taste the standard (the rubric, or
+    // what students see + are measured against) — it can't be blanked. (The
+    // server refuses this too.) Only relevant while open.
+    if (canEditTaste && !legacyTasty && !taste.trim()) {
       toast.error(
-        "AI-only grading needs your taste file — it's the standard students are graded against."
+        "This grading style needs your taste file — it's the standard students are shown and measured against."
       );
       return;
     }
@@ -238,9 +248,12 @@ export function AssignmentEdit({
       // One call carries both grading knobs. It runs after the taste save so
       // that switching to ai_only sees the professor's taste file already in
       // place (the server requires it).
-      if (modeChanged || tasteReqChanged || deliverableChanged) {
+      if (axesChanged || tasteReqChanged || deliverableChanged) {
         const gradingPatch: Parameters<typeof setGradingOptions>[1] = {};
-        if (modeChanged) gradingPatch.gradingMode = mode;
+        if (axesChanged) {
+          gradingPatch.peerReview = peer;
+          gradingPatch.tasteSource = source;
+        }
         if (tasteReqChanged) gradingPatch.tasteRequirement = tasteReq;
         if (deliverableChanged) gradingPatch.deliverableType = deliverable;
         const result = await setGradingOptions(assignmentId, gradingPatch);
@@ -394,7 +407,7 @@ export function AssignmentEdit({
           <p className="text-xs text-muted-foreground">
             PDF or Markdown, up to 20 MB. Replace it if the wrong file went up —
             students see the new one right away.
-            {mode === "tasty" && state === "open"
+            {source === "cocreated" && state === "open"
               ? " The AI drafted each student's starting taste file from the original brief; swapping the file here doesn't redraw that."
               : ""}
           </p>
@@ -417,41 +430,56 @@ export function AssignmentEdit({
         </div>
 
         <div className="grid gap-1.5">
-          <Label>Grading mode</Label>
+          <Label>How is this graded?</Label>
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
-              variant={mode === "tasty" ? "default" : "outline"}
+              variant={legacyTasty ? "default" : "outline"}
               disabled={!canEditMode}
-              onClick={() => setMode("tasty")}
+              onClick={() => selectCell(true, "cocreated")}
             >
-              Tasty Grading (peers + AI)
+              Peer-reviewed
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={mode === "ai_only" ? "default" : "outline"}
+              variant={
+                !peer && source === "cocreated" ? "default" : "outline"
+              }
               disabled={!canEditMode}
-              onClick={() => setMode("ai_only")}
+              onClick={() => selectCell(false, "cocreated")}
             >
-              AI-only (no peer review)
+              You grade · co-created taste
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={
+                !peer && source === "instructor" ? "default" : "outline"
+              }
+              disabled={!canEditMode}
+              onClick={() => selectCell(false, "instructor")}
+            >
+              You grade · your taste
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
             {!canEditMode
-              ? "Locked once grading starts — this decides whether students write taste files."
-              : mode === "tasty"
-                ? "Students write taste files, a rubric emerges from the class, and peers refine the AI's ranking."
-                : "For objective work (quiz screenshots, checklists): the AI grades every submission against your taste file — no student taste files, no peer round."}
+              ? "Locked once grading starts."
+              : legacyTasty
+                ? "Students grade each other's work; a rubric emerges from the class and peers refine the AI's ranking."
+                : source === "cocreated"
+                  ? "You're the only grader. Students lock their own taste first — that reveals yours and opens their upload — and the rubric is co-created."
+                  : "You're the only grader. The AI grades every submission against your taste file — no student taste, no peer round."}
           </p>
         </div>
 
         <div className="grid gap-1.5">
           <Label htmlFor="edit-taste">
-            {mode === "ai_only"
-              ? "Your taste file (the standard the AI grades against)"
-              : "Your taste file"}
+            {legacyTasty
+              ? "Your taste file"
+              : "Your taste file (the standard students are shown and measured against)"}
           </Label>
           <textarea
             id="edit-taste"
@@ -461,7 +489,7 @@ export function AssignmentEdit({
             rows={5}
             maxLength={10000}
             placeholder={
-              mode === "ai_only"
+              source === "instructor"
                 ? "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
                 : "What would make this work genuinely good? Write it the way you'd say it out loud."
             }
@@ -470,13 +498,15 @@ export function AssignmentEdit({
           <p className="text-xs text-muted-foreground">
             {!canEditTaste
               ? "Locked — the rubric was already drawn from this at the deadline."
-              : mode === "ai_only"
-                ? "There's no emergent rubric in AI-only mode, so students are shown this — it's the standard every submission is graded against."
-                : "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."}
+              : legacyTasty
+                ? "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."
+                : source === "cocreated"
+                  ? "Students see this once they've locked their own — and each student's taste is scored against it."
+                  : "There's no emergent rubric here — students are graded against this."}
           </p>
         </div>
 
-        {mode === "tasty" && (
+        {legacyTasty && (
           <div className="grid gap-1.5">
             <Label htmlFor="edit-taste-req">Students&apos; taste files</Label>
             <select
@@ -554,7 +584,7 @@ export function AssignmentEdit({
           )}
         </div>
 
-        {mode === "tasty" && (
+        {peer && (
           <div className="grid gap-1.5">
             <Label htmlFor="edit-peer-date">Peer grading closes</Label>
             <div className="flex flex-wrap items-center gap-2">

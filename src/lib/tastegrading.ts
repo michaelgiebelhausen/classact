@@ -237,6 +237,51 @@ export function readBands(settings: unknown): Band[] | null {
   return parseBands((settings as Record<string, unknown>).bands);
 }
 
+/** Where an assignment's grading criteria come from. */
+export type TasteSource = "instructor" | "cocreated";
+
+/**
+ * The two grading axes, resolved from an assignment's raw settings. This
+ * replaces the old single `gradingMode` switch: `peerReview` (do students
+ * evaluate classmates' work) and `tasteSource` (the instructor's taste alone,
+ * or co-created with the class) are independent.
+ *
+ * New-style keys (`settings.peerReview`, `settings.tasteSource`) win, resolved
+ * per key; a row carrying neither falls back to the legacy `gradingMode`
+ * ("ai_only" → instructor + no peer; absent/"tasty" → co-created + peer). So
+ * every existing assignment resolves without a data migration.
+ *
+ * `gated` — the "lock your taste to unlock mine + the upload form" flow — is
+ * true ONLY when co-created is EXPLICITLY stored (a new-style assignment). A
+ * legacy tasty row resolves to co-created for pipeline purposes but is never
+ * gated, so no assignment already in flight changes its rules mid-life.
+ */
+export interface GradingAxes {
+  peerReview: boolean;
+  tasteSource: TasteSource;
+  gated: boolean;
+}
+
+export function resolveGradingAxes(assignmentSettings: unknown): GradingAxes {
+  const s =
+    typeof assignmentSettings === "object" && assignmentSettings !== null
+      ? (assignmentSettings as Record<string, unknown>)
+      : {};
+  const explicitSource: TasteSource | null =
+    s.tasteSource === "instructor" || s.tasteSource === "cocreated"
+      ? s.tasteSource
+      : null;
+  const explicitPeer = typeof s.peerReview === "boolean" ? s.peerReview : null;
+  const legacyInstructor = s.gradingMode === "ai_only";
+
+  return {
+    tasteSource: explicitSource ?? (legacyInstructor ? "instructor" : "cocreated"),
+    peerReview: explicitPeer ?? !legacyInstructor,
+    // Never inferred: only an explicitly co-created assignment is gated.
+    gated: explicitSource === "cocreated",
+  };
+}
+
 /** defaults → course grading_defaults → assignment settings. */
 export function resolveSettings(
   courseDefaults: unknown,

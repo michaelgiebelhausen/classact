@@ -15,7 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { createAssignment } from "@/server/actions/assignments";
-import type { TasteRequirement } from "@/lib/tastegrading";
+import type { TasteRequirement, TasteSource } from "@/lib/tastegrading";
 import type { DeliverableType } from "@/lib/submissionfile";
 
 /**
@@ -55,7 +55,19 @@ export function AssignmentCreate({
   const [deadlineTime, setDeadlineTime] = useState(END_OF_DAY);
   const [peerCloseDate, setPeerCloseDate] = useState("");
   const [peerCloseTime, setPeerCloseTime] = useState(END_OF_DAY);
-  const [gradingMode, setGradingMode] = useState<"tasty" | "ai_only">("tasty");
+  // Two axes: do students grade each other, and where the taste comes from.
+  // Only the three supported cells are offered (peer-reviewed uses co-created
+  // taste; the peer + instructor cell is deferred).
+  const [peerReview, setPeerReview] = useState(true);
+  const [tasteSource, setTasteSource] = useState<TasteSource>("cocreated");
+  const selectCell = (peer: boolean, source: TasteSource) => {
+    setPeerReview(peer);
+    setTasteSource(source);
+  };
+  // Peer-reviewed co-created is today's "tasty" — the professor's taste file is
+  // optional there. The two solo cells require it (it's the rubric, or what
+  // students see + are measured against).
+  const legacyTasty = peerReview && tasteSource === "cocreated";
   // The professor's PRIVATE AI grading criteria (ai_only mode). Not the
   // student-facing brief — that is `instructions` below.
   const [gradingCriteria, setGradingCriteria] = useState("");
@@ -81,10 +93,8 @@ export function AssignmentCreate({
       toast.error("Give the deadline a time.");
       return;
     }
-    if (gradingMode === "ai_only" && !gradingCriteria.trim()) {
-      toast.error(
-        "AI-only grading needs your criteria — one sentence is enough."
-      );
+    if (!legacyTasty && !gradingCriteria.trim()) {
+      toast.error("This grading style needs your taste file — one sentence is enough.");
       return;
     }
     setSaving(true);
@@ -111,17 +121,19 @@ export function AssignmentCreate({
       storagePath,
       deadline: new Date(`${deadlineDate}T${deadlineTime}`).toISOString(),
       peerCloseAt:
-        gradingMode === "tasty" && peerCloseDate
+        peerReview && peerCloseDate
           ? new Date(
               `${peerCloseDate}T${peerCloseTime || END_OF_DAY}`
             ).toISOString()
           : null,
-      gradingMode,
+      peerReview,
+      tasteSource,
       instructions,
       points,
-      // The professor's taste file now counts in both modes.
       gradingInstructions: gradingCriteria || undefined,
-      tasteRequirement: gradingMode === "tasty" ? tasteRequirement : undefined,
+      // tasteRequirement only applies to legacy tasty; the co-created lock is
+      // its own requirement, and instructor-sourced has no student taste.
+      tasteRequirement: legacyTasty ? tasteRequirement : undefined,
       deliverableType: deliverableType === "any" ? undefined : deliverableType,
     });
     setSaving(false);
@@ -200,58 +212,74 @@ export function AssignmentCreate({
           </p>
         </div>
         <div className="grid gap-2">
-          <Label>Grading mode</Label>
-          <div className="flex gap-2">
+          <Label>How is this graded?</Label>
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
-              variant={gradingMode === "tasty" ? "default" : "outline"}
-              onClick={() => setGradingMode("tasty")}
+              variant={legacyTasty ? "default" : "outline"}
+              onClick={() => selectCell(true, "cocreated")}
             >
-              Tasty Grading (peers + AI)
+              Peer-reviewed
             </Button>
             <Button
               type="button"
               size="sm"
-              variant={gradingMode === "ai_only" ? "default" : "outline"}
-              onClick={() => setGradingMode("ai_only")}
+              variant={
+                !peerReview && tasteSource === "cocreated" ? "default" : "outline"
+              }
+              onClick={() => selectCell(false, "cocreated")}
             >
-              AI-only (no peer review)
+              You grade · co-created taste
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={
+                !peerReview && tasteSource === "instructor" ? "default" : "outline"
+              }
+              onClick={() => selectCell(false, "instructor")}
+            >
+              You grade · your taste
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {gradingMode === "tasty"
-              ? "Students write taste files, a rubric emerges from the class, and peers refine the AI's ranking."
-              : "For objective work (quiz screenshots, checklists): the AI grades every submission against your criteria — no taste files, no peer round. You still review and publish."}
+            {legacyTasty
+              ? "Students grade each other's work. A rubric emerges from the whole class's taste files, and peers refine the AI's ranking."
+              : tasteSource === "cocreated"
+                ? "You're the only grader. Each student locks their own taste file first — that reveals yours and opens their upload — and the rubric is co-created from the class."
+                : "You're the only grader. The AI grades every submission against your taste file — no student taste, no peer round."}
           </p>
         </div>
 
         <div className="grid gap-2">
           <Label htmlFor="a-grading-criteria">
-            {gradingMode === "ai_only"
-              ? "Your taste file (required — this is the standard the AI grades against)"
-              : "Your taste file (optional)"}
+            {legacyTasty
+              ? "Your taste file (optional)"
+              : "Your taste file (required — the standard students are shown and measured against)"}
           </Label>
           <textarea
             id="a-grading-criteria"
             value={gradingCriteria}
             onChange={(e) => setGradingCriteria(e.target.value)}
             placeholder={
-              gradingMode === "ai_only"
+              tasteSource === "instructor"
                 ? "e.g. The screenshot must show a completed quiz with a visible score. 10 = 100%, scale down proportionally; 0 if no score is visible."
                 : "What would make this work genuinely good? Write it the way you'd say it out loud."
             }
-            rows={gradingMode === "ai_only" ? 3 : 5}
+            rows={5}
             className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           />
           <p className="text-xs text-muted-foreground">
-            {gradingMode === "ai_only"
-              ? "There's no emergent rubric in AI-only mode, so students are shown this."
-              : "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."}
+            {legacyTasty
+              ? "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."
+              : tasteSource === "cocreated"
+                ? "Students see this once they've locked their own — and each student's taste is scored against it (the standards signal in their metrics)."
+                : "There's no emergent rubric here — students are graded against this."}
           </p>
         </div>
 
-        {gradingMode === "tasty" && (
+        {legacyTasty && (
           <div className="grid gap-2">
             <Label htmlFor="a-taste-requirement">Students&apos; taste files</Label>
             <select
@@ -374,7 +402,7 @@ export function AssignmentCreate({
               Pick the day — the time is already 11:59 PM.
             </p>
           </div>
-          {gradingMode === "tasty" && (
+          {peerReview && (
             <div className="grid gap-2">
               <Label htmlFor="a-peerclose-date">Peer grading ends (optional)</Label>
               <div className="flex flex-wrap items-center gap-2">

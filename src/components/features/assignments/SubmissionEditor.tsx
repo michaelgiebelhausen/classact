@@ -17,6 +17,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  lockTasteFile,
   saveSubmissionNote,
   saveTasteFile,
   submitWork,
@@ -26,7 +27,7 @@ import {
   deliverableAccept,
   type DeliverableType,
 } from "@/lib/submissionfile";
-import type { TasteRequirement } from "@/lib/tastegrading";
+import type { TasteRequirement, TasteSource } from "@/lib/tastegrading";
 
 /**
  * Student, before the deadline: sharpen the taste file (the standard you
@@ -54,9 +55,14 @@ interface Props {
   submittedFileUrl?: string | null;
   /** Extension of the submitted file (pdf/md/png/jpg), for the label. */
   submittedFileExt?: string | null;
-  /** ai_only: no student taste file — the instructor's criteria rule. */
-  mode?: "tasty" | "ai_only";
-  instructorCriteria?: string;
+  /** instructor = no student taste (criteria rule); cocreated = students write. */
+  tasteSource?: TasteSource;
+  /** Co-created gated flow: lock the taste to reveal the instructor's + upload. */
+  gated?: boolean;
+  /** Whether this student has already sealed their taste file. */
+  tasteLocked?: boolean;
+  /** The instructor's taste, when it's meant to be shown ("" otherwise). */
+  instructorTaste?: string;
   /** What the professor asked students to hand in; restricts the picker. */
   deliverableType?: DeliverableType;
 }
@@ -73,14 +79,23 @@ export function SubmissionEditor({
   submissionNote,
   submittedFileUrl = null,
   submittedFileExt = null,
-  mode = "tasty",
-  instructorCriteria = "",
+  tasteSource = "cocreated",
+  gated = false,
+  tasteLocked = false,
+  instructorTaste = "",
   deliverableType = "any",
 }: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [taste, setTaste] = useState(initialTaste);
   const [savingTaste, setSavingTaste] = useState(false);
+  const [locking, setLocking] = useState(false);
+  // Students write a taste file whenever the source is co-created; the gated
+  // flow always shows the editor, legacy tasty respects the requirement knob.
+  const isCocreated = tasteSource === "cocreated";
+  const showTasteEditor = isCocreated && (gated || tasteRequirement !== "off");
+  // In the gated flow the upload stays sealed until the taste file is locked.
+  const uploadBlocked = gated && !tasteLocked;
   const [note, setNote] = useState(submissionNote);
   const [uploading, setUploading] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
@@ -126,12 +141,32 @@ export function SubmissionEditor({
     }
   }
 
+  async function lockTaste() {
+    setLocking(true);
+    const result = await lockTasteFile(assignmentId, taste);
+    setLocking(false);
+    if (result.ok) {
+      toast.success(
+        "Taste file locked — your instructor's is now shown, and you can submit."
+      );
+      router.refresh();
+    } else {
+      toast.error(result.error);
+    }
+  }
+
   async function handleFile(file: File) {
     // Past the deadline is allowed — it's a late submission, not a closed one;
     // the server still refuses once the professor has started grading.
 
-    // The server refuses this too, but only after the file has already gone up.
-    if (mode === "tasty" && tasteRequirement === "required" && tasteUnwritten) {
+    // Legacy tasty with a required taste (the gated flow blocks the button
+    // until locked, so this only matters there). The server refuses too.
+    if (
+      isCocreated &&
+      !gated &&
+      tasteRequirement === "required" &&
+      tasteUnwritten
+    ) {
       toast.error(
         "Write your taste file first — it's part of what you're handing in."
       );
@@ -191,64 +226,86 @@ export function SubmissionEditor({
 
   return (
     <div className="grid gap-4">
-      {mode === "ai_only" && (
+      {instructorTaste && (
         <Card>
           <CardHeader>
-            <CardTitle>How this is graded</CardTitle>
+            <CardTitle>
+              {tasteSource === "instructor"
+                ? "How this is graded"
+                : "Your instructor's taste file"}
+            </CardTitle>
             <CardDescription>
-              This assignment is AI-graded against your instructor&apos;s
-              criteria — no peer review, no taste file. Your professor
-              reviews everything before grades publish.
+              {tasteSource === "instructor"
+                ? "This assignment is AI-graded against your instructor's taste file — no peer review. Your professor reviews everything before grades publish."
+                : "You've locked your own, so here's the standard your instructor holds — yours joins theirs in the rubric, and yours is measured against it."}
             </CardDescription>
           </CardHeader>
-          {instructorCriteria && (
-            <CardContent>
-              <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">
-                {instructorCriteria}
-              </p>
-            </CardContent>
-          )}
+          <CardContent>
+            <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">
+              {instructorTaste}
+            </p>
+          </CardContent>
         </Card>
       )}
-      {mode === "tasty" && tasteRequirement !== "off" && (
+      {showTasteEditor && (
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
             What makes this assignment good?
-            {tasteIsDefault && (
+            {tasteLocked && <Badge variant="outline">Locked</Badge>}
+            {!tasteLocked && tasteIsDefault && (
               <Badge variant="secondary">AI draft — make it yours</Badge>
             )}
-            {tasteRequirement === "required" && (
+            {gated && !tasteLocked && (
+              <Badge variant="outline">Lock to unlock the upload</Badge>
+            )}
+            {!gated && tasteRequirement === "required" && (
               <Badge variant="outline">Part of the deliverable</Badge>
             )}
           </CardTitle>
           <CardDescription>
-            Think out loud — no grid, no criteria to fill in. What would make
-            this work genuinely good, and what&apos;s the bar you&apos;d be
-            proud to clear? Your class&apos;s answers together become the
-            rubric everyone is graded by, so write it your way. Dictate it,
-            paste it, ramble a little. After the deadline it counts as late.
+            {tasteLocked
+              ? "Locked — this is the standard you committed to before seeing your instructor's."
+              : gated
+                ? "Write your own take on what makes the work good. Locking it reveals your instructor's taste and opens your upload — but you can't edit yours after, so make it count."
+                : "Think out loud — no grid, no criteria to fill in. What would make this work genuinely good, and what's the bar you'd be proud to clear? Your class's answers together become the rubric everyone is graded by. Dictate it, paste it, ramble a little. After the deadline it counts as late."}
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <textarea
             value={taste}
             onChange={(e) => setTaste(e.target.value)}
+            disabled={tasteLocked}
             placeholder="Good work here would…"
             rows={10}
             aria-label="What makes this assignment good?"
-            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-70"
           />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={saveTaste} disabled={savingTaste}>
-              {savingTaste ? "Saving…" : "Save taste file"}
-            </Button>
-            {tasteRequirement === "required" && tasteUnwritten && (
-              <span className="text-sm text-muted-foreground">
-                Needed before you can hand in the work.
-              </span>
-            )}
-          </div>
+          {!tasteLocked && (
+            <div className="flex flex-wrap items-center gap-2">
+              {gated ? (
+                <Button onClick={() => void lockTaste()} disabled={locking}>
+                  {locking ? "Locking…" : "Lock my taste & continue"}
+                </Button>
+              ) : (
+                <Button onClick={saveTaste} disabled={savingTaste}>
+                  {savingTaste ? "Saving…" : "Save taste file"}
+                </Button>
+              )}
+              {gated ? (
+                <span className="text-sm text-muted-foreground">
+                  You can&apos;t edit it after locking.
+                </span>
+              ) : (
+                tasteRequirement === "required" &&
+                tasteUnwritten && (
+                  <span className="text-sm text-muted-foreground">
+                    Needed before you can hand in the work.
+                  </span>
+                )
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
       )}
@@ -348,7 +405,7 @@ export function SubmissionEditor({
           />
           <Button
             onClick={() => fileRef.current?.click()}
-            disabled={uploading}
+            disabled={uploading || uploadBlocked}
             className="w-fit"
           >
             {uploading
@@ -357,6 +414,11 @@ export function SubmissionEditor({
                 ? "Replace file"
                 : "Choose your file"}
           </Button>
+          {uploadBlocked && (
+            <p className="text-xs text-muted-foreground">
+              Lock your taste file above to unlock the upload.
+            </p>
+          )}
           {deadlinePassed && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
               The deadline has passed, but you can still turn in your work — it

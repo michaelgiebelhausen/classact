@@ -14,6 +14,7 @@ import {
   defaultBands,
   readBands,
   readDividers,
+  resolveGradingAxes,
   resolveSettings,
 } from "@/lib/tastegrading";
 import { dividersFromThresholds, normalizeDividers } from "@/lib/bands";
@@ -176,10 +177,7 @@ export default async function AssignmentPage({
       .is("enrollment_id", null)
       .maybeSingle();
     const professorTaste = tasteProse(professorTasteRow);
-    const gradingMode =
-      (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
-        ? "ai_only"
-        : "tasty";
+    const axes = resolveGradingAxes(assignment.settings);
     const deliverableType = ((
       assignment.settings as { deliverableType?: DeliverableType }
     ).deliverableType ?? "any") as DeliverableType;
@@ -281,7 +279,8 @@ export default async function AssignmentPage({
             points={assignment.points}
             deadline={assignment.deadline}
             peerCloseAt={assignment.peer_close_at}
-            gradingMode={gradingMode}
+            peerReview={axes.peerReview}
+            tasteSource={axes.tasteSource}
             professorTaste={professorTaste}
             tasteRequirement={settings.tasteRequirement}
             deliverableType={deliverableType}
@@ -319,12 +318,17 @@ export default async function AssignmentPage({
                 <p className="text-sm text-muted-foreground">
                   {submitted ?? 0} submissions
                   {lateCount > 0 ? ` · ${lateCount} late` : ""}
-                  {gradingMode === "tasty" ? ` · ${tastes ?? 0} taste files` : ""}.
-                  Students can still turn work in — it&apos;s marked late — until
-                  you start. Starting grading closes submissions and{" "}
-                  {gradingMode === "tasty"
-                    ? "reads the class's taste files, builds the rubric, drafts the ranking, and opens peer grading."
-                    : "scores every submission against your taste file."}
+                  {axes.tasteSource === "cocreated"
+                    ? ` · ${tastes ?? 0} taste files`
+                    : ""}
+                  . Students can still turn work in — it&apos;s marked late —
+                  until you start. Starting grading closes submissions and{" "}
+                  {axes.tasteSource === "cocreated"
+                    ? "builds the rubric from the class's taste files"
+                    : "grades every submission against your taste file"}
+                  {axes.peerReview
+                    ? ", drafts the ranking, and opens peer grading."
+                    : " and hands you the ranking to finalize."}
                 </p>
                 <div className="flex justify-center">
                   <StartGradingButton assignmentId={assignmentId} />
@@ -342,7 +346,7 @@ export default async function AssignmentPage({
               <CardContent className="grid gap-1 py-10 text-center">
                 <p className="font-medium">
                   {submitted ?? 0} submissions
-                  {gradingMode === "tasty"
+                  {axes.tasteSource === "cocreated"
                     ? ` · ${tastes ?? 0} taste files started`
                     : ""}
                 </p>
@@ -360,7 +364,10 @@ export default async function AssignmentPage({
               </CardContent>
             </Card>
           )}
-          <SubmissionRoster rows={rosterRows} showTaste={gradingMode === "tasty"} />
+          <SubmissionRoster
+            rows={rosterRows}
+            showTaste={axes.tasteSource === "cocreated"}
+          />
         </div>
       );
     }
@@ -471,7 +478,8 @@ export default async function AssignmentPage({
           points={assignment.points}
           deadline={assignment.deadline}
           peerCloseAt={assignment.peer_close_at}
-          gradingMode={gradingMode}
+          peerReview={axes.peerReview}
+          tasteSource={axes.tasteSource}
           professorTaste={professorTaste}
           tasteRequirement={settings.tasteRequirement}
           deliverableType={deliverableType}
@@ -533,7 +541,7 @@ export default async function AssignmentPage({
     const [{ data: taste }, { data: submission }] = await Promise.all([
       supabase
         .from("taste_files")
-        .select("body, criteria, bar_statement, is_default_untouched")
+        .select("body, criteria, bar_statement, is_default_untouched, locked_at")
         .eq("assignment_id", assignmentId)
         .eq("enrollment_id", enrollmentId)
         .maybeSingle(),
@@ -560,17 +568,22 @@ export default async function AssignmentPage({
       (assignment.settings as { defaultTaste?: unknown }).defaultTaste
     );
 
-    // AI-only grading has no emergent rubric, so students are shown what
-    // they ARE graded against. That text now lives in the professor's taste
-    // row, which RLS hides from students — hence the admin read. Deliberately
-    // ai_only: in tasty mode the professor's taste is one private voice in
-    // the corpus, not an announcement.
-    const isAiOnly =
-      (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only";
-    let instructorTaste =
-      (assignment.settings as { gradingInstructions?: string })
-        .gradingInstructions ?? "";
-    if (isAiOnly && isConfigured.supabaseAdmin) {
+    const studentAxes = resolveGradingAxes(assignment.settings);
+    const tasteLocked = !!taste?.locked_at;
+    // When students see the instructor's taste: instructor-sourced always (it's
+    // the grading standard), gated co-created only AFTER the student locks (the
+    // reveal is the reward for committing). Legacy tasty keeps it private. The
+    // professor row is RLS-hidden from students, so this rides the admin read —
+    // and is fetched ONLY when it's meant to be shown, so the string never sits
+    // in the RSC payload for a student who shouldn't see it.
+    const revealInstructor =
+      studentAxes.tasteSource === "instructor" ||
+      (studentAxes.gated && tasteLocked);
+    let instructorTaste = revealInstructor
+      ? (assignment.settings as { gradingInstructions?: string })
+          .gradingInstructions ?? ""
+      : "";
+    if (revealInstructor && isConfigured.supabaseAdmin) {
       const admin = createAdminClient();
       const { data: professorTaste } = await admin
         .from("taste_files")
@@ -598,13 +611,10 @@ export default async function AssignmentPage({
           submissionNote={submission?.note ?? ""}
           submittedFileUrl={submittedFileUrl}
           submittedFileExt={submittedFileExt}
-          mode={
-            (assignment.settings as { gradingMode?: string }).gradingMode ===
-            "ai_only"
-              ? "ai_only"
-              : "tasty"
-          }
-          instructorCriteria={instructorTaste}
+          tasteSource={studentAxes.tasteSource}
+          gated={studentAxes.gated}
+          tasteLocked={tasteLocked}
+          instructorTaste={instructorTaste}
           deliverableType={deliverableType}
         />
       </div>
@@ -681,10 +691,9 @@ export default async function AssignmentPage({
         {header}
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            {(assignment.settings as { gradingMode?: string }).gradingMode ===
-            "ai_only"
-              ? "The AI has graded the class. Your professor is doing the final review — your report appears the moment they publish."
-              : "Peer grading has closed. Your professor is doing the final review — your report appears the moment they publish."}
+            {resolveGradingAxes(assignment.settings).peerReview
+              ? "Peer grading has closed. Your professor is doing the final review — your report appears the moment they publish."
+              : "The AI has graded the class. Your professor is doing the final review — your report appears the moment they publish."}
           </CardContent>
         </Card>
       </div>
@@ -730,7 +739,9 @@ export default async function AssignmentPage({
       .eq("assignment_id", assignmentId),
     supabase
       .from("ai_scores")
-      .select("theme_scores, own_bar, distinctiveness, summary")
+      .select(
+        "theme_scores, own_bar, distinctiveness, summary, standards_score, standards_note"
+      )
       .eq("submission_id", mySubmission.id)
       .maybeSingle(),
     supabase
@@ -817,6 +828,13 @@ export default async function AssignmentPage({
             ? null
             : Number(myScore.distinctiveness)
         }
+        standardsScore={
+          myScore?.standards_score === null ||
+          myScore?.standards_score === undefined
+            ? null
+            : Number(myScore.standards_score)
+        }
+        standardsNote={myScore?.standards_note ?? ""}
         stats={{
           tasteAgreement: stats.tasteAgreement,
           selfHonesty: stats.selfHonesty,

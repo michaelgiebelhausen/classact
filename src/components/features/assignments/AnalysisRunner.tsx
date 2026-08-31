@@ -16,6 +16,7 @@ const PHASE_LABELS: Record<string, string> = {
   rubric: "Reading the class's taste files — the rubric is emerging",
   baselines: "Preparing generic one-shot baselines",
   scoring: "Grading each submission against the class rubric",
+  standards: "Comparing each student's bar to the instructor's",
   shingle: "Checking submissions for unusual similarity",
   pairs: "Building the draft ranking and assigning peer pairs",
   done: "Done",

@@ -32,6 +32,10 @@ interface Props {
   themeScores: Array<{ name: string; score: number; evidence: string }>;
   ownBar: number | null;
   distinctiveness: number | null;
+  /** 0–10; 5 = your taste matches the instructor's bar, >5 higher. Null when
+   *  there's no co-created taste to compare (co-created assignments only). */
+  standardsScore?: number | null;
+  standardsNote?: string;
   stats: {
     tasteAgreement: number | null;
     selfHonesty: number | null;
@@ -62,6 +66,8 @@ export function StudentReport({
   themeScores,
   ownBar,
   distinctiveness,
+  standardsScore = null,
+  standardsNote = "",
   stats,
 }: Props) {
   const showPoints = visibility !== "label" && pointsAwarded !== null;
@@ -123,7 +129,11 @@ export function StudentReport({
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div
+        className={`grid gap-4 sm:grid-cols-2${
+          standardsScore !== null ? " lg:grid-cols-3" : ""
+        }`}
+      >
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Your own bar</CardTitle>
@@ -163,6 +173,32 @@ export function StudentReport({
             )}
           </CardContent>
         </Card>
+        {standardsScore !== null && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Your bar vs. the course&apos;s</CardTitle>
+              <CardDescription>
+                How high a standard did you set for yourself, next to your
+                instructor&apos;s?
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-1.5">
+              <div className="flex items-center gap-3">
+                <Meter value={standardsScore} />
+                <span className="text-lg font-semibold">
+                  {standardsScore > 5
+                    ? "Higher bar"
+                    : standardsScore < 5
+                      ? "Gentler bar"
+                      : "Matching"}
+                </span>
+              </div>
+              {standardsNote && (
+                <p className="text-sm text-muted-foreground">{standardsNote}</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {(stats.tasteAgreement !== null ||

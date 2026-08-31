@@ -447,6 +447,14 @@ export default async function MetricsPage({
               }
             />
             <Metric
+              label="Your bar vs. the course"
+              value={
+                extras.avgStandardsBar !== null
+                  ? `${extras.avgStandardsBar.toFixed(1)}/10`
+                  : "—"
+              }
+            />
+            <Metric
               label="Distinctive ↔ generic"
               value={
                 extras.avgDistinctiveness !== null

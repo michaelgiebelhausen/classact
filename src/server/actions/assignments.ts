@@ -9,12 +9,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import {
+  resolveGradingAxes,
   resolveSettings,
   SCORE_MODES,
   SCORE_VISIBILITIES,
   TASTE_REQUIREMENTS,
   type ScoreVisibility,
   type TasteRequirement,
+  type TasteSource,
 } from "@/lib/tastegrading";
 import type { ScoreMode } from "@/lib/bands";
 import { cleanTasteBody, isUntouchedTaste, tasteProse } from "@/lib/tasteprose";
@@ -85,8 +87,13 @@ export async function createAssignment(input: {
   /** ISO datetime; defaults to deadline + peerWindowDays. */
   peerCloseAt?: string | null;
   /** "tasty" (default): taste files + peer round. "ai_only": AI grades
-   * against the instructor's criteria; no taste files, no peer review. */
+   * against the instructor's criteria; no taste files, no peer review.
+   * Legacy — new callers pass peerReview + tasteSource instead. */
   gradingMode?: "tasty" | "ai_only";
+  /** Do students evaluate classmates' work? Absent = derived from gradingMode. */
+  peerReview?: boolean;
+  /** Where the grading criteria come from. Absent = derived from gradingMode. */
+  tasteSource?: TasteSource;
   /** The professor's own taste file. Required in ai_only mode (it IS the
    *  rubric); optional in tasty mode, where it joins the class's corpus. */
   gradingInstructions?: string;
@@ -104,13 +111,22 @@ export async function createAssignment(input: {
   if (!instructions.ok) return { ok: false, error: instructions.message };
   const points = normalizePoints(input.points);
   if (!points.ok) return { ok: false, error: points.message };
-  // AI-only grading has no emergent rubric — the instructor's taste
-  // criteria ARE the standard, so they're required (one sentence is fine).
-  if (input.gradingMode === "ai_only" && !(input.gradingInstructions ?? "").trim()) {
+  // The two grading axes, from the new inputs or the legacy gradingMode.
+  const peerReview = input.peerReview ?? input.gradingMode !== "ai_only";
+  const tasteSource: TasteSource =
+    input.tasteSource ?? (input.gradingMode === "ai_only" ? "instructor" : "cocreated");
+  // Peer ON + co-created is today's tasty — stored as the legacy shape (no new
+  // keys), so it's never gated and its pipeline stays byte-for-byte the same.
+  const legacyTasty = peerReview && tasteSource === "cocreated";
+  // Both solo cells need the professor's taste: instructor-sourced makes it the
+  // whole rubric; gated co-created reveals it to students after they lock and
+  // measures each student's taste against it. Only legacy tasty (peer + co-
+  // created) leaves it optional.
+  if (!legacyTasty && !(input.gradingInstructions ?? "").trim()) {
     return {
       ok: false,
       error:
-        "AI-only grading needs your grading criteria — even one sentence (e.g. 'count the questions marked correct; score proportionally').",
+        "This grading style needs your taste file — even one sentence (e.g. 'count the questions marked correct; score proportionally').",
     };
   }
   const deadline = new Date(input.deadline);
@@ -156,9 +172,8 @@ export async function createAssignment(input: {
   // BYOK: the draft runs on the course owner's key (founder falls back to
   // the system key). No key → no draft; students start from a blank taste
   // file and the professor sees a connect-your-key banner.
-  const gradingMode = input.gradingMode === "ai_only" ? "ai_only" : "tasty";
-  // ai_only assignments have no student taste files — skip the draft.
-  if (gradingMode === "tasty") {
+  // Instructor-sourced assignments have no student taste files — skip the draft.
+  if (tasteSource === "cocreated") {
     const creds = await resolveCourseAi(input.courseId, "taste");
     if (creds) {
       const draft = await generateDefaultTaste(
@@ -189,8 +204,11 @@ export async function createAssignment(input: {
       peer_close_at: peerClose.toISOString(),
       settings: {
         ...(defaultTaste ? { defaultTaste } : {}),
-        ...(gradingMode === "ai_only" ? { gradingMode } : {}),
-        ...(input.tasteRequirement && gradingMode === "tasty"
+        // New axes only for the peer-OFF cells; legacy tasty stores nothing.
+        ...(legacyTasty ? {} : { peerReview, tasteSource }),
+        // tasteRequirement only lives on legacy tasty; co-created's lock IS the
+        // requirement, instructor-sourced has no student taste.
+        ...(input.tasteRequirement && legacyTasty
           ? { tasteRequirement: input.tasteRequirement }
           : {}),
         ...(input.deliverableType
@@ -205,8 +223,9 @@ export async function createAssignment(input: {
   }
 
   // The professor's own taste file — the benchmark row the rubric corpus
-  // reads as [PROFESSOR]. In ai_only mode it IS the rubric; in tasty mode it
-  // is one voice among the class's.
+  // reads as [PROFESSOR]. Instructor-sourced: it IS the rubric. Co-created:
+  // one voice among the class's — and what students see once they lock theirs,
+  // and what the standards comparison scores them against.
   const professorTaste = cleanTasteBody(input.gradingInstructions ?? "");
   if (professorTaste) {
     await supabase.from("taste_files").insert({
@@ -263,10 +282,22 @@ export async function saveTasteFile(
   const now = new Date().toISOString();
   const { data: existing } = await supabase
     .from("taste_files")
-    .select("id, first_edit_at")
+    .select("id, first_edit_at, locked_at")
     .eq("assignment_id", assignmentId)
     .eq("enrollment_id", enrollmentId)
     .maybeSingle();
+
+  // In the gated co-created flow, sealing the taste file is what unlocks the
+  // instructor's taste and the upload form — so a locked one can't change.
+  // Keyed on resolved gating (not raw locked_at) so a professor who switches
+  // the assignment away from co-created un-strands the student. The 0045
+  // trigger is the hard backstop against a direct API write.
+  if (resolveGradingAxes(assignment.settings).gated && existing?.locked_at) {
+    return {
+      ok: false,
+      error: "Your taste file is locked — you sealed it to see the instructor's.",
+    };
+  }
 
   if (existing) {
     const { error } = await supabase
@@ -290,6 +321,88 @@ export async function saveTasteFile(
       last_edit_at: now,
     });
     if (error) return { ok: false, error: "Couldn't save — try again." };
+  }
+  revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
+  return { ok: true };
+}
+
+/**
+ * Student (gated co-created flow): seal the taste file. Saves the current text
+ * and sets locked_at in one step — after which it's read-only, the instructor's
+ * taste is revealed, and the upload form opens. The lock is the commitment made
+ * BEFORE seeing the instructor's standard, which is what keeps the reveal safe
+ * and the standards comparison honest.
+ */
+export async function lockTasteFile(
+  assignmentId: string,
+  body: string
+): Promise<ActionResult> {
+  const { supabase, user } = await requireUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const { data: assignment } = await supabase
+    .from("assignments")
+    .select("id, course_id, settings, state")
+    .eq("id", assignmentId)
+    .single();
+  if (!assignment) return { ok: false, error: "Assignment not found." };
+  if (assignment.state !== "open") {
+    return { ok: false, error: "Grading has started — this can't change now." };
+  }
+  if (!resolveGradingAxes(assignment.settings).gated) {
+    return { ok: false, error: "This assignment doesn't lock taste files." };
+  }
+  const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
+  if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
+
+  const text = cleanTasteBody(body);
+  if (
+    isUntouchedTaste(
+      { body: text },
+      (assignment.settings as { defaultTaste?: unknown }).defaultTaste
+    )
+  ) {
+    return {
+      ok: false,
+      error:
+        "Write your own take on what makes the work good before you lock it — the AI draft isn't yours yet.",
+    };
+  }
+
+  const now = new Date().toISOString();
+  const { data: existing } = await supabase
+    .from("taste_files")
+    .select("id, first_edit_at, locked_at")
+    .eq("assignment_id", assignmentId)
+    .eq("enrollment_id", enrollmentId)
+    .maybeSingle();
+  if (existing?.locked_at) return { ok: true }; // already sealed — idempotent
+
+  if (existing) {
+    const { error } = await supabase
+      .from("taste_files")
+      .update({
+        body: text,
+        is_default_untouched: false,
+        first_edit_at: existing.first_edit_at ?? now,
+        last_edit_at: now,
+        locked_at: now,
+      })
+      .eq("id", existing.id)
+      .is("locked_at", null); // race-safe: never re-seal
+    if (error) return { ok: false, error: "Couldn't lock — try again." };
+  } else {
+    const { error } = await supabase.from("taste_files").insert({
+      assignment_id: assignmentId,
+      course_id: assignment.course_id,
+      enrollment_id: enrollmentId,
+      body: text,
+      is_default_untouched: false,
+      first_edit_at: now,
+      last_edit_at: now,
+      locked_at: now,
+    });
+    if (error) return { ok: false, error: "Couldn't lock — try again." };
   }
   revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
   return { ok: true };
@@ -334,22 +447,34 @@ export async function submitWork(
     return { ok: false, error: deliverableRefusal(declared) };
   }
 
-  // When the taste file is part of the deliverable, it is enforced here —
-  // where the deliverable is handed in — not in the editor, which is a draft
-  // box. The client checks first so the upload isn't wasted.
-  //
-  // Only in tasty mode: ai_only assignments have no student taste editor at
-  // all, so requiring one would deadlock the student (required to provide a
-  // taste file, with no way to write it). This mirrors the client, which gates
-  // the same check on tasty mode. A "required" flag can survive a switch to
-  // ai_only, so the mode — not the leftover flag — is what decides here.
+  // What the taste file is worth at submission time depends on the axes:
+  //  - gated co-created: it must be LOCKED — locking is what revealed the
+  //    instructor's taste and opened this form.
+  //  - legacy tasty with a required taste: the old "make the draft yours" check.
+  //  - instructor-sourced: no student taste editor exists, so never require one
+  //    (requiring it would deadlock the student — the fix from 2026-08-31).
   const settings = resolveSettings(
     (assignment.courses as unknown as { grading_defaults: unknown }).grading_defaults,
     assignment.settings
   );
-  const isAiOnly =
-    (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only";
-  if (!isAiOnly && settings.tasteRequirement === "required") {
+  const axes = resolveGradingAxes(assignment.settings);
+  if (axes.gated) {
+    const { data: taste } = await supabase
+      .from("taste_files")
+      .select("locked_at")
+      .eq("assignment_id", assignmentId)
+      .eq("enrollment_id", enrollmentId)
+      .maybeSingle();
+    if (!taste?.locked_at) {
+      return {
+        ok: false,
+        error: "Lock your taste file first — that's what opens the submission form.",
+      };
+    }
+  } else if (
+    axes.tasteSource === "cocreated" &&
+    settings.tasteRequirement === "required"
+  ) {
     const { data: taste } = await supabase
       .from("taste_files")
       .select("body, criteria, bar_statement")
@@ -631,7 +756,8 @@ export async function setGradingOptions(
     scoreMode?: ScoreMode;
     scoreVisibility?: ScoreVisibility;
     tasteRequirement?: TasteRequirement;
-    gradingMode?: "tasty" | "ai_only";
+    peerReview?: boolean;
+    tasteSource?: TasteSource;
     deliverableType?: DeliverableType;
   }
 ): Promise<ActionResult> {
@@ -681,19 +807,24 @@ export async function setGradingOptions(
     merged.tasteRequirement = patch.tasteRequirement;
   }
 
-  if (patch.gradingMode !== undefined) {
-    if (patch.gradingMode !== "tasty" && patch.gradingMode !== "ai_only") {
-      return { ok: false, error: "Unknown grading mode." };
-    }
+  if (patch.peerReview !== undefined || patch.tasteSource !== undefined) {
     if (assignment.state !== "open") {
       return {
         ok: false,
-        error: "Grading has started — the grading mode can't change now.",
+        error: "Grading has started — the grading style can't change now.",
       };
     }
-    if (patch.gradingMode === "ai_only") {
-      // ai_only makes the professor's taste file the entire rubric, so it has
-      // to exist first — the same requirement createAssignment enforces.
+    const current = resolveGradingAxes(assignment.settings);
+    const peerReview = patch.peerReview ?? current.peerReview;
+    const tasteSource = patch.tasteSource ?? current.tasteSource;
+    if (tasteSource !== "instructor" && tasteSource !== "cocreated") {
+      return { ok: false, error: "Unknown taste source." };
+    }
+    const legacyTasty = peerReview && tasteSource === "cocreated";
+    // Both new cells measure against the professor's taste — instructor makes
+    // it the whole rubric; gated co-created reveals it after the student locks.
+    // Either way it must exist first.
+    if (!legacyTasty) {
       const { data: profTaste } = await supabase
         .from("taste_files")
         .select("body, criteria, bar_statement")
@@ -704,14 +835,19 @@ export async function setGradingOptions(
         return {
           ok: false,
           error:
-            "AI-only grading needs your taste file first — it's the standard students are graded against.",
+            "This grading style needs your taste file first — it's the standard students are shown and measured against.",
         };
       }
-      merged.gradingMode = "ai_only";
+    }
+    // Key hygiene: new keys win, so drop any legacy flag; legacy tasty (peer ON
+    // + co-created) stores NEITHER new key, so it can never be gated.
+    delete merged.gradingMode;
+    if (legacyTasty) {
+      delete merged.peerReview;
+      delete merged.tasteSource;
     } else {
-      // tasty is the absence of the flag (matches createAssignment), so drop
-      // it rather than storing the string.
-      delete merged.gradingMode;
+      merged.peerReview = peerReview;
+      merged.tasteSource = tasteSource;
     }
   }
 
@@ -776,16 +912,16 @@ export async function saveProfessorTaste(
   }
 
   const text = cleanTasteBody(body);
-  // In ai_only mode the taste file IS the rubric shown to students and graded
-  // against — creation requires it, and it can't be emptied later either.
-  if (
-    !text &&
-    (assignment.settings as { gradingMode?: string }).gradingMode === "ai_only"
-  ) {
+  // Whenever the professor's taste is measured against — instructor-sourced
+  // (it IS the rubric) or gated co-created (it's revealed to students and the
+  // standards yardstick) — creation required it, and it can't be emptied later.
+  // Only legacy tasty (peer + co-created, ungated) lets it be optional.
+  const profAxes = resolveGradingAxes(assignment.settings);
+  if (!text && (profAxes.tasteSource === "instructor" || profAxes.gated)) {
     return {
       ok: false,
       error:
-        "AI-only grading needs your taste file — it's the standard students are graded against.",
+        "This assignment needs your taste file — it's the standard students are shown and measured against.",
     };
   }
   const now = new Date().toISOString();

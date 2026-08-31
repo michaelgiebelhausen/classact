@@ -296,6 +296,9 @@ export type TasteFileRow = {
   is_default_untouched: boolean
   first_edit_at: string | null
   last_edit_at: string | null
+  /** When the student sealed this taste file (co-created gate). Null =
+   *  unlocked and still editable; write-once, and frozen once set (0045). */
+  locked_at: string | null
   created_at: string
 }
 
@@ -336,6 +339,11 @@ export type AiScoreRow = {
   overall: number
   own_bar: number | null
   distinctiveness: number | null
+  /** 0–10; 5 = the student's own bar matches the instructor's, >5 higher,
+   *  <5 lower. Null = not computed. An assessment of the taste, not the work
+   *  (0045). Inherits ai_scores' publish gate. */
+  standards_score: number | null
+  standards_note: string
   summary: string
   created_at: string
 }
