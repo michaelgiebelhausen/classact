@@ -37,8 +37,10 @@ import { pollOptionText } from "@/lib/participate";
 import { subscribeWithRecovery } from "@/lib/live-sync";
 import {
   LECTURE_LIVE_EVENT,
+  LECTURE_POLL_EVENT,
   lectureLiveTopic,
   type LectureLiveState,
+  type LecturePollState,
 } from "@/lib/lecturesync";
 import {
   effectiveAwayMs,
@@ -209,63 +211,15 @@ export function StudentFollow({
       applyRow(data);
     }
 
-    // Safety net for a broadcast that never arrived (the send is one HTTP
-    // call with no redelivery): a slow, jittered authoritative re-read. At
-    // 300 students that's a few primary-key reads a second, spread out.
-    let safety: ReturnType<typeof setTimeout> | null = null;
-    const armSafety = () => {
-      if (safety) clearTimeout(safety);
-      safety = setTimeout(
-        () => {
-          void catchUp();
-          armSafety();
-        },
-        60_000 + Math.floor(Math.random() * 30_000)
-      );
-    };
-    armSafety();
-
-    const stop = subscribeWithRecovery({
-      client: supabase,
-      topic: () => lectureLiveTopic(lectureId),
-      bind: (channel) =>
-        channel.on(
-          "broadcast",
-          { event: LECTURE_LIVE_EVENT },
-          ({ payload }: { payload: LectureLiveState }) => {
-            if (typeof payload?.current_page !== "number") return;
-            realtimeSeq++;
-            applyRow(payload);
-            armSafety();
-          }
-        ),
-      catchUp,
-      onStatus: setLive,
-    });
-    return () => {
-      if (safety) clearTimeout(safety);
-      stop();
-    };
-  }, [lectureId, router, applyPauses]);
-
-  // ---- Poll sync: rounds pop in / advance stages, pairs arrive ----
-  // Realtime first, with a 5s polling fallback (same pattern as slide sync)
-  // so a dropped connection can't strand anyone mid-vote.
-  useEffect(() => {
-    const supabase = createClient();
-    // Fresher-realtime guard (same as the slide sync): a slow catch-up defers
-    // to any realtime poll event that landed while it was in flight.
-    let realtimeSeq = 0;
-
     async function pollRound() {
-      const issued = realtimeSeq;
+      const issued = pollSeq;
       const { data } = await supabase
         .from("poll_rounds")
         .select("id, prompt, options, stage, results, correct_indices")
         .eq("lecture_id", lectureId)
         .neq("stage", "closed")
         .maybeSingle();
-      if (realtimeSeq !== issued) return;
+      if (pollSeq !== issued) return;
       if (!data) {
         if (roundIdRef.current) {
           roundIdRef.current = null;
@@ -311,7 +265,7 @@ export function StudentFollow({
         // This catch-up runs on every re-subscribe, when realtime may be live
         // and redelivering; a poll event landing during this second fetch is
         // fresher than our partner read, so bow out rather than clobber it.
-        if (realtimeSeq !== issued) return;
+        if (pollSeq !== issued) return;
         if (pair) {
           const partners = pair.member_ids.filter((id) => id !== enrollmentId);
           setPartnerIds((prev) =>
@@ -321,112 +275,109 @@ export function StudentFollow({
       }
     }
 
-    return subscribeWithRecovery({
-      client: supabase,
-      topic: (g) => `polls:${lectureId}:${g}`,
-      bind: (channel) =>
-        channel
-          .on(
-            "postgres_changes",
-            {
-              event: "INSERT",
-              schema: "public",
-              table: "poll_rounds",
-              filter: `lecture_id=eq.${lectureId}`,
-            },
-            (payload) => {
-              realtimeSeq++;
-              const rec = payload.new as {
-                id: string;
-                prompt: string;
-                options: string[];
-                stage: PollStage;
-                results: PollResults | null;
-                correct_indices: number[] | null;
-              };
-              if (!rec?.id || rec.stage === "closed") return;
-              roundIdRef.current = rec.id;
-              setRound({
-                id: rec.id,
-                prompt: rec.prompt,
-                options: rec.options,
+    // Poll state arrives on this same channel. Mirrors what the catch-up
+    // read does, minus the partner query: partners ride in the message.
+    let pollSeq = 0;
+    function applyPollState(state: LecturePollState) {
+      const rec = state.round;
+      if (!rec?.id) return;
+      pollSeq++;
+      if (rec.stage === "closed") {
+        if (roundIdRef.current === rec.id) {
+          roundIdRef.current = null;
+          setRound(null);
+          setPartnerIds([]);
+        }
+        return;
+      }
+      if (rec.id !== roundIdRef.current) {
+        roundIdRef.current = rec.id;
+        setRound({
+          id: rec.id,
+          prompt: rec.prompt,
+          options: rec.options,
+          stage: rec.stage,
+          results: rec.results,
+          correctIndices: rec.correct_indices,
+        });
+        setMyThink(null);
+        setMyRevote(null);
+      } else {
+        // Prompt/options ride along too: the professor can rewrite a
+        // quick-start poll's wording while this student is on it.
+        setRound((prev) =>
+          prev && prev.id === rec.id
+            ? {
+                ...prev,
+                prompt: rec.prompt ?? prev.prompt,
+                options: rec.options ?? prev.options,
                 stage: rec.stage,
                 results: rec.results,
                 correctIndices: rec.correct_indices,
-              });
-              setMyThink(null);
-              setMyRevote(null);
-              setPartnerIds([]);
+              }
+            : prev
+        );
+      }
+      const mine = state.partners?.[enrollmentId];
+      if (mine) {
+        setPartnerIds((prev) =>
+          JSON.stringify(prev) === JSON.stringify(mine) ? prev : mine
+        );
+      } else if (rec.stage === "think") {
+        setPartnerIds([]);
+      }
+    }
+
+    // Safety net for a broadcast that never arrived (the send is one HTTP
+    // call with no redelivery): a slow, jittered authoritative re-read. At
+    // 300 students that's a few primary-key reads a second, spread out.
+    let safety: ReturnType<typeof setTimeout> | null = null;
+    const armSafety = () => {
+      if (safety) clearTimeout(safety);
+      safety = setTimeout(
+        () => {
+          void catchUp();
+          armSafety();
+        },
+        60_000 + Math.floor(Math.random() * 30_000)
+      );
+    };
+    armSafety();
+
+    const stop = subscribeWithRecovery({
+      client: supabase,
+      topic: () => lectureLiveTopic(lectureId),
+      bind: (channel) =>
+        channel
+          .on(
+            "broadcast",
+            { event: LECTURE_LIVE_EVENT },
+            ({ payload }: { payload: LectureLiveState }) => {
+              if (typeof payload?.current_page !== "number") return;
+              realtimeSeq++;
+              applyRow(payload);
+              armSafety();
             }
           )
           .on(
-            "postgres_changes",
-            {
-              event: "UPDATE",
-              schema: "public",
-              table: "poll_rounds",
-              filter: `lecture_id=eq.${lectureId}`,
-            },
-            (payload) => {
-              realtimeSeq++;
-              const rec = payload.new as {
-                id: string;
-                prompt?: string;
-                options?: string[];
-                stage: PollStage;
-                results: PollResults | null;
-                correct_indices: number[] | null;
-              };
-              if (!rec?.id || rec.id !== roundIdRef.current) return;
-              if (rec.stage === "closed") {
-                roundIdRef.current = null;
-                setRound(null);
-                setPartnerIds([]);
-                return;
-              }
-              // Prompt/options ride along too: the professor can rewrite a
-              // quick-start poll's wording while this student is on it.
-              setRound((prev) =>
-                prev && prev.id === rec.id
-                  ? {
-                      ...prev,
-                      prompt: rec.prompt ?? prev.prompt,
-                      options: rec.options ?? prev.options,
-                      stage: rec.stage,
-                      results: rec.results,
-                      correctIndices: rec.correct_indices,
-                    }
-                  : prev
-              );
-            }
-          )
-          .on(
-            "postgres_changes",
-            {
-              event: "INSERT",
-              schema: "public",
-              table: "poll_pairs",
-              filter: `course_id=eq.${courseId}`,
-            },
-            (payload) => {
-              realtimeSeq++;
-              const rec = payload.new as {
-                round_id: string;
-                member_ids: string[];
-              };
-              if (
-                rec?.round_id !== roundIdRef.current ||
-                !Array.isArray(rec.member_ids) ||
-                !rec.member_ids.includes(enrollmentId)
-              ) {
-                return;
-              }
-              setPartnerIds(rec.member_ids.filter((id) => id !== enrollmentId));
+            "broadcast",
+            { event: LECTURE_POLL_EVENT },
+            ({ payload }: { payload: LecturePollState }) => {
+              applyPollState(payload);
             }
           ),
-      catchUp: pollRound,
+      // One authoritative read for slides and one for the poll, on every
+      // (re)subscribe and wake. The poll read still looks up partners; that
+      // is the only time a student queries poll_pairs now.
+      catchUp: () => Promise.all([catchUp(), pollRound()]).then(() => undefined),
+      onStatus: setLive,
     });
-  }, [lectureId, courseId, enrollmentId]);
+    return () => {
+      if (safety) clearTimeout(safety);
+      stop();
+    };
+  }, [lectureId, enrollmentId, router, applyPauses]);
+
 
   // ---- Group exercise: appear/disappear as the professor starts and ends one ----
   useEffect(() => {

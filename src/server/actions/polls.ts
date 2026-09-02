@@ -8,6 +8,7 @@ import { assignPairs, pairKey, tallyVotes } from "@/lib/participate";
 import { generateTpsQuestions } from "@/server/questiongen";
 import { resolveCourseAi } from "@/server/aicreds";
 import type { ActionResult } from "@/server/actions/auth";
+import { broadcastPollState } from "@/server/lecturebroadcast";
 import type { PollStage } from "@/types/db";
 
 const MAX_OPTIONS = 6;
@@ -533,6 +534,7 @@ export async function launchPollRound(
     // The partial unique index rejects a second open round.
     return { ok: false, error: "A poll is already running — close it first." };
   }
+  await broadcastPollState(created.id);
   return { ok: true, data: { roundId: created.id } };
 }
 
@@ -598,6 +600,7 @@ export async function launchQuickPoll(input: {
   if (roundError || !round) {
     return { ok: false, error: "A poll is already running — close it first." };
   }
+  await broadcastPollState(round.id);
   revalidatePath(`/course/${input.courseId}/participate`);
   return { ok: true, data: { roundId: round.id, questionId: question.id } };
 }
@@ -661,6 +664,7 @@ export async function updateLivePoll(input: {
       .eq("id", round.question_id)
       .eq("course_id", input.courseId);
   }
+  await broadcastPollState(round.id);
   revalidatePath(`/course/${input.courseId}/participate`);
   return { ok: true };
 }
@@ -778,6 +782,7 @@ export async function setPollStage(
     .eq("id", roundId)
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't advance the poll." };
+  await broadcastPollState(roundId);
   return { ok: true };
 }
 
@@ -819,6 +824,7 @@ export async function revealPollResults(
     .eq("id", roundId)
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't reveal the results." };
+  await broadcastPollState(roundId);
   return { ok: true };
 }
 
@@ -852,6 +858,7 @@ export async function markPollCorrect(
     .eq("id", roundId)
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't mark the answer." };
+  await broadcastPollState(roundId);
   return { ok: true };
 }
 
@@ -868,6 +875,7 @@ export async function closePollRound(
     .eq("id", roundId)
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't close the poll." };
+  await broadcastPollState(roundId);
   return { ok: true };
 }
 

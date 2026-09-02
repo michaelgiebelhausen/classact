@@ -2,9 +2,67 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   LECTURE_LIVE_EVENT,
+  LECTURE_POLL_EVENT,
   lectureLiveTopic,
   type LectureLiveState,
+  type LecturePollState,
 } from "@/lib/lecturesync";
+import type { PollStage } from "@/types/db";
+
+/**
+ * Push a poll round's current state — and, from the pair stage on, every
+ * student's partners — to the lecture's followers. Read back with the admin
+ * client after the action's write so triggers and defaults are reflected.
+ * See LECTURE_POLL_EVENT for why this replaced two postgres_changes feeds
+ * and a per-student partner query.
+ */
+export async function broadcastPollState(roundId: string): Promise<boolean> {
+  const admin = createAdminClient();
+  const { data: round } = await admin
+    .from("poll_rounds")
+    .select("id, lecture_id, prompt, options, stage, results, correct_indices")
+    .eq("id", roundId)
+    .maybeSingle();
+  if (!round) return false;
+
+  const state: LecturePollState = {
+    round: {
+      id: round.id,
+      prompt: round.prompt,
+      options: round.options,
+      stage: round.stage as PollStage,
+      results: round.results,
+      correct_indices: round.correct_indices,
+    },
+  };
+  if (round.stage === "pair" || round.stage === "revote") {
+    const { data: pairs } = await admin
+      .from("poll_pairs")
+      .select("member_ids")
+      .eq("round_id", roundId);
+    const partners: Record<string, string[]> = {};
+    for (const p of pairs ?? []) {
+      const ids = (p.member_ids as string[]) ?? [];
+      for (const id of ids) partners[id] = ids.filter((other) => other !== id);
+    }
+    state.partners = partners;
+  }
+
+  const channel = admin.channel(lectureLiveTopic(round.lecture_id));
+  try {
+    await channel.httpSend(LECTURE_POLL_EVENT, state, { timeout: 4000 });
+    return true;
+  } catch (err) {
+    console.warn(
+      "[poll-broadcast]",
+      JSON.stringify({
+        roundId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+    return false;
+  }
+}
 
 /**
  * Push the lecture's live state to every follower over Realtime broadcast —

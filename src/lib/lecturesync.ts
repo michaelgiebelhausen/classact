@@ -55,6 +55,33 @@ export interface LectureLiveState {
 /** The broadcast event name carrying a {@link LectureLiveState}. */
 export const LECTURE_LIVE_EVENT = "state";
 
+/**
+ * The broadcast event name carrying a {@link LecturePollState}, on the same
+ * lecture topic. Students used to follow polls through postgres_changes on
+ * poll_rounds and poll_pairs: every stage change was one policy evaluation
+ * per subscriber inside Postgres, the pairs subscription was filtered by
+ * course so every pair row reached all 300 tabs, and on the pair stage every
+ * tab then ran its own partner query in the same instant. One message now
+ * carries the round and everyone's partners.
+ */
+export const LECTURE_POLL_EVENT = "poll";
+
+export interface LecturePollRound {
+  id: string;
+  prompt: string;
+  options: string[];
+  stage: PollStage;
+  results: PollResults | null;
+  correct_indices: number[] | null;
+}
+
+export interface LecturePollState {
+  /** The round as it stands; stage "closed" tells followers to clear it. */
+  round: LecturePollRound;
+  /** enrollment id → partner enrollment ids, present from the pair stage on. */
+  partners?: Record<string, string[]>;
+}
+
 /** Route of the chrome-free projector view for a course. */
 export function stagePath(courseId: string): string {
   return `/course/${courseId}/follow/stage`;
