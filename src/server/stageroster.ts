@@ -19,6 +19,52 @@ import type {
   MatchCandidate,
 } from "@/components/features/roster/StagedRoster";
 
+/**
+ * The auth-user facts stageRoster needs, cached per process for a minute
+ * with in-flight de-duplication. listUsers is the GoTrue admin endpoint
+ * returning EVERY account in the project (hundreds of full records) and it
+ * ran on every open of the course home page. The facts it yields (has this
+ * address ever signed in, which address does a profile use) change on the
+ * order of minutes, not requests.
+ */
+interface AuthFacts {
+  facts: Map<string, AccountFacts>;
+  emailByProfile: Map<string, string>;
+}
+const AUTH_FACTS_TTL_MS = 60_000;
+let authFactsCache: { expires: number; value: AuthFacts } | null = null;
+let authFactsInFlight: Promise<AuthFacts> | null = null;
+
+async function loadAuthFacts(admin: SupabaseClient<Database>): Promise<AuthFacts> {
+  const now = Date.now();
+  if (authFactsCache && authFactsCache.expires > now) return authFactsCache.value;
+  if (authFactsInFlight) return authFactsInFlight;
+  authFactsInFlight = (async () => {
+    const facts = new Map<string, AccountFacts>();
+    const emailByProfile = new Map<string, string>();
+    const { data } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    for (const u of data?.users ?? []) {
+      if (!u.email) continue;
+      facts.set(u.email.toLowerCase(), {
+        emailConfirmed: Boolean(u.email_confirmed_at),
+        everSignedIn: Boolean(u.last_sign_in_at),
+      });
+      emailByProfile.set(u.id, u.email);
+    }
+    const value = { facts, emailByProfile };
+    authFactsCache = { expires: Date.now() + AUTH_FACTS_TTL_MS, value };
+    return value;
+  })().finally(() => {
+    authFactsInFlight = null;
+  });
+  return authFactsInFlight;
+}
+
+/** Forget cached auth facts. Call after anything that changes an account. */
+export function invalidateAuthFacts(): void {
+  authFactsCache = null;
+}
+
 /** The enrollment columns this needs; a superset is fine. */
 export interface StageableEnrollment {
   id: string;
@@ -49,35 +95,30 @@ export async function stageRoster(
   enrollments: StageableEnrollment[],
   photoMap: Map<string, string[]>
 ): Promise<{ groups: Record<RosterStage, StagedPerson[]>; total: number }> {
-  const facts = new Map<string, AccountFacts>();
-  const emailByProfile = new Map<string, string>();
   const schoolEmailByProfile = new Map<string, string>();
-
-  const { data } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  for (const u of data?.users ?? []) {
-    if (!u.email) continue;
-    facts.set(u.email.toLowerCase(), {
-      emailConfirmed: Boolean(u.email_confirmed_at),
-      everSignedIn: Boolean(u.last_sign_in_at),
-    });
-    emailByProfile.set(u.id, u.email);
-  }
+  const fullNameByProfile = new Map<string, string>();
 
   // The school address a student claims, which is what identifies them on the
-  // Canvas roster when they sign in with something else entirely.
-  const fullNameByProfile = new Map<string, string>();
-  const linked = enrollments
-    .map((e) => e.profile_id)
-    .filter((id): id is string => Boolean(id));
-  if (linked.length > 0) {
-    const { data: profiles } = await admin
-      .from("profiles")
-      .select("id, school_email, full_name")
-      .in("id", [...new Set(linked)]);
-    for (const p of profiles ?? []) {
-      if (p.school_email) schoolEmailByProfile.set(p.id, p.school_email);
-      if (p.full_name) fullNameByProfile.set(p.id, p.full_name);
-    }
+  // Canvas roster when they sign in with something else entirely. Fetched
+  // alongside the auth facts, not after them.
+  const linked = [
+    ...new Set(
+      enrollments
+        .map((e) => e.profile_id)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  const [{ facts, emailByProfile }, { data: profiles }] = await Promise.all([
+    loadAuthFacts(admin),
+    linked.length > 0
+      ? admin.from("profiles").select("id, school_email, full_name").in("id", linked)
+      : Promise.resolve({
+          data: [] as Array<{ id: string; school_email: string | null; full_name: string | null }>,
+        }),
+  ]);
+  for (const p of profiles ?? []) {
+    if (p.school_email) schoolEmailByProfile.set(p.id, p.school_email);
+    if (p.full_name) fullNameByProfile.set(p.id, p.full_name);
   }
 
   // Shadow rows: the same human twice, because they signed in with their

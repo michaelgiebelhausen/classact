@@ -1,5 +1,5 @@
 import "server-only";
-import { createClient } from "@/lib/supabase/server";
+import { getProfile } from "@/lib/auth";
 
 /**
  * Whether the signed-in user is a founder account.
@@ -20,18 +20,9 @@ import { createClient } from "@/lib/supabase/server";
  * only user.
  */
 export async function isFounder(): Promise<boolean> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return false;
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("founder")
-    .eq("id", user.id)
-    .maybeSingle();
-
+  // The per-request cached profile: this used to be a second auth round trip
+  // and a second profiles read on a page that had both already.
+  const profile = await getProfile();
   return Boolean(profile?.founder);
 }
 

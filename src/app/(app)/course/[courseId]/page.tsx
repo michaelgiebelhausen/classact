@@ -59,26 +59,39 @@ export default async function CourseHomePage({
     .neq("status", "dropped")
     .order("roster_name");
 
-  const photoMap = await resolveEnrollmentPhotos(directory, enrollments ?? []);
-
   // First names for the "who's in this class" grid. roster_name is the raw
-  // registrar/email value — for a code-joiner it IS their email — so resolve a
+  // registrar/email value (for a code-joiner it IS their email) so resolve a
   // safe display name and reduce it to a first name, preferring the given name
-  // the student set on their profile. Read via the
-  // admin `directory` client for the same reason the enrollments are: a student
-  // can't read classmates' profile rows under RLS.
+  // the student set on their profile. Read via the admin `directory` client
+  // for the same reason the enrollments are: a student can't read classmates'
+  // profile rows under RLS.
+  //
+  // Photos, names and the founder flag don't depend on each other: one round
+  // trip. This is the page behind "Open" on the dashboard.
+  const linkedProfileIds = [
+    ...new Set(
+      (enrollments ?? [])
+        .map((e) => e.profile_id)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  const [photoMap, { data: profiles }, founder] = await Promise.all([
+    resolveEnrollmentPhotos(directory, enrollments ?? []),
+    linkedProfileIds.length > 0
+      ? directory
+          .from("profiles")
+          .select("id, first_name, full_name")
+          .in("id", linkedProfileIds)
+      : Promise.resolve({
+          data: [] as Array<{ id: string; first_name: string | null; full_name: string | null }>,
+        }),
+    // Account-destroying tools are hidden from ordinary professors, not
+    // merely refused: a button that exists and says no is worse than none.
+    isProfessor ? isFounder() : Promise.resolve(false),
+  ]);
   const profileNames = new Map<string, { firstName: string | null; fullName: string | null }>();
-  const linkedProfileIds = (enrollments ?? [])
-    .map((e) => e.profile_id)
-    .filter((id): id is string => Boolean(id));
-  if (linkedProfileIds.length > 0) {
-    const { data: profiles } = await directory
-      .from("profiles")
-      .select("id, first_name, full_name")
-      .in("id", [...new Set(linkedProfileIds)]);
-    for (const p of profiles ?? []) {
-      profileNames.set(p.id, { firstName: p.first_name, fullName: p.full_name });
-    }
+  for (const p of profiles ?? []) {
+    profileNames.set(p.id, { firstName: p.first_name, fullName: p.full_name });
   }
 
   function displayFirstName(e: {
@@ -98,10 +111,6 @@ export default async function CourseHomePage({
     isProfessor && isConfigured.supabaseAdmin
       ? await stageRoster(createAdminClient(), enrollments ?? [], photoMap)
       : null;
-
-  // Account-destroying tools are hidden from ordinary professors, not merely
-  // refused — a button that exists and says no is worse than no button.
-  const founder = staged ? await isFounder() : false;
 
   return (
     <div className="grid gap-6">
