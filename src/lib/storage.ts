@@ -11,16 +11,54 @@ export const ASSIGNMENT_BUCKET = "assignment-docs"
 export const MATERIALS_BUCKET = "course-materials"
 const SIGNED_URL_TTL_SECONDS = 60 * 60 // 1 hour
 
+/**
+ * Deck and material URLs are identical for everyone in the room, yet every
+ * student's follow-page render was minting them afresh: three storage HTTP
+ * calls per render, three hundred renders at lecture start. Cache the
+ * path → URL mapping the way photos already are (45 min, well inside the
+ * 1-hour signature). Keyed by bucket, path and download name so a save-as
+ * URL never serves as an inline one.
+ */
+const SIGNED_FILE_CACHE_TTL_MS = 45 * 60 * 1000
+const SIGNED_FILE_CACHE_MAX = 500
+const signedFileCache = new Map<string, { url: string; expires: number }>()
+
+async function cachedSignedUrl(
+  client: SupabaseClient<Database>,
+  bucket: string,
+  path: string,
+  download: string | null
+): Promise<string | null> {
+  const key = `${bucket}|${path}|${download ?? ""}`
+  const now = Date.now()
+  const hit = signedFileCache.get(key)
+  if (hit && hit.expires > now) return hit.url
+  const { data, error } = await client.storage
+    .from(bucket)
+    .createSignedUrl(
+      path,
+      SIGNED_URL_TTL_SECONDS,
+      download ? { download } : undefined
+    )
+  if (error || !data) return null
+  signedFileCache.set(key, {
+    url: data.signedUrl,
+    expires: now + SIGNED_FILE_CACHE_TTL_MS,
+  })
+  while (signedFileCache.size > SIGNED_FILE_CACHE_MAX) {
+    const oldest = signedFileCache.keys().next().value
+    if (oldest === undefined) break
+    signedFileCache.delete(oldest)
+  }
+  return data.signedUrl
+}
+
 /** Short-lived signed URL for a lecture deck PDF. */
 export async function getSignedDeckUrl(
   client: SupabaseClient<Database>,
   path: string
 ): Promise<string | null> {
-  const { data, error } = await client.storage
-    .from(DECK_BUCKET)
-    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
-  if (error || !data) return null
-  return data.signedUrl
+  return cachedSignedUrl(client, DECK_BUCKET, path, null)
 }
 
 /**
@@ -35,11 +73,7 @@ export async function getSignedDeckDownloadUrl(
   filename: string
 ): Promise<string | null> {
   const safeName = filename.replace(/[\\/:*?"<>|]/g, "-").trim() || "slides.pdf"
-  const { data, error } = await client.storage
-    .from(DECK_BUCKET)
-    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, { download: safeName })
-  if (error || !data) return null
-  return data.signedUrl
+  return cachedSignedUrl(client, DECK_BUCKET, path, safeName)
 }
 
 /**
@@ -55,11 +89,7 @@ export async function getSignedMaterialDownloadUrl(
   filename: string
 ): Promise<string | null> {
   const safeName = filename.replace(/[\\/:*?"<>|]/g, "-").trim() || "download"
-  const { data, error } = await client.storage
-    .from(MATERIALS_BUCKET)
-    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, { download: safeName })
-  if (error || !data) return null
-  return data.signedUrl
+  return cachedSignedUrl(client, MATERIALS_BUCKET, path, safeName)
 }
 
 /** Short-lived signed URL for a project assignment PDF. */

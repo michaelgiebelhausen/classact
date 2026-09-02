@@ -9,8 +9,18 @@ export interface FocusEventInput {
   occurred_at: string; // ISO timestamp
 }
 
-/** Client heartbeat cadence while following a live lecture. */
-export const PRESENCE_HEARTBEAT_MS = 30_000;
+/**
+ * Client heartbeat cadence while following a live lecture. 60 s: two beats
+ * can still go missing inside PRESENCE_DISCONNECT_MS, and halving the rate
+ * halves the sustained auth + upsert load of a 300-seat room.
+ */
+export const PRESENCE_HEARTBEAT_MS = 60_000;
+/**
+ * A tab-away shorter than this is a glance, not drift: it is neither sent
+ * to the server nor tallied, so a room that flinches at a notification
+ * doesn't produce 300 away/back pairs in the same second.
+ */
+export const FOCUS_GRACE_MS = 3_000;
 /**
  * No heartbeat for this long = the machine went silent (sleep, shutdown,
  * network drop) — treat the student as disconnected, not away. Generous

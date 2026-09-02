@@ -125,8 +125,10 @@ describe("subscribeWithRecovery", () => {
     channels[0].fire("SUBSCRIBED");
     expect(catchUp).toHaveBeenCalledTimes(1); // caught up once live
 
-    channels[0].fire("CHANNEL_ERROR"); // dropped → 5s poll fallback arms
-    vi.advanceTimersByTime(5000);
+    channels[0].fire("CHANNEL_ERROR"); // dropped → ~5s poll fallback arms
+    // The cadence is jittered ±25% (3750–6250 ms); 6250 ms is exactly one
+    // tick for any value in that range.
+    vi.advanceTimersByTime(6250);
     expect(catchUp).toHaveBeenCalledTimes(2);
 
     channels[0].fire("SUBSCRIBED"); // back → catch up again, poll cleared

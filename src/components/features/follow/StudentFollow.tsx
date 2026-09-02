@@ -47,6 +47,7 @@ import {
   PRESENCE_DISCONNECT_MS,
   PRESENCE_HEARTBEAT_MS,
   type PauseInterval,
+  FOCUS_GRACE_MS,
 } from "@/lib/focus";
 import { capture } from "@/lib/analytics";
 import { initialsOf } from "@/lib/names";
@@ -124,6 +125,11 @@ export function StudentFollow({
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
   const [live, setLive] = useState(true);
+  // The lecture ended. Flipped from the broadcast; rendered inline. It used
+  // to be router.refresh(): a full server render of this page from every
+  // student tab in the same second the professor clicked "End lecture".
+  const [ended, setEnded] = useState(false);
+  const endedRef = useRef(false);
   const [awayCount, setAwayCount] = useState(initialAwayCount);
   const [awayMs, setAwayMs] = useState(initialAwayMs);
   const [warning, setWarning] = useState<{ durationMs: number } | null>(null);
@@ -184,7 +190,8 @@ export function StudentFollow({
       pauses?: PauseInterval[] | null;
     }) {
       if (rec.ended_at) {
-        router.refresh();
+        endedRef.current = true;
+        setEnded(true);
         return;
       }
       setPage(rec.current_page);
@@ -480,6 +487,7 @@ export function StudentFollow({
   // charging them at the last beat.
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
+    let jitter: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
     const beat = () => {
       const now = Date.now();
@@ -517,12 +525,18 @@ export function StudentFollow({
           .finally(() => void recordPresenceHeartbeat(courseId, lectureId));
         return;
       }
+      if (endedRef.current) return; // RLS would refuse it anyway
       void recordPresenceHeartbeat(courseId, lectureId);
     };
     const begin = () => {
       if (cancelled) return;
       beat();
-      timer = setInterval(beat, PRESENCE_HEARTBEAT_MS);
+      // Start the interval at a random offset so tabs that loaded together
+      // don't beat together for the rest of the lecture.
+      jitter = setTimeout(() => {
+        if (cancelled) return;
+        timer = setInterval(beat, PRESENCE_HEARTBEAT_MS);
+      }, Math.floor(Math.random() * PRESENCE_HEARTBEAT_MS));
     };
     if (isAwayRef.current) {
       // Reconcile a spell left open by a pre-reload sleep/close BEFORE the
@@ -552,12 +566,18 @@ export function StudentFollow({
     }
     return () => {
       cancelled = true;
+      if (jitter) clearTimeout(jitter);
       if (timer) clearInterval(timer);
     };
   }, [courseId, lectureId]);
 
   // ---- Focus guard: log tab-away / return, warn on return ----
   useEffect(() => {
+    // The 'away' is held for FOCUS_GRACE_MS. A return inside the window
+    // cancels it: nothing is sent, nothing is tallied. A glance at a
+    // notification isn't drift, and a room that flinches together shouldn't
+    // produce 300 away/back pairs against the server in one second.
+    let pendingAway: ReturnType<typeof setTimeout> | null = null;
     function evaluate() {
       const away = document.hidden || !document.hasFocus();
       if (away && !isAwayRef.current) {
@@ -567,12 +587,24 @@ export function StudentFollow({
         capture("lecture_focus_lost", {});
         // Events are always recorded — pause windows are subtracted at
         // scoring time, so the stream stays truthful either way.
-        void recordFocusEvent(courseId, lectureId, "away");
+        pendingAway = setTimeout(() => {
+          pendingAway = null;
+          if (endedRef.current) return;
+          void recordFocusEvent(courseId, lectureId, "away");
+        }, FOCUS_GRACE_MS);
       } else if (!away && isAwayRef.current) {
         isAwayRef.current = false;
         const start = awayStartRef.current;
         awayStartRef.current = null;
         const nowMs = Date.now();
+        if (pendingAway) {
+          // Back inside the grace window: the away was never sent, so there
+          // is no spell to close and nothing to score.
+          clearTimeout(pendingAway);
+          pendingAway = null;
+          lastBeatRef.current = nowMs;
+          return;
+        }
         // A silent gap since the last beat means the machine slept — only
         // the stretch while it was demonstrably awake counts (the server
         // applies the same rule by backdating the 'back' event).
@@ -612,6 +644,7 @@ export function StudentFollow({
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", evaluate);
     return () => {
+      if (pendingAway) clearTimeout(pendingAway);
       document.removeEventListener("visibilitychange", evaluate);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", evaluate);
@@ -739,6 +772,20 @@ export function StudentFollow({
       </CardContent>
     </Card>
   ) : null;
+
+  if (ended) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>The lecture has ended</CardTitle>
+          <CardDescription>
+            Your notes are saved. When your professor starts the next one, the
+            slides will appear here again.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_280px]">

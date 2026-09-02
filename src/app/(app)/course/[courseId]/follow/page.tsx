@@ -407,14 +407,22 @@ export default async function FollowAlongPage({
     );
   }
 
-  const { data: noteEntries } = await supabase
-    .from("lecture_note_entries")
-    .select("id, page, content, created_at")
-    .eq("lecture_id", lecture.id)
-    .eq("enrollment_id", myEnrollment.id)
-    .order("created_at", { ascending: true });
-
-  const [{ data: myFocusEvents }, { data: myPresence }] = await Promise.all([
+  // Everything the student view needs that doesn't depend on the open round,
+  // in one round trip. This is the render every laptop in the room performs
+  // in the same minute; sequential awaits here were pure latency.
+  const [
+    { data: noteEntries },
+    { data: myFocusEvents },
+    { data: myPresence },
+    { data: openRound },
+    openExercise,
+  ] = await Promise.all([
+    supabase
+      .from("lecture_note_entries")
+      .select("id, page, content, created_at")
+      .eq("lecture_id", lecture.id)
+      .eq("enrollment_id", myEnrollment.id)
+      .order("created_at", { ascending: true }),
     supabase
       .from("focus_events")
       .select("enrollment_id, event_type, occurred_at")
@@ -426,6 +434,14 @@ export default async function FollowAlongPage({
       .eq("lecture_id", lecture.id)
       .eq("enrollment_id", myEnrollment.id)
       .maybeSingle(),
+    // Open think-pair-share round (correct_indices is null until reveal).
+    supabase
+      .from("poll_rounds")
+      .select("id, prompt, options, stage, results, correct_indices")
+      .eq("lecture_id", lecture.id)
+      .neq("stage", "closed")
+      .maybeSingle(),
+    loadOpenExercise(supabase, courseId),
   ]);
   const myFocus = summarizeFocus(
     myFocusEvents ?? [],
@@ -434,13 +450,6 @@ export default async function FollowAlongPage({
     myPresence ? Date.parse(myPresence.last_seen_at) : undefined
   );
 
-  // Open think-pair-share round (correct_indices is null until reveal).
-  const { data: openRound } = await supabase
-    .from("poll_rounds")
-    .select("id, prompt, options, stage, results, correct_indices")
-    .eq("lecture_id", lecture.id)
-    .neq("stage", "closed")
-    .maybeSingle();
   const initialRound: StudentRound | null = openRound
     ? {
         id: openRound.id,
@@ -456,18 +465,20 @@ export default async function FollowAlongPage({
     [];
   let initialPartnerIds: string[] = [];
   if (openRound) {
-    const { data: myAnswers } = await supabase
-      .from("poll_answers")
-      .select("phase, choice")
-      .eq("round_id", openRound.id)
-      .eq("enrollment_id", myEnrollment.id);
+    const [{ data: myAnswers }, { data: myPair }] = await Promise.all([
+      supabase
+        .from("poll_answers")
+        .select("phase, choice")
+        .eq("round_id", openRound.id)
+        .eq("enrollment_id", myEnrollment.id),
+      supabase
+        .from("poll_pairs")
+        .select("member_ids")
+        .eq("round_id", openRound.id)
+        .contains("member_ids", JSON.stringify([myEnrollment.id]))
+        .maybeSingle(),
+    ]);
     initialMyAnswers = myAnswers ?? [];
-    const { data: myPair } = await supabase
-      .from("poll_pairs")
-      .select("member_ids")
-      .eq("round_id", openRound.id)
-      .contains("member_ids", JSON.stringify([myEnrollment.id]))
-      .maybeSingle();
     initialPartnerIds = (myPair?.member_ids ?? []).filter(
       (id) => id !== myEnrollment.id
     );
@@ -520,9 +531,7 @@ export default async function FollowAlongPage({
         initialRound={initialRound}
         initialMyAnswers={initialMyAnswers}
         initialPartnerIds={initialPartnerIds}
-        initialExercisePrompt={
-          (await loadOpenExercise(supabase, courseId))?.prompt ?? null
-        }
+        initialExercisePrompt={openExercise?.prompt ?? null}
       />
     </div>
   );
