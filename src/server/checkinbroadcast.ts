@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getCourseDirectory } from "@/lib/coursedirectory";
 import type { CheckInRow } from "@/lib/checkinpoll";
 import {
   CHECKINS_LIVE_EVENT,
@@ -44,6 +45,7 @@ export async function broadcastCheckInChange(
   sessionId: string,
   change: { enrollmentIds?: string[]; deletedIds?: string[] }
 ): Promise<boolean> {
+  const admin = createAdminClient();
   const upsert = await readCheckInRows(sessionId, change.enrollmentIds ?? []);
   const payload: CheckInChange = {
     upsert,
@@ -51,7 +53,36 @@ export async function broadcastCheckInChange(
   };
   if (payload.upsert.length === 0 && payload.delete.length === 0) return true;
 
-  const admin = createAdminClient();
+  // Names and faces ride along so no tab needs a page render to learn a
+  // newcomer. The directory is cached per course (60 s, in-flight deduped),
+  // so this is one cheap read; a miss must never block the broadcast.
+  if (upsert.length > 0) {
+    try {
+      const { data: session } = await admin
+        .from("class_sessions")
+        .select("course_id")
+        .eq("id", sessionId)
+        .maybeSingle();
+      if (session) {
+        const directory = await getCourseDirectory(admin, session.course_id);
+        const entries: NonNullable<CheckInChange["entries"]> = {};
+        for (const row of upsert) {
+          const e = directory[row.enrollment_id];
+          if (e) {
+            entries[row.enrollment_id] = {
+              name: e.name,
+              firstName: e.firstName,
+              photoUrl: e.photoUrl,
+            };
+          }
+        }
+        payload.entries = entries;
+      }
+    } catch {
+      // Broadcast without names; the map's safety re-read still catches up.
+    }
+  }
+
   const channel = admin.channel(checkInsLiveTopic(sessionId));
   try {
     await channel.httpSend(CHECKINS_LIVE_EVENT, payload, { timeout: 4000 });

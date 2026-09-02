@@ -283,15 +283,21 @@ async function renderCheckIn(courseId: string) {
       .order("session_date", { ascending: false })
       .limit(8);
 
+    // One query for all eight candidates, then pick the newest with rows —
+    // this used to be a query per prior session until one had check-ins.
+    const priorIds = (priorSessions ?? []).map((p) => p.id);
+    const { data: priorRows } = priorIds.length
+      ? await supabase
+          .from("check_ins")
+          .select("session_id, enrollment_id, seat_id")
+          .in("session_id", priorIds)
+      : { data: [] as Array<{ session_id: string; enrollment_id: string; seat_id: string }> };
     for (const prior of priorSessions ?? []) {
-      const { data: rows } = await supabase
-        .from("check_ins")
-        .select("enrollment_id, seat_id")
-        .eq("session_id", prior.id);
-      if ((rows ?? []).length === 0) continue;
+      const rows = (priorRows ?? []).filter((r) => r.session_id === prior.id);
+      if (rows.length === 0) continue;
       lastSession = {
         date: prior.session_date,
-        rows: (rows ?? []).map((r) => ({
+        rows: rows.map((r) => ({
           seatId: r.seat_id,
           enrollmentId: r.enrollment_id,
         })),

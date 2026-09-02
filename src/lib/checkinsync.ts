@@ -32,4 +32,17 @@ export interface CheckInChange {
   upsert: CheckInRow[];
   /** check_ins ids that no longer exist (a freed seat, the swapped-out half). */
   delete: string[];
+  /**
+   * Name and face for each upserted enrollment, from the server's cached
+   * course directory. A tab whose page loaded before a late activator joined
+   * has no entry for them; without this it had to re-render the whole page
+   * to learn one name — and every tab in the room did so at the same instant.
+   */
+  entries?: Record<string, CheckInDirectoryEntry>;
+}
+
+export interface CheckInDirectoryEntry {
+  name: string;
+  firstName: string;
+  photoUrl: string | null;
 }

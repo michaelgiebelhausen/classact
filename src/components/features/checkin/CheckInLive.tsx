@@ -100,7 +100,7 @@ export function CheckInLive({
   sessionId,
   seats,
   initialOccupants,
-  directory,
+  directory: initialDirectory,
   myEnrollmentId,
   networkingScore,
   verifiedByMe,
@@ -115,6 +115,14 @@ export function CheckInLive({
   const router = useRouter();
   const [occupants, setOccupants] = useState<Map<string, OccupantInfo>>(
     () => new Map(initialOccupants.map((o) => [o.seatId, o]))
+  );
+  // Names and faces learned over the broadcast for people who activated after
+  // this page rendered. Merged over the server's directory so a newcomer is
+  // known the moment their check-in lands — no page render, no refresh.
+  const [learned, setLearned] = useState<Record<string, DirectoryEntry>>({});
+  const directory = useMemo(
+    () => (Object.keys(learned).length ? { ...initialDirectory, ...learned } : initialDirectory),
+    [initialDirectory, learned]
   );
   const [pendingSeat, setPendingSeat] = useState<string | null>(null);
   const [score, setScore] = useState(networkingScore);
@@ -230,10 +238,14 @@ export function CheckInLive({
 
     // Fire-and-forget: a failed report must never disturb check-in, and must
     // never retry — a retry loop during an outage is more of the problem.
+    // Sampled: one tab in ten is plenty to see an outage in the logs, and
+    // three hundred POSTs at the instant Realtime blips is the wrong moment.
+    const reporter = Math.random() < 0.1;
     const report = (
       state: "down" | "up",
       extra: { degradedMs?: number; reason?: string }
     ) => {
+      if (!reporter) return;
       void fetch("/api/metrics/realtime", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -243,12 +255,15 @@ export function CheckInLive({
     };
 
     // Someone we don't have in the directory (activated after this page
-    // loaded) needs one refresh to learn their name and face.
+    // loaded). Broadcasts carry their name and face, so this only fires for
+    // the safety re-read path — and even then at most once per tab, with a
+    // random delay so a room that learns of a newcomer together doesn't
+    // re-render together.
     const noteUnknown = (enrollmentIds: string[]) => {
       if (unknownEnrollment.current) return;
       if (enrollmentIds.some((id) => !directory[id])) {
         unknownEnrollment.current = true;
-        router.refresh();
+        setTimeout(() => router.refresh(), Math.floor(Math.random() * 20_000));
       }
     };
 
@@ -297,7 +312,22 @@ export function CheckInLive({
             setOccupants(
               (prev) => applyCheckInBroadcast(prev, payload) as typeof prev
             );
-            noteUnknown(payload.upsert.map((r) => r.enrollment_id));
+            if (payload.entries && Object.keys(payload.entries).length > 0) {
+              const fresh = payload.entries;
+              setLearned((prev) => {
+                let next: Record<string, DirectoryEntry> | null = null;
+                for (const [id, e] of Object.entries(fresh)) {
+                  if (directory[id] || prev[id]) continue;
+                  (next ??= { ...prev })[id] = e;
+                }
+                return next ?? prev;
+              });
+            }
+            noteUnknown(
+              payload.upsert
+                .map((r) => r.enrollment_id)
+                .filter((id) => !payload.entries?.[id])
+            );
             armSafety();
           }
         ),

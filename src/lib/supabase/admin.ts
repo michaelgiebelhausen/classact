@@ -10,9 +10,18 @@ import type { Database } from "@/types/db"
  * acting user owns the course before importing a roster).
  */
 export function createAdminClient() {
-  return createSupabaseClient<Database>(
-    requireEnv("supabaseUrl"),
-    requireEnv("supabaseServiceRoleKey"),
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  )
+  // One client per process. It holds no session and no per-request state,
+  // and a check-in used to build three of them per call (absences, the
+  // broadcast read-back, the broadcast itself) — each with its own fetch
+  // setup and realtime socket bookkeeping.
+  if (!cached) {
+    cached = createSupabaseClient<Database>(
+      requireEnv("supabaseUrl"),
+      requireEnv("supabaseServiceRoleKey"),
+      { auth: { persistSession: false, autoRefreshToken: false } }
+    )
+  }
+  return cached
 }
+
+let cached: ReturnType<typeof createSupabaseClient<Database>> | null = null

@@ -60,7 +60,9 @@ export interface RecoveryOptions {
   catchUp: () => void | Promise<void>;
   /** Optional connection-status hook, e.g. to drive a "reconnecting" badge. */
   onStatus?: (subscribed: boolean) => void;
-  /** Fallback poll cadence while realtime is down (default 5s). */
+  /** Fallback poll cadence while realtime is down (default 5s). Jittered by
+   *  ±25% per subscription, because a Realtime blip drops every tab in the
+   *  room at once and an exact cadence would have them all poll in phase. */
   pollMs?: number;
 }
 
@@ -84,7 +86,8 @@ export interface RecoveryOptions {
  * Returns a cleanup to call on unmount.
  */
 export function subscribeWithRecovery(opts: RecoveryOptions): () => void {
-  const { client, topic, bind, catchUp, onStatus, pollMs = 5000 } = opts;
+  const { client, topic, bind, catchUp, onStatus } = opts;
+  const pollMs = Math.round((opts.pollMs ?? 5000) * (0.75 + Math.random() * 0.5));
   let gen = 0;
   // Generation whose status callback is allowed to act; -1 means "none".
   let activeGen = -1;
