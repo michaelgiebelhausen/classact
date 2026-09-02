@@ -51,7 +51,10 @@ export default async function AssignmentsPage({
     .from("assignments")
     .select("id, title, deadline, peer_close_at, state, published_at")
     .eq("course_id", courseId)
-    .order("deadline", { ascending: false });
+    // Oldest due date first; ties broken alphabetically by title (a number or
+    // "A" near the top, "Z" at the bottom).
+    .order("deadline", { ascending: true })
+    .order("title", { ascending: true });
   const now = new Date();
 
   // "Copy" link → ?copy=<id>: pull the source assignment's fields (professor
