@@ -95,18 +95,24 @@ export default async function NotesPage({
 
   // Signed download links for the slide PDFs, so notes and the deck they were
   // taken against can leave together. One URL per deck, not per lecture.
-  const slidesUrlByDeck = new Map<string, string | null>();
-  for (const deck of deckById.values()) {
-    if (deck.kind !== "pdf" || !deck.storage_path) continue;
-    slidesUrlByDeck.set(
-      deck.id,
-      await getSignedDeckDownloadUrl(
-        supabase,
-        deck.storage_path,
-        `${deck.title || "slides"}.pdf`
-      )
-    );
-  }
+  // Signed in parallel (and served from the 45-min URL cache after the first
+  // render): this was one awaited storage call per deck, in series.
+  const slidesUrlByDeck = new Map<string, string | null>(
+    await Promise.all(
+      Array.from(deckById.values())
+        .filter((deck) => deck.kind === "pdf" && deck.storage_path)
+        .map(async (deck) =>
+          [
+            deck.id,
+            await getSignedDeckDownloadUrl(
+              supabase,
+              deck.storage_path!,
+              `${deck.title || "slides"}.pdf`
+            ),
+          ] as const
+        )
+    )
+  );
 
   // Transcript links come from the admin client — the course-materials
   // bucket has no member-read policy, so the professor's download toggle is
@@ -114,18 +120,22 @@ export default async function NotesPage({
   const transcriptUrlByDeck = new Map<string, string | null>();
   if (course.transcripts_downloadable && isConfigured.supabaseAdmin) {
     const admin = createAdminClient();
-    for (const deck of deckById.values()) {
-      if (!deck.transcript_path) continue;
-      const ext = deck.transcript_path.split(".").pop() ?? "txt";
-      transcriptUrlByDeck.set(
-        deck.id,
-        await getSignedMaterialDownloadUrl(
-          admin,
-          deck.transcript_path,
-          `${deck.transcript_title || "transcript"}.${ext}`
-        )
-      );
-    }
+    const signed = await Promise.all(
+      Array.from(deckById.values())
+        .filter((deck) => deck.transcript_path)
+        .map(async (deck) => {
+          const ext = deck.transcript_path!.split(".").pop() ?? "txt";
+          return [
+            deck.id,
+            await getSignedMaterialDownloadUrl(
+              admin,
+              deck.transcript_path!,
+              `${deck.transcript_title || "transcript"}.${ext}`
+            ),
+          ] as const;
+        })
+    );
+    for (const [id, url] of signed) transcriptUrlByDeck.set(id, url);
   }
 
   const lectureById = new Map(

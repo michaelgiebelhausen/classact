@@ -78,14 +78,41 @@ export default async function AskTaPage({
 
   // Corpus inventory — what the TA can (and can't yet) read. Text columns
   // stay out of this select on purpose; only presence is needed.
-  const { data: deckRows } = await supabase
-    .from("lecture_decks")
-    .select(
-      "id, title, kind, storage_path, reading_path, reading_title, transcript_title, deck_text, reading_text, transcript_text"
-    )
-    .eq("course_id", courseId)
-    .order("position", { ascending: true })
-    .order("created_at", { ascending: false });
+  // The text bodies can run 100k+ chars each; only their presence matters
+  // here. Three id-only probes carry a few bytes instead of the corpus.
+  const [
+    { data: deckRows },
+    { data: withDeck },
+    { data: withReading },
+    { data: withTranscript },
+  ] = await Promise.all([
+    supabase
+      .from("lecture_decks")
+      .select(
+        "id, title, kind, storage_path, reading_path, reading_title, transcript_title"
+      )
+      .eq("course_id", courseId)
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("lecture_decks")
+      .select("id")
+      .eq("course_id", courseId)
+      .not("deck_text", "is", null),
+    supabase
+      .from("lecture_decks")
+      .select("id")
+      .eq("course_id", courseId)
+      .not("reading_text", "is", null),
+    supabase
+      .from("lecture_decks")
+      .select("id")
+      .eq("course_id", courseId)
+      .not("transcript_text", "is", null),
+  ]);
+  const hasDeckText = new Set((withDeck ?? []).map((d) => d.id));
+  const hasReadingText = new Set((withReading ?? []).map((d) => d.id));
+  const hasTranscriptText = new Set((withTranscript ?? []).map((d) => d.id));
 
   const items: IndexItem[] = [];
   if (course.syllabus_path || course.syllabus_text) {
@@ -98,27 +125,27 @@ export default async function AskTaPage({
     if (deck.kind === "pdf" && deck.storage_path) {
       items.push({
         label: `Slides: ${deck.title}`,
-        indexed: Boolean(deck.deck_text),
+        indexed: hasDeckText.has(deck.id),
       });
     }
     if (deck.reading_path) {
       items.push({
         label: `Reading: ${deck.reading_title ?? deck.title}`,
-        indexed: Boolean(deck.reading_text),
+        indexed: hasReadingText.has(deck.id),
       });
     }
     if (deck.transcript_title) {
       items.push({
         label: `Transcript: ${deck.transcript_title}`,
-        indexed: Boolean(deck.transcript_text),
+        indexed: hasTranscriptText.has(deck.id),
       });
     }
   }
   const anyIndexed =
     Boolean(course.syllabus_text) ||
-    (deckRows ?? []).some(
-      (d) => d.deck_text || d.transcript_text || d.reading_text
-    );
+    hasDeckText.size > 0 ||
+    hasReadingText.size > 0 ||
+    hasTranscriptText.size > 0;
 
   // This member's own private thread (RLS scopes the select).
   const { data: messageRows } = await supabase

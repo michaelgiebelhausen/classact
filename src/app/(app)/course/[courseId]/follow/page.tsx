@@ -226,20 +226,23 @@ export default async function FollowAlongPage({
     // Roster (names + one photo) via admin — membership proven above. The
     // class-visible name, not roster_name: this view gets projected, and a
     // code-joiner's roster_name is their email address.
-    const roster: Record<string, RosterEntry> = {};
-    if (isConfigured.supabaseAdmin) {
-      const directory = await getCourseDirectory(createAdminClient(), courseId);
-      for (const [enrollmentId, entry] of Object.entries(directory)) {
-        roster[enrollmentId] = {
-          name: entry.name,
-          photoUrl: entry.photoUrl,
-        };
-      }
-    }
-
-    // Room geometry + today's check-ins so the presenter can show the class
-    // as a seat map. Missing either just falls back to the roster list.
-    const [seats, { data: liveSession }] = await Promise.all([
+    // This is the render behind the Follow-along click. Everything that
+    // depends on nothing else goes out in one round trip; only the check-ins
+    // (need the session) and the votes (need the open round) wait for a
+    // second one.
+    const [
+      directory,
+      seats,
+      { data: liveSession },
+      { data: focusEvents },
+      { data: presenceRows },
+      { data: approvedRows },
+      { data: roundRows },
+      initialExercise,
+    ] = await Promise.all([
+      isConfigured.supabaseAdmin
+        ? getCourseDirectory(createAdminClient(), courseId)
+        : Promise.resolve({} as Awaited<ReturnType<typeof getCourseDirectory>>),
       loadCourseSeats(supabase, courseId, course.room_id),
       supabase
         .from("class_sessions")
@@ -249,17 +252,6 @@ export default async function FollowAlongPage({
         .order("session_date", { ascending: false })
         .limit(1)
         .maybeSingle(),
-    ]);
-    const occupants: Record<string, string> = {};
-    if (liveSession) {
-      const { data: checkIns } = await supabase
-        .from("check_ins")
-        .select("seat_id, enrollment_id")
-        .eq("session_id", liveSession.id);
-      for (const c of checkIns ?? []) occupants[c.seat_id] = c.enrollment_id;
-    }
-
-    const [{ data: focusEvents }, { data: presenceRows }] = await Promise.all([
       supabase
         .from("focus_events")
         .select("enrollment_id, event_type, occurred_at")
@@ -268,7 +260,43 @@ export default async function FollowAlongPage({
         .from("lecture_presence")
         .select("enrollment_id, last_seen_at")
         .eq("lecture_id", lecture.id),
+      // Approved questions for this deck + rounds already run this lecture.
+      supabase
+        .from("deck_questions")
+        .select("id, prompt, options, correct_indices, position_after_page")
+        .eq("deck_id", lecture.deck_id)
+        .eq("approved", true)
+        .order("position_after_page", { ascending: true }),
+      supabase
+        .from("poll_rounds")
+        .select("id, question_id, prompt, options, stage, results, correct_indices")
+        .eq("lecture_id", lecture.id),
+      // A group exercise may already be running: a reload mid-activity
+      // should land back on it rather than pretending nothing is happening.
+      loadOpenExercise(supabase, courseId),
     ]);
+
+    // Roster (names + one photo) via admin: membership proven above. The
+    // class-visible name, not roster_name: this view gets projected, and a
+    // code-joiner's roster_name is their email address.
+    const roster: Record<string, RosterEntry> = {};
+    for (const [enrollmentId, entry] of Object.entries(directory)) {
+      roster[enrollmentId] = {
+        name: entry.name,
+        photoUrl: entry.photoUrl,
+      };
+    }
+
+    // Room geometry + today's check-ins so the presenter can show the class
+    // as a seat map. Missing either just falls back to the roster list.
+    const occupants: Record<string, string> = {};
+    if (liveSession) {
+      const { data: checkIns } = await supabase
+        .from("check_ins")
+        .select("seat_id, enrollment_id")
+        .eq("session_id", liveSession.id);
+      for (const c of checkIns ?? []) occupants[c.seat_id] = c.enrollment_id;
+    }
     const lastSeenByEnrollment = new Map(
       (presenceRows ?? []).map((p) => [
         p.enrollment_id,
@@ -293,13 +321,6 @@ export default async function FollowAlongPage({
       lastSeenAt: p.last_seen_at,
     }));
 
-    // Approved questions for this deck + rounds already run this lecture.
-    const { data: approvedRows } = await supabase
-      .from("deck_questions")
-      .select("id, prompt, options, correct_indices, position_after_page")
-      .eq("deck_id", lecture.deck_id)
-      .eq("approved", true)
-      .order("position_after_page", { ascending: true });
     const questions: PresenterQuestion[] = (approvedRows ?? []).map((q) => ({
       id: q.id,
       prompt: q.prompt,
@@ -308,10 +329,6 @@ export default async function FollowAlongPage({
       positionAfterPage: q.position_after_page,
     }));
 
-    const { data: roundRows } = await supabase
-      .from("poll_rounds")
-      .select("id, question_id, prompt, options, stage, results, correct_indices")
-      .eq("lecture_id", lecture.id);
     const openRound = (roundRows ?? []).find((r) => r.stage !== "closed");
     const initialRound: ActiveRound | null = openRound
       ? {
@@ -337,10 +354,6 @@ export default async function FollowAlongPage({
         choice: v.choice,
       }));
     }
-
-    // A group exercise may already be running — a reload mid-activity should
-    // land back on it rather than pretending nothing is happening.
-    const initialExercise = await loadOpenExercise(supabase, courseId);
 
     return (
       <div className="grid gap-6">
