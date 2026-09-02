@@ -17,6 +17,7 @@ import type { DeckListItem } from "@/components/features/follow/DeckManager";
 import type { QuestionItem } from "@/components/features/follow/DeckQuestions";
 import type { RoomLayout } from "@/lib/roomlayout";
 import type { RoomLocation } from "@/server/actions/rooms";
+import { readRenderedPages } from "@/server/deckrendered";
 
 export default async function CourseSetupPage({
   params,
@@ -208,11 +209,16 @@ export default async function CourseSetupPage({
     });
     questionsByDeck.set(q.deck_id, list);
   }
+  const renderedByDeck = await readRenderedPages(
+    supabase,
+    (deckRows ?? []).map((d) => d.id)
+  );
   const decks: DeckListItem[] = (deckRows ?? []).map((d) => ({
     id: d.id,
     title: d.title,
     kind: d.kind,
     pageCount: d.page_count,
+    renderedPages: renderedByDeck.get(d.id) ?? 0,
     createdAt: d.created_at,
     readingTitle: d.reading_title,
     transcriptTitle: d.transcript_title,

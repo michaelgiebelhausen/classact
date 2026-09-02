@@ -25,6 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { SlideViewer } from "@/components/features/follow/SlideViewer";
+import { SlideImageViewer } from "@/components/features/follow/SlideImageViewer";
 import { PollResultsChart } from "@/components/features/follow/PollResultsChart";
 import { NoteFeed } from "@/components/features/follow/NoteFeed";
 import type { NoteEntryData } from "@/components/features/notes/NoteEntryItem";
@@ -78,6 +79,12 @@ interface Props {
   deckTitle: string;
   deckKind: "pdf" | "google_slides";
   fileUrl: string | null;
+  /**
+   * Rendered slide images, page 1 first, when the whole deck has been
+   * rasterized (lib/deckpages). Present → the image viewer replaces the PDF
+   * engine: one ~100 KB image per slide as shown, no whole-deck download.
+   */
+  pageImageUrls?: string[] | null;
   /** Attachment-disposition variant of fileUrl, so a click saves the PDF. */
   slidesDownloadUrl?: string | null;
   /** Minted only while the professor allows transcript downloads. */
@@ -112,6 +119,7 @@ export function StudentFollow({
   deckTitle,
   deckKind,
   fileUrl,
+  pageImageUrls = null,
   slidesDownloadUrl = null,
   transcriptDownloadUrl = null,
   embedUrl,
@@ -749,7 +757,13 @@ export function StudentFollow({
             </span>
           </div>
         )}
-        {deckKind === "pdf" && fileUrl ? (
+        {deckKind === "pdf" && pageImageUrls && pageImageUrls.length > 0 ? (
+          <SlideImageViewer
+            pageUrls={pageImageUrls}
+            page={page}
+            className="w-full"
+          />
+        ) : deckKind === "pdf" && fileUrl ? (
           <SlideViewer fileUrl={fileUrl} page={page} className="w-full" />
         ) : embedUrl ? (
           <iframe

@@ -5,9 +5,12 @@ import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import {
   getSignedDeckDownloadUrl,
+  getSignedDeckPageUrls,
   getSignedDeckUrl,
   getSignedMaterialDownloadUrl,
 } from "@/lib/storage";
+import { deckPagePath, pagesReady } from "@/lib/deckpages";
+import { readRenderedPages } from "@/server/deckrendered";
 import { getCourseDirectory } from "@/lib/coursedirectory";
 import { summarizeFocus, summarizeFocusByEnrollment } from "@/lib/focus";
 import { loadCourseSeats } from "@/server/courseseats";
@@ -182,6 +185,10 @@ export default async function FollowAlongPage({
         )
         .eq("course_id", courseId)
         .order("position_after_page", { ascending: true });
+      const renderedByDeck = await readRenderedPages(
+        supabase,
+        (deckRows ?? []).map((d) => d.id)
+      );
       const questionsByDeck = new Map<string, QuestionItem[]>();
       for (const q of questionRows ?? []) {
         const list = questionsByDeck.get(q.deck_id) ?? [];
@@ -202,6 +209,7 @@ export default async function FollowAlongPage({
         title: d.title,
         kind: d.kind,
         pageCount: d.page_count,
+        renderedPages: renderedByDeck.get(d.id) ?? 0,
         createdAt: d.created_at,
         readingTitle: d.reading_title,
         transcriptTitle: d.transcript_title,
@@ -416,6 +424,7 @@ export default async function FollowAlongPage({
     { data: myPresence },
     { data: openRound },
     openExercise,
+    pageImageUrls,
   ] = await Promise.all([
     supabase
       .from("lecture_note_entries")
@@ -442,6 +451,20 @@ export default async function FollowAlongPage({
       .neq("stage", "closed")
       .maybeSingle(),
     loadOpenExercise(supabase, courseId),
+    // Slides as images (see lib/deckpages): only once the whole deck has
+    // rendered; otherwise the PDF path stands. Signed in one batch and
+    // cached, so the room signs each page once.
+    (async () => {
+      if (deck.kind !== "pdf" || !deck.page_count) return null;
+      const rendered = (await readRenderedPages(supabase, [deck.id])).get(deck.id) ?? 0;
+      if (!pagesReady(rendered, deck.page_count)) return null;
+      return getSignedDeckPageUrls(
+        supabase,
+        Array.from({ length: deck.page_count }, (_, i) =>
+          deckPagePath(courseId, deck.id, i + 1)
+        )
+      );
+    })(),
   ]);
   const myFocus = summarizeFocus(
     myFocusEvents ?? [],
@@ -514,6 +537,7 @@ export default async function FollowAlongPage({
         deckTitle={deck.title}
         deckKind={deck.kind}
         fileUrl={fileUrl}
+        pageImageUrls={pageImageUrls}
         slidesDownloadUrl={slidesDownloadUrl}
         transcriptDownloadUrl={transcriptDownloadUrl}
         embedUrl={deck.embed_url}

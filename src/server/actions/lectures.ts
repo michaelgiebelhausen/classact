@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { DECK_BUCKET } from "@/lib/storage";
+import { DECK_BUCKET, getSignedDeckUrl } from "@/lib/storage";
+import { deckPagePath } from "@/lib/deckpages";
 import { PRESENCE_DISCONNECT_MS } from "@/lib/focus";
 import { broadcastLectureState } from "@/server/lecturebroadcast";
 import type { ActionResult } from "@/server/actions/auth";
@@ -164,6 +165,17 @@ export async function deleteDeck(
   if (deck.storage_path) {
     await supabase.storage.from(DECK_BUCKET).remove([deck.storage_path]);
   }
+  // Rendered slide images, if any (best effort; an orphan costs pennies).
+  {
+    const { data: pages } = await supabase.storage
+      .from(DECK_BUCKET)
+      .list(`${courseId}/${deckId}/pages`, { limit: 5000 });
+    if (pages && pages.length > 0) {
+      await supabase.storage
+        .from(DECK_BUCKET)
+        .remove(pages.map((_, i) => deckPagePath(courseId, deckId, i + 1)));
+    }
+  }
   const { error: deleteError } = await supabase
     .from("lecture_decks")
     .delete()
@@ -171,6 +183,64 @@ export async function deleteDeck(
   if (deleteError) return { ok: false, error: "Couldn't delete the deck." };
   revalidatePath(`/course/${courseId}/follow`);
   return { ok: true };
+}
+
+/**
+ * Professor: record how many pages of a deck have been rendered to images
+ * (see lib/deckrender). Monotonic — a slower report can't roll a faster one
+ * back — and never above the page count.
+ */
+export async function setDeckRenderedPages(
+  courseId: string,
+  deckId: string,
+  rendered: number
+): Promise<ActionResult> {
+  const { supabase, error } = await requireProfessor(courseId);
+  if (error) return { ok: false, error };
+  if (!Number.isInteger(rendered) || rendered < 0 || rendered > 5000) {
+    return { ok: false, error: "Invalid page count." };
+  }
+  const { data: deck } = await supabase
+    .from("lecture_decks")
+    .select("id, page_count, rendered_pages")
+    .eq("id", deckId)
+    .eq("course_id", courseId)
+    .maybeSingle();
+  if (!deck) return { ok: false, error: "Deck not found." };
+  const next = Math.min(
+    Math.max(deck.rendered_pages ?? 0, rendered),
+    deck.page_count ?? rendered
+  );
+  if (next === (deck.rendered_pages ?? 0)) return { ok: true };
+  const { error: updateError } = await supabase
+    .from("lecture_decks")
+    .update({ rendered_pages: next })
+    .eq("id", deckId);
+  if (updateError) return { ok: false, error: "Couldn't save render progress." };
+  revalidatePath(`/course/${courseId}/follow`);
+  return { ok: true };
+}
+
+/**
+ * Professor: a fresh signed URL for a deck's PDF, so an older deck can be
+ * rendered to images from the deck list without re-uploading it.
+ */
+export async function getDeckFileUrl(
+  courseId: string,
+  deckId: string
+): Promise<ActionResult<{ url: string }>> {
+  const { supabase, error } = await requireProfessor(courseId);
+  if (error) return { ok: false, error };
+  const { data: deck } = await supabase
+    .from("lecture_decks")
+    .select("storage_path")
+    .eq("id", deckId)
+    .eq("course_id", courseId)
+    .maybeSingle();
+  if (!deck?.storage_path) return { ok: false, error: "That deck has no PDF." };
+  const url = await getSignedDeckUrl(supabase, deck.storage_path);
+  if (!url) return { ok: false, error: "Couldn't sign the deck." };
+  return { ok: true, data: { url } };
 }
 
 /** Professor: go live with a deck. Reuses a live lecture on the same deck. */

@@ -549,6 +549,8 @@ export type LectureDeckRow = {
   storage_path: string | null
   embed_url: string | null
   page_count: number | null
+  /** 0047 — pages rasterized to images for students (lib/deckpages). */
+  rendered_pages: number
   reading_path: string | null
   reading_title: string | null
   transcript_path: string | null

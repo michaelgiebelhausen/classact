@@ -18,9 +18,12 @@ import { DECK_BUCKET } from "@/lib/storage";
 import {
   createDeck,
   deleteDeck,
+  getDeckFileUrl,
   reorderDecks,
   startLecture,
 } from "@/server/actions/lectures";
+import { renderDeckPages } from "@/lib/deckrender";
+import { pagesReady } from "@/lib/deckpages";
 import {
   DeckQuestions,
   type QuestionItem,
@@ -52,6 +55,8 @@ export interface DeckListItem {
   title: string;
   kind: "pdf" | "google_slides";
   pageCount: number | null;
+  /** Pages rendered to images for students (lib/deckpages). */
+  renderedPages: number;
   createdAt: string;
   readingTitle: string | null;
   transcriptTitle: string | null;
@@ -87,6 +92,56 @@ export function DeckManager({ courseId, decks }: Props) {
   const [uploading, setUploading] = useState(false);
   const [slidesUrl, setSlidesUrl] = useState("");
   const [busyDeck, setBusyDeck] = useState<string | null>(null);
+  // Slides-as-images rendering, per deck: "12/60". Runs in this tab after an
+  // upload (or on demand for an older deck) while everything else stays
+  // usable; students get the images once the whole deck is done.
+  const [rendering, setRendering] = useState<
+    Record<string, { done: number; total: number; failed?: boolean }>
+  >({});
+
+  async function renderForStudents(
+    deckId: string,
+    source: File | string,
+    from: number
+  ) {
+    setRendering((r) => ({ ...r, [deckId]: { done: from, total: 0 } }));
+    try {
+      const rendered = await renderDeckPages({
+        courseId,
+        deckId,
+        source,
+        from,
+        onProgress: (done, total) =>
+          setRendering((r) => ({ ...r, [deckId]: { done, total } })),
+      });
+      setRendering((r) => {
+        const next = { ...r };
+        delete next[deckId];
+        return next;
+      });
+      capture("deck_uploaded", { renderedPages: rendered });
+      router.refresh();
+    } catch (err) {
+      setRendering((r) => ({
+        ...r,
+        [deckId]: { ...(r[deckId] ?? { done: from, total: 0 }), failed: true },
+      }));
+      toast.error(
+        err instanceof Error && err.message
+          ? `Slide images stopped: ${err.message}. Students will get the PDF until you retry.`
+          : "Slide images stopped. Students will get the PDF until you retry."
+      );
+    }
+  }
+
+  async function renderExisting(deck: DeckListItem) {
+    const result = await getDeckFileUrl(courseId, deck.id);
+    if (!result.ok || !result.data) {
+      toast.error(result.ok ? "Couldn't sign the deck." : result.error);
+      return;
+    }
+    await renderForStudents(deck.id, result.data.url, deck.renderedPages);
+  }
 
   // Local order so a drag lands instantly, reconciled during render
   // whenever the server sends a new list (upload, delete, saved reorder).
@@ -190,6 +245,10 @@ export function DeckManager({ courseId, decks }: Props) {
       capture("deck_uploaded", { pageCount });
       toast.success(`"${title}" is ready to present.`);
       router.refresh();
+      // Rasterize for students in the background. The deck is presentable
+      // now; the image path switches on for students when the last page
+      // lands. Deliberately not awaited inside the upload's finally.
+      if (result.data) void renderForStudents(result.data.deckId, file, 0);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -383,6 +442,19 @@ export function DeckManager({ courseId, decks }: Props) {
                           {deck.kind === "pdf"
                             ? `PDF${deck.pageCount ? ` · ${deck.pageCount} slides` : ""}`
                             : "Google Slides (unsynced)"}
+                          {deck.kind === "pdf" && rendering[deck.id] && !rendering[deck.id].failed && (
+                            <span>
+                              {" "}· preparing slides for students{" "}
+                              {rendering[deck.id].total > 0
+                                ? `${rendering[deck.id].done}/${rendering[deck.id].total}`
+                                : "…"}
+                            </span>
+                          )}
+                          {deck.kind === "pdf" &&
+                            !rendering[deck.id] &&
+                            pagesReady(deck.renderedPages, deck.pageCount) && (
+                              <span> · light slides ready for students</span>
+                            )}
                         </p>
                       </div>
                     </div>
@@ -397,6 +469,20 @@ export function DeckManager({ courseId, decks }: Props) {
                         deckId={deck.id}
                         transcriptTitle={deck.transcriptTitle}
                       />
+                      {deck.kind === "pdf" &&
+                        !pagesReady(deck.renderedPages, deck.pageCount) &&
+                        (!rendering[deck.id] || rendering[deck.id].failed) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void renderExisting(deck)}
+                            title="Render each slide to a small image so students load one picture per slide instead of the whole PDF."
+                          >
+                            {rendering[deck.id]?.failed
+                              ? "Retry slide images"
+                              : "Prepare for students"}
+                          </Button>
+                        )}
                       <Button
                         size="sm"
                         onClick={() => void handlePresent(deck.id)}

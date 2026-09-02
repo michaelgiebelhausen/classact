@@ -53,6 +53,44 @@ async function cachedSignedUrl(
   return data.signedUrl
 }
 
+/**
+ * Signed URLs for a deck's rendered pages, in page order (see lib/deckpages).
+ * Batched through one storage call for the misses and cached like the deck
+ * URL, so a 300-seat room signs each page once per 45 minutes.
+ */
+export async function getSignedDeckPageUrls(
+  client: SupabaseClient<Database>,
+  paths: string[]
+): Promise<string[] | null> {
+  if (paths.length === 0) return []
+  const now = Date.now()
+  const out: (string | null)[] = paths.map((path) => {
+    const hit = signedFileCache.get(`${DECK_BUCKET}|${path}|`)
+    return hit && hit.expires > now ? hit.url : null
+  })
+  const misses = paths.filter((_, i) => out[i] === null)
+  if (misses.length > 0) {
+    const { data, error } = await client.storage
+      .from(DECK_BUCKET)
+      .createSignedUrls(misses, SIGNED_URL_TTL_SECONDS)
+    if (error || !data) return null
+    const byPath = new Map<string, string>()
+    for (const item of data) {
+      if (item.path && item.signedUrl) {
+        byPath.set(item.path, item.signedUrl)
+        signedFileCache.set(`${DECK_BUCKET}|${item.path}|`, {
+          url: item.signedUrl,
+          expires: now + SIGNED_FILE_CACHE_TTL_MS,
+        })
+      }
+    }
+    paths.forEach((path, i) => {
+      if (out[i] === null) out[i] = byPath.get(path) ?? null
+    })
+  }
+  return out.every((u): u is string => u !== null) ? (out as string[]) : null
+}
+
 /** Short-lived signed URL for a lecture deck PDF. */
 export async function getSignedDeckUrl(
   client: SupabaseClient<Database>,
