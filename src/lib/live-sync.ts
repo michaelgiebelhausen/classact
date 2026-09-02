@@ -37,13 +37,21 @@ export function onWake(
 
 interface RecoveryClient {
   channel: (name: string) => RealtimeChannel;
+  /** Resolves once the leave completes — the client's channel list is only
+   *  clear of that topic then. */
   removeChannel: (channel: RealtimeChannel) => unknown;
 }
 
 export interface RecoveryOptions {
   client: RecoveryClient;
-  /** Builds a UNIQUE channel topic; `gen` increments on every (re)connect, so a
-   *  rebounce never collides with the still-unsubscribing old channel. */
+  /**
+   * Builds the channel topic. `gen` increments on every (re)connect and may be
+   * folded in for a unique name — or ignored for a FIXED one, which broadcast
+   * requires (sender and receivers must share one exact topic). Either way a
+   * rebounce waits for the old channel's removal to settle before asking for
+   * the next name: the client returns an existing channel for a name it still
+   * holds, and that would be the very channel being torn down.
+   */
   topic: (gen: number) => string;
   /** Attach the site's postgres_changes handlers before the channel subscribes. */
   bind: (channel: RealtimeChannel) => void;
@@ -108,6 +116,12 @@ export function subscribeWithRecovery(opts: RecoveryOptions): () => void {
 
   channel = connect();
 
+  let disposed = false;
+  // Rebounces are serialized: a second wake that lands while the first
+  // removal is still in flight queues behind it rather than racing it for
+  // the same topic.
+  let queue: Promise<unknown> = Promise.resolve();
+
   let lastForeground = 0;
   const stopWake = onWake((source) => {
     // focus + visibilitychange both fire on one foreground return; collapse
@@ -118,15 +132,26 @@ export function subscribeWithRecovery(opts: RecoveryOptions): () => void {
       if (now - lastForeground < 1000) return;
       lastForeground = now;
     }
-    activeGen = -1; // retire the current channel's callback before tearing it down
-    client.removeChannel(channel);
-    channel = connect();
+    queue = queue.then(async () => {
+      if (disposed) return;
+      activeGen = -1; // retire the current channel's callback before tearing it down
+      const old = channel;
+      try {
+        await client.removeChannel(old);
+      } catch {
+        // A failed leave still ends in the client dropping the channel on
+        // close; nothing more to do than carry on and reconnect.
+      }
+      if (disposed) return;
+      channel = connect();
+    });
   });
 
   return () => {
+    disposed = true;
     stopWake();
     activeGen = -1;
     if (pollTimer) clearInterval(pollTimer);
-    client.removeChannel(channel);
+    void client.removeChannel(channel);
   };
 }

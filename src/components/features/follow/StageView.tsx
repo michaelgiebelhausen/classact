@@ -10,7 +10,10 @@ import { closePollRound } from "@/server/actions/polls";
 import { pollOptionText } from "@/lib/participate";
 import { subscribeWithRecovery } from "@/lib/live-sync";
 import {
+  LECTURE_LIVE_EVENT,
   lectureChannelName,
+  lectureLiveTopic,
+  type LectureLiveState,
   type LectureSyncMessage,
   type PollBroadcast,
 } from "@/lib/lecturesync";
@@ -167,11 +170,11 @@ export function StageView({
     });
   }, [lectureId, applyPoll]);
 
-  // Cross-device fallback: follow the lecture row like a student would — with
-  // a 5s poll when realtime is down and an authoritative catch-up on wake. A
-  // projector that slept or lost Wi-Fi missed every advance realtime made in
-  // the gap (postgres_changes never replays), so it must re-read the current
-  // slide on return rather than trust a possibly-zombie socket.
+  // Cross-device fallback: follow the lecture broadcast like a student would
+  // — with a 5s poll when realtime is down and an authoritative catch-up on
+  // wake. A projector that slept or lost Wi-Fi missed every advance made in
+  // the gap (broadcast never replays), so it must re-read the current slide
+  // on return rather than trust a possibly-zombie socket.
   useEffect(() => {
     const supabase = createClient();
     // Bumped on every realtime apply, so a slow catch-up SELECT bows out if a
@@ -206,31 +209,41 @@ export function StageView({
       applyRow(data);
     }
 
-    return subscribeWithRecovery({
+    // Same safety re-read as the student view, for a broadcast that never
+    // arrived. One projector, so the cadence hardly matters; keep it in step.
+    let safety: ReturnType<typeof setTimeout> | null = null;
+    const armSafety = () => {
+      if (safety) clearTimeout(safety);
+      safety = setTimeout(
+        () => {
+          void catchUp();
+          armSafety();
+        },
+        60_000 + Math.floor(Math.random() * 30_000)
+      );
+    };
+    armSafety();
+
+    const stop = subscribeWithRecovery({
       client: supabase,
-      topic: (g) => `stage:${lectureId}:${g}`,
+      topic: () => lectureLiveTopic(lectureId),
       bind: (channel) =>
         channel.on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "lectures",
-            filter: `id=eq.${lectureId}`,
-          },
-          (payload) => {
+          "broadcast",
+          { event: LECTURE_LIVE_EVENT },
+          ({ payload }: { payload: LectureLiveState }) => {
+            if (typeof payload?.current_page !== "number") return;
             realtimeSeq++;
-            applyRow(
-              payload.new as {
-                current_page: number;
-                ended_at: string | null;
-                pauses?: Array<{ start: string; end: string | null }> | null;
-              }
-            );
+            applyRow(payload);
+            armSafety();
           }
         ),
       catchUp,
     });
+    return () => {
+      if (safety) clearTimeout(safety);
+      stop();
+    };
   }, [lectureId]);
 
   // The professor may click through with this window focused too.

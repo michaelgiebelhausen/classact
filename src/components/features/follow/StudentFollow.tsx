@@ -36,6 +36,11 @@ import { submitPollAnswer } from "@/server/actions/polls";
 import { pollOptionText } from "@/lib/participate";
 import { subscribeWithRecovery } from "@/lib/live-sync";
 import {
+  LECTURE_LIVE_EVENT,
+  lectureLiveTopic,
+  type LectureLiveState,
+} from "@/lib/lecturesync";
+import {
   effectiveAwayMs,
   formatAwayDuration,
   isLecturePaused,
@@ -160,9 +165,11 @@ export function StudentFollow({
   // during render).
   const lastBeatRef = useRef(0);
 
-  // ---- Slide sync: realtime on the lecture row, resilient to sleep/wake ----
+  // ---- Slide sync: realtime broadcast, resilient to sleep/wake ----
+  // The professor's server actions broadcast the lecture state (see
+  // lectureLiveTopic for why that replaced postgres_changes on the row).
   // subscribeWithRecovery owns the hard part: catch up on every (re)subscribe,
-  // fall back to polling while down, and rebounce onto a fresh channel when the
+  // fall back to polling while down, and rebounce onto the channel when the
   // tab returns to the foreground or the network — so a laptop that slept, shut,
   // or dropped Wi-Fi resumes tracking instead of freezing on the last slide.
   useEffect(() => {
@@ -195,32 +202,43 @@ export function StudentFollow({
       applyRow(data);
     }
 
-    return subscribeWithRecovery({
+    // Safety net for a broadcast that never arrived (the send is one HTTP
+    // call with no redelivery): a slow, jittered authoritative re-read. At
+    // 300 students that's a few primary-key reads a second, spread out.
+    let safety: ReturnType<typeof setTimeout> | null = null;
+    const armSafety = () => {
+      if (safety) clearTimeout(safety);
+      safety = setTimeout(
+        () => {
+          void catchUp();
+          armSafety();
+        },
+        60_000 + Math.floor(Math.random() * 30_000)
+      );
+    };
+    armSafety();
+
+    const stop = subscribeWithRecovery({
       client: supabase,
-      topic: (g) => `lecture:${lectureId}:${g}`,
+      topic: () => lectureLiveTopic(lectureId),
       bind: (channel) =>
         channel.on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "lectures",
-            filter: `id=eq.${lectureId}`,
-          },
-          (payload) => {
+          "broadcast",
+          { event: LECTURE_LIVE_EVENT },
+          ({ payload }: { payload: LectureLiveState }) => {
+            if (typeof payload?.current_page !== "number") return;
             realtimeSeq++;
-            applyRow(
-              payload.new as {
-                current_page: number;
-                ended_at: string | null;
-                pauses?: PauseInterval[] | null;
-              }
-            );
+            applyRow(payload);
+            armSafety();
           }
         ),
       catchUp,
       onStatus: setLive,
     });
+    return () => {
+      if (safety) clearTimeout(safety);
+      stop();
+    };
   }, [lectureId, router, applyPauses]);
 
   // ---- Poll sync: rounds pop in / advance stages, pairs arrive ----

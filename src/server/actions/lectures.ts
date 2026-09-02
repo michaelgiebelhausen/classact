@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { DECK_BUCKET } from "@/lib/storage";
 import { PRESENCE_DISCONNECT_MS } from "@/lib/focus";
+import { broadcastLectureState } from "@/server/lecturebroadcast";
 import type { ActionResult } from "@/server/actions/auth";
 import type { LecturePause } from "@/types/db";
 
@@ -220,13 +221,19 @@ export async function setLecturePage(
   if (!Number.isInteger(page) || page < 1 || page > 2000) {
     return { ok: false, error: "Invalid page." };
   }
-  const { error: updateError } = await supabase
+  // Returning the row from the same write is what the broadcast carries:
+  // followers apply the whole state, so a page message must not arrive with
+  // stale pauses and wipe an open pause off every student's screen.
+  const { data: row, error: updateError } = await supabase
     .from("lectures")
     .update({ current_page: page })
     .eq("id", lectureId)
     .eq("course_id", courseId)
-    .is("ended_at", null);
+    .is("ended_at", null)
+    .select("current_page, ended_at, pauses")
+    .maybeSingle();
   if (updateError) return { ok: false, error: "Couldn't change the slide." };
+  if (row) await broadcastLectureState(lectureId, row);
   return { ok: true };
 }
 
@@ -278,18 +285,21 @@ async function setPauseState(
           ...pauses.slice(0, -1),
           { ...pauses[pauses.length - 1], end: new Date().toISOString() },
         ];
-  const { error: updateError } = await supabase
+  const { data: row, error: updateError } = await supabase
     .from("lectures")
     .update({ pauses: next })
     .eq("id", lectureId)
     .eq("course_id", courseId)
-    .is("ended_at", null);
+    .is("ended_at", null)
+    .select("current_page, ended_at, pauses")
+    .maybeSingle();
   if (updateError) {
     return {
       ok: false,
       error: action === "pause" ? "Couldn't pause." : "Couldn't resume.",
     };
   }
+  if (row) await broadcastLectureState(lectureId, row);
   return { ok: true, data: { pauses: next } };
 }
 
@@ -312,12 +322,15 @@ export async function endLecture(
     pauses.length > 0 && pauses[pauses.length - 1].end === null
       ? [...pauses.slice(0, -1), { ...pauses[pauses.length - 1], end: now }]
       : pauses;
-  const { error: updateError } = await supabase
+  const { data: row, error: updateError } = await supabase
     .from("lectures")
     .update({ ended_at: now, pauses: closed })
     .eq("id", lectureId)
-    .eq("course_id", courseId);
+    .eq("course_id", courseId)
+    .select("current_page, ended_at, pauses")
+    .maybeSingle();
   if (updateError) return { ok: false, error: "Couldn't end the lecture." };
+  if (row) await broadcastLectureState(lectureId, row);
   revalidatePath(`/course/${courseId}/follow`);
   return { ok: true };
 }
