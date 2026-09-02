@@ -69,3 +69,38 @@ describe("reconcileOccupants", () => {
     expect(next.get("s1")?.verified).toBe(true);
   });
 });
+
+describe("applyCheckInBroadcast", () => {
+  it("upserts rows and evicts deleted ids in one step", async () => {
+    const { applyCheckInBroadcast } = await import("@/lib/checkinpoll");
+    const prev = new Map([
+      ["s1", rowToOccupant(row("c1", "e1", "s1"))],
+      ["s2", rowToOccupant(row("c2", "e2", "s2"))],
+    ]);
+    const next = applyCheckInBroadcast(prev, {
+      upsert: [row("c3", "e3", "s3", { verified: true })],
+      delete: ["c2"],
+    });
+    expect(next).not.toBe(prev);
+    expect([...next.keys()].sort()).toEqual(["s1", "s3"]);
+    expect(next.get("s3")?.verified).toBe(true);
+  });
+
+  it("moves a student to a new seat without leaving them in the old one", async () => {
+    const { applyCheckInBroadcast } = await import("@/lib/checkinpoll");
+    const prev = new Map([["s1", rowToOccupant(row("c1", "e1", "s1"))]]);
+    const next = applyCheckInBroadcast(prev, {
+      upsert: [row("c1", "e1", "s7")],
+      delete: [],
+    });
+    expect([...next.keys()]).toEqual(["s7"]);
+  });
+
+  it("returns the same map when the payload changes nothing", async () => {
+    const { applyCheckInBroadcast } = await import("@/lib/checkinpoll");
+    const prev = new Map([["s1", rowToOccupant(row("c1", "e1", "s1"))]]);
+    expect(
+      applyCheckInBroadcast(prev, { upsert: [row("c1", "e1", "s1")], delete: ["zzz"] })
+    ).toBe(prev);
+  });
+});

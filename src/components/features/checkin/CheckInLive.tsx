@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/browser";
@@ -21,7 +21,16 @@ import { RoomMap } from "@/components/features/rooms/RoomMap";
 import { NeighborPrompts, type NeighborPromptRow } from "@/components/features/checkin/NeighborPrompts";
 import { SeatActionCard } from "@/components/features/checkin/SeatActionCard";
 import { deriveSeatRing, type SeatRing } from "@/lib/seatrings";
-import { reconcileOccupants } from "@/lib/checkinpoll";
+import {
+  applyCheckInBroadcast,
+  reconcileOccupants,
+} from "@/lib/checkinpoll";
+import { subscribeWithRecovery } from "@/lib/live-sync";
+import {
+  CHECKINS_LIVE_EVENT,
+  checkInsLiveTopic,
+  type CheckInChange,
+} from "@/lib/checkinsync";
 import { stablePhotoUrl } from "@/lib/photopin";
 import type { TableFootprint } from "@/lib/roomlayout";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
@@ -165,36 +174,6 @@ export function CheckInLive({
     ? seats.find((s) => s.id === myCheckIn.seatId) ?? null
     : null;
 
-  const applyChange = useCallback((row: OccupantInfo) => {
-    setOccupants((prev) => {
-      const next = new Map(prev);
-      // A move arrives as an UPDATE keyed by the NEW seat; without evicting
-      // the old entry the same student renders in two seats on everyone
-      // else's map until a full refresh.
-      for (const [seatId, occ] of next) {
-        if (occ.enrollmentId === row.enrollmentId && seatId !== row.seatId) {
-          next.delete(seatId);
-        }
-      }
-      next.set(row.seatId, row);
-      return next;
-    });
-  }, []);
-
-  // DELETE payloads carry only the primary key (replica identity default),
-  // so eviction is by check-in id, not seat.
-  const evictById = useCallback((checkInId: string) => {
-    setOccupants((prev) => {
-      for (const [seatId, occ] of prev) {
-        if (occ.id === checkInId) {
-          const next = new Map(prev);
-          next.delete(seatId);
-          return next;
-        }
-      }
-      return prev;
-    });
-  }, []);
 
   // Waiting room: with a schedule set, re-check every ~30s so the map
   // appears on its own the moment auto-open fires — no manual reload.
@@ -236,13 +215,17 @@ export function CheckInLive({
     };
   }, [sessionId, scheduleHint, courseId, router]);
 
-  // Realtime subscription with 5s polling fallback (FR-010).
+  // Live seat map: Realtime BROADCAST from the check-in actions (see
+  // checkInsLiveTopic for why that replaced postgres_changes), with a scoped
+  // poll while the channel is down and an authoritative re-read on every
+  // (re)subscribe and wake — the same recovery the slide feed has, so a
+  // laptop that slept through arrival catches up instead of showing a room
+  // frozen at 9:28.
   useEffect(() => {
     if (!sessionId) return;
     const supabase = createClient();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
     // When this client dropped off realtime, so the report on the way back up
-    // can say how long it spent hammering the fallback.
+    // can say how long it spent on the fallback.
     let degradedSince: number | null = null;
 
     // Fire-and-forget: a failed report must never disturb check-in, and must
@@ -259,9 +242,21 @@ export function CheckInLive({
       }).catch(() => {});
     };
 
-    // Authoritative read for the degraded path. A row for someone the
-    // directory doesn't know (activated after this page loaded) still needs
-    // the one-time refresh below to learn their name and face.
+    // Someone we don't have in the directory (activated after this page
+    // loaded) needs one refresh to learn their name and face.
+    const noteUnknown = (enrollmentIds: string[]) => {
+      if (unknownEnrollment.current) return;
+      if (enrollmentIds.some((id) => !directory[id])) {
+        unknownEnrollment.current = true;
+        router.refresh();
+      }
+    };
+
+    // Authoritative read: one scoped SELECT of this session's check_ins,
+    // reconciled into the map. This used to be `router.refresh()` — a full
+    // render of the page (a dozen queries plus the roster directory) from
+    // every laptop that lost realtime, every few seconds, which is what froze
+    // the room on 2026-09-01.
     async function pollCheckIns() {
       const { data } = await supabase
         .from("check_ins")
@@ -271,100 +266,63 @@ export function CheckInLive({
         .eq("session_id", sessionId!);
       if (!data) return;
       setOccupants((prev) => reconcileOccupants(prev, data) as typeof prev);
-      if (
-        !unknownEnrollment.current &&
-        data.some((r) => !directory[r.enrollment_id])
-      ) {
-        unknownEnrollment.current = true;
-        router.refresh();
-      }
+      noteUnknown(data.map((r) => r.enrollment_id));
     }
 
-    const channel = supabase
-      .channel(`session:${sessionId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "check_ins",
-          filter: `session_id=eq.${sessionId}`,
+    // Safety net for a broadcast that never arrived, and for the rare
+    // check-in writers outside the check-in actions. Jittered; at 300 seats
+    // that's a few small reads a second, spread out.
+    let safety: ReturnType<typeof setTimeout> | null = null;
+    const armSafety = () => {
+      if (safety) clearTimeout(safety);
+      safety = setTimeout(
+        () => {
+          void pollCheckIns();
+          armSafety();
         },
-        (payload) => {
-          const rec = payload.new as {
-            id: string;
-            enrollment_id: string;
-            seat_id: string;
-            verified: boolean;
-            denied_count?: number;
-            professor_confirmed_at?: string | null;
-          };
-          if (!rec?.seat_id) return;
-          applyChange({
-            id: rec.id,
-            enrollmentId: rec.enrollment_id,
-            seatId: rec.seat_id,
-            verified: rec.verified,
-            deniedCount: rec.denied_count ?? 0,
-            professorConfirmed: rec.professor_confirmed_at != null,
-          });
-          // Someone we don't have in the directory (activated after load).
-          if (!directory[rec.enrollment_id] && !unknownEnrollment.current) {
-            unknownEnrollment.current = true;
-            router.refresh();
+        60_000 + Math.floor(Math.random() * 30_000)
+      );
+    };
+    armSafety();
+
+    const stop = subscribeWithRecovery({
+      client: supabase,
+      topic: () => checkInsLiveTopic(sessionId!),
+      bind: (channel) =>
+        channel.on(
+          "broadcast",
+          { event: CHECKINS_LIVE_EVENT },
+          ({ payload }: { payload: CheckInChange }) => {
+            if (!payload || !Array.isArray(payload.upsert)) return;
+            setOccupants(
+              (prev) => applyCheckInBroadcast(prev, payload) as typeof prev
+            );
+            noteUnknown(payload.upsert.map((r) => r.enrollment_id));
+            armSafety();
           }
-        }
-      )
-      // DELETEs are subscribed separately and UNFILTERED: with replica
-      // identity default the old row is just { id }, which has no session_id
-      // for the filter to match — a filtered channel may never deliver them.
-      // Eviction is id-keyed, so deletes from other sessions no-op harmlessly.
-      // This is what clears a freed seat (releaseSeat) and the vanishing half
-      // of a professor's swap on everyone else's map.
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "check_ins" },
-        (payload) => {
-          const oldId = (payload.old as { id?: string } | null)?.id;
-          if (oldId) evictById(oldId);
-        }
-      )
-      .subscribe((status) => {
-        const ok = status === "SUBSCRIBED";
+        ),
+      catchUp: pollCheckIns,
+      // Jittered per tab (6–12s) so a room that dropped together doesn't
+      // poll together. The cost is a map up to twelve seconds stale while
+      // realtime is down, which is the state where it is already degraded.
+      pollMs: 6000 + Math.floor(Math.random() * 6000),
+      onStatus: (ok) => {
         setLive(ok);
-        if (!ok && !pollTimer) {
-          // The fallback WAS what froze the room. Every client that lost
-          // realtime started refreshing the WHOLE page — about eleven
-          // queries plus the roster directory, and in Next a refresh also
-          // re-prefetches every sidebar route — and forty phones dropping
-          // together at 9:29 hammered in lockstep against the same database
-          // realtime was already struggling with.
-          //
-          // Now it's one scoped SELECT of this session's check_ins,
-          // reconciled into the map. Still jittered (6–12s) so a room that
-          // dropped together doesn't poll together. The cost is a map up to
-          // twelve seconds stale while realtime is down, which is the state
-          // where it is already degraded.
-          const period = 6000 + Math.floor(Math.random() * 6000);
-          pollTimer = setInterval(() => void pollCheckIns(), period);
+        if (!ok && degradedSince === null) {
           degradedSince = Date.now();
-          report("down", { reason: status });
-        }
-        if (ok && pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-          report("up", {
-            degradedMs: degradedSince ? Date.now() - degradedSince : 0,
-          });
+          report("down", { reason: "not_subscribed" });
+        } else if (ok && degradedSince !== null) {
+          report("up", { degradedMs: Date.now() - degradedSince });
           degradedSince = null;
         }
-      });
+      },
+    });
 
     return () => {
-      if (pollTimer) clearInterval(pollTimer);
-      supabase.removeChannel(channel);
+      if (safety) clearTimeout(safety);
+      stop();
     };
-  }, [sessionId, applyChange, evictById, directory, router]);
+  }, [sessionId, directory, router]);
 
   /**
    * Tap an open seat: check in, or — if already checked in — move there.

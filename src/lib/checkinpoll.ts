@@ -74,3 +74,40 @@ export function reconcileOccupants<T extends OccupantLike>(
   }
   return changed ? next : prev;
 }
+
+/**
+ * Apply one broadcast change (see lib/checkinsync): upsert the rows the
+ * server read back, evict the ids it deleted. A moved student leaves their
+ * old seat. Returns `prev` itself when nothing differs.
+ */
+export function applyCheckInBroadcast<T extends OccupantLike>(
+  prev: Map<string, T>,
+  change: { upsert: CheckInRow[]; delete: string[] }
+): Map<string, T | OccupantLike> {
+  const next = new Map<string, T | OccupantLike>(prev);
+  let changed = false;
+  if (change.delete.length > 0) {
+    const gone = new Set(change.delete);
+    for (const [seatId, occ] of next) {
+      if (gone.has(occ.id)) {
+        next.delete(seatId);
+        changed = true;
+      }
+    }
+  }
+  for (const row of change.upsert) {
+    const occ = rowToOccupant(row);
+    for (const [seatId, existing] of next) {
+      if (existing.enrollmentId === occ.enrollmentId && seatId !== occ.seatId) {
+        next.delete(seatId);
+        changed = true;
+      }
+    }
+    const existing = next.get(occ.seatId);
+    if (!existing || !sameOccupant(existing, occ)) {
+      next.set(occ.seatId, occ);
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}

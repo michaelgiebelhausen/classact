@@ -27,6 +27,11 @@ import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/browser";
+import {
+  CHECKINS_LIVE_EVENT,
+  checkInsLiveTopic,
+  type CheckInChange,
+} from "@/lib/checkinsync";
 import { verifyNeighbor } from "@/server/actions/checkin";
 import { capture } from "@/lib/analytics";
 import {
@@ -224,36 +229,25 @@ export function NeighborArrivalListener({
       }
     };
 
+    // The same broadcast the seat map follows (see checkInsLiveTopic): the
+    // check-in actions publish each change after it lands, so arrivals reach
+    // this listener without a per-subscriber policy check in the database.
     const channel = supabase
-      .channel(`arrivals:${sessionId}`)
+      .channel(checkInsLiveTopic(sessionId))
       .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "check_ins",
-          filter: `session_id=eq.${sessionId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            id: string;
-            enrollment_id: string;
-            seat_id: string;
-          } | null;
-          if (!rec?.seat_id) return;
-          handleRow({
-            id: rec.id,
-            enrollmentId: rec.enrollment_id,
-            seatId: rec.seat_id,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "check_ins" },
-        (payload) => {
-          const oldId = (payload.old as { id?: string } | null)?.id;
-          if (oldId) evictById(oldId);
+        "broadcast",
+        { event: CHECKINS_LIVE_EVENT },
+        ({ payload }: { payload: CheckInChange }) => {
+          if (!payload || !Array.isArray(payload.upsert)) return;
+          for (const id of payload.delete ?? []) evictById(id);
+          for (const rec of payload.upsert) {
+            if (!rec?.seat_id) continue;
+            handleRow({
+              id: rec.id,
+              enrollmentId: rec.enrollment_id,
+              seatId: rec.seat_id,
+            });
+          }
         }
       )
       .subscribe((status) => {

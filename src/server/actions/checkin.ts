@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/server/actions/auth";
 import { flagAbsencesElsewhere } from "@/server/absences";
+import {
+  broadcastCheckInChange,
+  readCheckInRows,
+} from "@/server/checkinbroadcast";
 import { timed } from "@/server/loadmetrics";
 import { canReleaseSeat } from "@/lib/seatrelease";
 import { rosterDisplayName } from "@/lib/names";
@@ -210,6 +214,7 @@ async function runCheckIn(
   // Showed up here today? Then any absence they reported for today in
   // another ClassAct class gets flagged for that professor. Best-effort.
   await flagAbsencesElsewhere(user.id, session.course_id, session.session_date);
+  await broadcastCheckInChange(sessionId, { enrollmentIds: [enrollment.id] });
 
   return { ok: true, data: { checkInId: created.id, isNewSeat } };
 }
@@ -309,6 +314,10 @@ export async function verifyNeighbor(
   if (error) {
     return { ok: false, error: "Couldn't confirm — try again." };
   }
+  // The 0036 trigger just flipped their check-in; ship the row as it stands.
+  await broadcastCheckInChange(sessionId, {
+    enrollmentIds: [subjectEnrollmentId],
+  });
   return { ok: true, data: { firstEverMet } };
 }
 
@@ -402,6 +411,9 @@ export async function denyNeighbor(
     }
     return { ok: false, error: "Couldn't send that report — try again." };
   }
+  await broadcastCheckInChange(sessionId, {
+    enrollmentIds: [subjectEnrollmentId],
+  });
   return { ok: true };
 }
 
@@ -505,6 +517,9 @@ export async function moveSeat(
     return { ok: false, error: "Couldn't move you. Try again." };
   }
 
+  await broadcastCheckInChange(sessionId, {
+    enrollmentIds: [enrollment!.id],
+  });
   revalidatePath(`/course/${session!.course_id}/checkin`);
   return { ok: true, data: { isNewSeat } };
 }
@@ -544,6 +559,18 @@ export async function reassignSeat(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in first." };
 
+  // Whoever is in the target seat now may be swapped out or deleted by the
+  // RPC. Snapshot the rows it can touch so the broadcast can name the ids
+  // that vanish; the swap's survivors are re-read after it commits.
+  const { data: before } = await supabase
+    .from("check_ins")
+    .select("id, enrollment_id")
+    .eq("session_id", sessionId)
+    .or(`enrollment_id.eq.${enrollmentId},seat_id.eq.${seatId}`);
+  const touched = Array.from(
+    new Set([enrollmentId, ...(before ?? []).map((r) => r.enrollment_id)])
+  );
+
   const { error } = await supabase.rpc("reassign_seat", {
     p_session: sessionId,
     p_enrollment: enrollmentId,
@@ -566,6 +593,14 @@ export async function reassignSeat(
     return { ok: false, error: "Couldn't move that student. Try again." };
   }
 
+  const after = await readCheckInRows(sessionId, touched);
+  const survivors = new Set(after.map((r) => r.id));
+  await broadcastCheckInChange(sessionId, {
+    enrollmentIds: touched,
+    deletedIds: (before ?? [])
+      .map((r) => r.id)
+      .filter((id) => !survivors.has(id)),
+  });
   return { ok: true };
 }
 
@@ -622,6 +657,7 @@ export async function professorConfirmAttendance(
     return { ok: false, error: "Couldn't confirm that student. Try again." };
   }
 
+  await broadcastCheckInChange(sessionId, { enrollmentIds: [enrollmentId] });
   return { ok: true };
 }
 
@@ -685,6 +721,7 @@ export async function releaseSeat(
     .delete()
     .eq("id", occupant!.id);
   if (error) return { ok: false, error: "Couldn't free that seat. Try again." };
+  await broadcastCheckInChange(sessionId, { deletedIds: [occupant!.id] });
 
   const { data: enrollment } = await supabase
     .from("enrollments")
