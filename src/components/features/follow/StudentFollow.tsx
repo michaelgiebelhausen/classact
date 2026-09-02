@@ -36,9 +36,11 @@ import { submitPollAnswer } from "@/server/actions/polls";
 import { pollOptionText } from "@/lib/participate";
 import { subscribeWithRecovery } from "@/lib/live-sync";
 import {
+  LECTURE_EXERCISE_EVENT,
   LECTURE_LIVE_EVENT,
   LECTURE_POLL_EVENT,
   lectureLiveTopic,
+  type LectureExerciseState,
   type LectureLiveState,
   type LecturePollState,
 } from "@/lib/lecturesync";
@@ -328,6 +330,18 @@ export function StudentFollow({
       }
     }
 
+    // Group exercise: is one open? Read on (re)subscribe and wake; the
+    // broadcast carries start/close in between.
+    async function exerciseCatchUp() {
+      const { data } = await supabase
+        .from("exercise_rounds")
+        .select("prompt")
+        .eq("course_id", courseId)
+        .eq("stage", "open")
+        .maybeSingle();
+      setExercisePrompt(data?.prompt ?? null);
+    }
+
     // Safety net for a broadcast that never arrived (the send is one HTTP
     // call with no redelivery): a slow, jittered authoritative re-read. At
     // 300 students that's a few primary-key reads a second, spread out.
@@ -365,47 +379,31 @@ export function StudentFollow({
             ({ payload }: { payload: LecturePollState }) => {
               applyPollState(payload);
             }
+          )
+          .on(
+            "broadcast",
+            { event: LECTURE_EXERCISE_EVENT },
+            ({ payload }: { payload: LectureExerciseState }) => {
+              if (!payload || !("prompt" in payload)) return;
+              setExercisePrompt(payload.prompt ?? null);
+            }
           ),
       // One authoritative read for slides and one for the poll, on every
       // (re)subscribe and wake. The poll read still looks up partners; that
       // is the only time a student queries poll_pairs now.
-      catchUp: () => Promise.all([catchUp(), pollRound()]).then(() => undefined),
+      catchUp: () =>
+        Promise.all([catchUp(), pollRound(), exerciseCatchUp()]).then(
+          () => undefined
+        ),
       onStatus: setLive,
     });
     return () => {
       if (safety) clearTimeout(safety);
       stop();
     };
-  }, [lectureId, enrollmentId, router, applyPauses]);
+  }, [lectureId, courseId, enrollmentId, router, applyPauses]);
 
 
-  // ---- Group exercise: appear/disappear as the professor starts and ends one ----
-  useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase
-      .channel(`exercises:${courseId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "exercise_rounds",
-          filter: `course_id=eq.${courseId}`,
-        },
-        (payload) => {
-          const rec = payload.new as {
-            prompt?: string;
-            stage?: string;
-          } | null;
-          if (!rec) return;
-          setExercisePrompt(rec.stage === "open" ? (rec.prompt ?? null) : null);
-        }
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [courseId]);
 
   async function vote(choice: number) {
     if (!round || voting) return;

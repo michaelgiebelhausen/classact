@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { assignGroups, type GroupingParticipant } from "@/lib/participate";
 import type { ActionResult } from "@/server/actions/auth";
+import { broadcastExerciseState } from "@/server/lecturebroadcast";
 
 /**
  * Small-group exercises (one-minute papers). The professor poses a prompt and
@@ -150,6 +151,7 @@ export async function startExercise(input: {
   }
 
   revalidatePath(`/course/${input.courseId}/participate`);
+  await broadcastExerciseState(input.courseId);
   return { ok: true, data: { roundId: round.id, groupCount: grouped.length } };
 }
 
@@ -218,6 +220,7 @@ export async function closeExercise(
     .eq("id", roundId)
     .eq("course_id", courseId);
   if (updateError) return { ok: false, error: "Couldn't close the exercise." };
+  await broadcastExerciseState(courseId);
   revalidatePath(`/course/${courseId}/participate`);
   return { ok: true };
 }

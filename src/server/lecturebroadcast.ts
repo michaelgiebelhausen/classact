@@ -1,9 +1,11 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  LECTURE_EXERCISE_EVENT,
   LECTURE_LIVE_EVENT,
   LECTURE_POLL_EVENT,
   lectureLiveTopic,
+  type LectureExerciseState,
   type LectureLiveState,
   type LecturePollState,
 } from "@/lib/lecturesync";
@@ -77,6 +79,45 @@ export async function broadcastPollState(roundId: string): Promise<boolean> {
  * surfacing "couldn't notify students" as an error would make them retry a
  * write that doesn't need retrying.
  */
+/**
+ * Tell the course's live lecture (if any) whether a group exercise is open.
+ * Exercises are course-scoped, so the lecture is looked up; with no lecture
+ * live there is nobody on the topic and nothing is sent.
+ */
+export async function broadcastExerciseState(courseId: string): Promise<boolean> {
+  const admin = createAdminClient();
+  const [{ data: lecture }, { data: open }] = await Promise.all([
+    admin
+      .from("lectures")
+      .select("id")
+      .eq("course_id", courseId)
+      .is("ended_at", null)
+      .maybeSingle(),
+    admin
+      .from("exercise_rounds")
+      .select("prompt")
+      .eq("course_id", courseId)
+      .eq("stage", "open")
+      .maybeSingle(),
+  ]);
+  if (!lecture) return true;
+  const state: LectureExerciseState = { prompt: open?.prompt ?? null };
+  const channel = admin.channel(lectureLiveTopic(lecture.id));
+  try {
+    await channel.httpSend(LECTURE_EXERCISE_EVENT, state, { timeout: 4000 });
+    return true;
+  } catch (err) {
+    console.warn(
+      "[exercise-broadcast]",
+      JSON.stringify({
+        courseId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+    return false;
+  }
+}
+
 export async function broadcastLectureState(
   lectureId: string,
   state: LectureLiveState

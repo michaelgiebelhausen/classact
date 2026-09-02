@@ -75,6 +75,19 @@ export interface LecturePollRound {
   correct_indices: number[] | null;
 }
 
+/**
+ * Group-exercise start/close on the lecture topic. Students used to hold a
+ * postgres_changes subscription on exercise_rounds filtered by course — one
+ * RLS evaluation per subscriber per change, for a card that only needs to
+ * know "is one open, and what's the prompt."
+ */
+export const LECTURE_EXERCISE_EVENT = "exercise";
+
+export interface LectureExerciseState {
+  /** The open exercise's prompt, or null when none is open. */
+  prompt: string | null;
+}
+
 export interface LecturePollState {
   /** The round as it stands; stage "closed" tells followers to clear it. */
   round: LecturePollRound;
