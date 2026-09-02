@@ -1,10 +1,13 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { MonitorPlay } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
 import { getProfile } from "@/lib/auth";
 import { getCourseDirectory } from "@/lib/coursedirectory";
 import { summarizeParticipation } from "@/lib/participate";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -261,6 +264,19 @@ export default async function ParticipatePage({
     );
   }
 
+  /*
+    A student sent here mid-lecture by the "Join your group" card has no way
+    back to the slides but the icon rail, so the exercise doubled as an exit
+    from the lecture. If there's a lecture running, say so and offer the door.
+  */
+  const { data: liveLecture } = await supabase
+    .from("lectures")
+    .select("id")
+    .eq("course_id", courseId)
+    .is("ended_at", null)
+    .maybeSingle();
+  const lectureLive = Boolean(liveLecture);
+
   const exercise = await loadOpenExercise(supabase, courseId);
   let myGroup: MyExerciseGroup | null = null;
   let openButUngrouped = false;
@@ -285,12 +301,24 @@ export default async function ParticipatePage({
 
   return (
     <div className="grid gap-6">
-      {header}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {header}
+        {lectureLive && (
+          <Button asChild size="sm">
+            <Link href={`/course/${courseId}/follow`}>
+              <MonitorPlay className="size-4" />
+              Back to the lecture
+            </Link>
+          </Button>
+        )}
+      </div>
       {exercise && (
         <ExerciseStudent
           courseId={courseId}
+          roundId={exercise.roundId}
           group={myGroup}
           openButUngrouped={openButUngrouped}
+          lectureLive={lectureLive}
         />
       )}
       <Card>

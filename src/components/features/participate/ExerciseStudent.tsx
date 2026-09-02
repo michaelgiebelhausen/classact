@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PencilLine, Users } from "lucide-react";
+import Link from "next/link";
+import { MonitorPlay, PencilLine, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -22,10 +24,14 @@ export interface MyExerciseGroup {
 
 interface Props {
   courseId: string;
+  /** The open round, watched so the card can tell when the professor ends it. */
+  roundId: string;
   /** The caller's group for the open round, or null if they weren't grouped. */
   group: MyExerciseGroup | null;
   /** True when an exercise is open but the student has no group (didn't check in). */
   openButUngrouped: boolean;
+  /** True while a lecture is running, so "back to the lecture" leads somewhere. */
+  lectureLive: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 700;
@@ -36,9 +42,16 @@ const SAVE_DEBOUNCE_MS = 700;
  * syncs to teammates via realtime (their edits land only while you're not
  * actively typing, so nobody clobbers your sentence mid-word).
  */
-export function ExerciseStudent({ courseId, group, openButUngrouped }: Props) {
+export function ExerciseStudent({
+  courseId,
+  roundId,
+  group,
+  openButUngrouped,
+  lectureLive,
+}: Props) {
   const [content, setContent] = useState(group?.response ?? "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [closed, setClosed] = useState(false);
   const focusedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const groupId = group?.groupId ?? null;
@@ -78,14 +91,57 @@ export function ExerciseStudent({ courseId, group, openButUngrouped }: Props) {
     };
   }, [groupId]);
 
+  /*
+    The professor ending the round is the student's cue to go back. Without
+    this the card sat there looking live, and every keystroke after it saved
+    into a rejection nobody surfaced.
+  */
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`exercise-round-${roundId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "exercise_rounds",
+          filter: `id=eq.${roundId}`,
+        },
+        (payload) => {
+          if ((payload.new as { stage?: string })?.stage !== "open") {
+            if (timerRef.current) clearTimeout(timerRef.current);
+            setStatus("idle");
+            setClosed(true);
+          }
+        }
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [roundId]);
+
   function onChange(text: string) {
+    if (closed) return;
     setContent(text);
     setStatus("idle");
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => void save(text), SAVE_DEBOUNCE_MS);
   }
 
+  const backToLecture = lectureLive ? (
+    <Button asChild size="sm">
+      <Link href={`/course/${courseId}/follow`}>
+        <MonitorPlay className="size-4" />
+        Back to the lecture
+      </Link>
+    </Button>
+  ) : null;
+
+  // Once it's over there is nothing here for someone who was never grouped.
   if (openButUngrouped) {
+    if (closed) return null;
     return (
       <Card>
         <CardHeader>
@@ -96,6 +152,7 @@ export function ExerciseStudent({ courseId, group, openButUngrouped }: Props) {
             to re-run it, or join a nearby group in the room.
           </CardDescription>
         </CardHeader>
+        {backToLecture && <CardContent>{backToLecture}</CardContent>}
       </Card>
     );
   }
@@ -114,11 +171,13 @@ export function ExerciseStudent({ courseId, group, openButUngrouped }: Props) {
             </CardDescription>
           </div>
           <span className="text-xs text-muted-foreground">
-            {status === "saving"
-              ? "Saving…"
-              : status === "saved"
-                ? "Saved"
-                : ""}
+            {closed
+              ? "Closed"
+              : status === "saving"
+                ? "Saving…"
+                : status === "saved"
+                  ? "Saved"
+                  : ""}
           </span>
         </div>
       </CardHeader>
@@ -129,6 +188,7 @@ export function ExerciseStudent({ courseId, group, openButUngrouped }: Props) {
         </p>
         <textarea
           value={content}
+          readOnly={closed}
           onChange={(e) => onChange(e.target.value)}
           onFocus={() => {
             focusedRef.current = true;
@@ -137,11 +197,20 @@ export function ExerciseStudent({ courseId, group, openButUngrouped }: Props) {
             focusedRef.current = false;
           }}
           placeholder="Your group's answer — anyone can type. Talk it out, then put it here."
-          className="min-h-32 w-full resize-y rounded-lg border bg-background p-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="min-h-32 w-full resize-y rounded-lg border bg-background p-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring read-only:bg-muted read-only:text-muted-foreground"
         />
-        <p className="text-xs text-muted-foreground">
-          One shared answer for the whole group — your professor sees it live.
-        </p>
+        {closed ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-medium">
+              This exercise is closed — your group&apos;s answer is in.
+            </p>
+            {backToLecture}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            One shared answer for the whole group — your professor sees it live.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
