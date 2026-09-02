@@ -21,7 +21,10 @@ import {
   signUpWithPassword,
 } from "@/server/actions/auth";
 import { CALLBACK_MESSAGES, reasonFromQuery } from "@/lib/authreason";
-import { RECOVERY_SENT_MESSAGE } from "@/lib/recovery";
+import {
+  RECOVERY_SENT_MESSAGE,
+  SIGN_IN_LINK_SENT_MESSAGE,
+} from "@/lib/recovery";
 
 /**
  * Password-first sign-in (magic links stay as the fallback for accounts
@@ -122,7 +125,7 @@ function LoginForm() {
     const result = await sendLoginLink({ email });
     setBusy(false);
     if (result.ok) {
-      setSent("Check your email — your sign-in link is on the way.");
+      setSent(SIGN_IN_LINK_SENT_MESSAGE);
     } else {
       toast.error(result.error);
     }

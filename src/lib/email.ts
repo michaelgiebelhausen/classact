@@ -287,6 +287,51 @@ export async function sendSelfRecoveryEmail(
 }
 
 /**
+ * A plain sign-in or join link, sent by us rather than by Supabase.
+ *
+ * Sign-in links used to be the last thing still leaving through Supabase's
+ * built-in mailer: `signInWithOtp` renders the dashboard's "Magic Link"
+ * template, which lives outside this repo, cannot be tested, and is subject to
+ * GoTrue's per-IP (30 / 5 min) and project-wide (30 / hour) caps — a classroom
+ * is one IP address. Worse, whether that template emits a device-independent
+ * `token_hash` or a device-bound PKCE link is a dashboard setting nobody can
+ * see from the code, so the failure mode that stranded the Fall pilot could
+ * silently come back with a template edit.
+ *
+ * Minting the link here makes the transport, the template, and the link shape
+ * all things the repo controls and the tests can assert.
+ */
+export async function sendSignInLinkEmail(
+  to: string,
+  link: string,
+  context: "login" | "join"
+): Promise<boolean> {
+  const opening =
+    context === "join"
+      ? `Here's your link to join your class on ClassAct.`
+      : `Here's your ClassAct sign-in link.`;
+  const [result] = await sendInviteEmails([
+    {
+      enrollmentId: `sign-in-link-${context}`,
+      to,
+      subject: "Your ClassAct sign-in link",
+      text: [
+        opening,
+        ``,
+        `It works on any device or browser — you don't have to open it on the`,
+        `one you asked from:`,
+        ``,
+        link,
+        ``,
+        `If you didn't ask for this, you can ignore it. Nothing has changed on`,
+        `your account, and the link expires on its own.`,
+      ].join("\n"),
+    },
+  ]);
+  return result?.sent ?? false;
+}
+
+/**
  * Confirm a change to the account's sign-in email.
  *
  * Routed through Resend and carrying a `token_hash` link (not Supabase's

@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { sendJoinLink, signUpAndJoin } from "@/server/actions/auth";
+import { SIGN_IN_LINK_SENT_MESSAGE } from "@/lib/recovery";
 
 /**
  * Password-first join: code + email + password creates the account (one
@@ -50,7 +51,7 @@ export function JoinForm({
       const result = await sendJoinLink({ code, email });
       setBusy(false);
       if (result.ok) {
-        setSent("Check your email — your join link is on the way.");
+        setSent(SIGN_IN_LINK_SENT_MESSAGE);
       } else {
         toast.error(result.error);
       }

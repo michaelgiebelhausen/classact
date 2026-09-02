@@ -28,28 +28,58 @@ export const RECOVERY_WINDOW_MS = 15 * 60_000;
  * conditionally on purpose: "if" is what keeps it from confirming an address.
  */
 export const RECOVERY_SENT_MESSAGE =
-  "If that address has a ClassAct account, a sign-in link is on its way. It works on any device — open it and pick a password.";
+  "If that address has a ClassAct account, a sign-in link is on its way. It works on any device — open it and pick a password. Check your junk folder: university mail systems often file it there.";
+
+/** Shown after a plain sign-in or join link. Same junk-folder warning. */
+export const SIGN_IN_LINK_SENT_MESSAGE =
+  "If that address has a ClassAct account, a sign-in link is on its way. It works on any device. Check your junk folder — university mail systems often file it there.";
 
 /**
- * Where a recovery link points.
+ * Build an `/auth/callback` URL from `generateLink`'s `hashed_token`.
  *
- * `next` is clamped to the password-setting page rather than trusted: this URL
- * is minted from an unauthenticated request, and an open redirect on a link
- * that carries a login token hands the session to whoever chose the
- * destination.
+ * Every email link the app sends is minted here, and deliberately NOT from
+ * `generateLink`'s `action_link`: that routes through Supabase's
+ * `/auth/v1/verify`, which hands back a PKCE `code` bound to the browser that
+ * requested it. A `token_hash` is verified by `verifyOtp`, which reads no
+ * local storage, so it opens on any device.
+ *
+ * `next` is clamped rather than trusted: this URL is minted from an
+ * unauthenticated request, and an open redirect on a link that carries a login
+ * token hands the session to whoever chose the destination.
  */
+export function buildAuthLinkUrl(
+  siteUrl: string,
+  input: {
+    hashedToken: string;
+    type: "recovery" | "magiclink";
+    next: string;
+    /** Where `next` lands if it isn't a safe in-app path. */
+    fallbackNext: string;
+  }
+): string {
+  const safeNext =
+    input.next.startsWith("/") && !input.next.startsWith("//")
+      ? input.next
+      : input.fallbackNext;
+  const url = new URL("/auth/callback", siteUrl);
+  url.searchParams.set("token_hash", input.hashedToken);
+  url.searchParams.set("type", input.type);
+  url.searchParams.set("next", safeNext);
+  return url.toString();
+}
+
+/** Where a recovery link points — always ends on the set-a-password page. */
 export function buildRecoveryUrl(
   siteUrl: string,
   hashedToken: string,
   next: string
 ): string {
-  const safeNext =
-    next.startsWith("/") && !next.startsWith("//") ? next : "/update-password";
-  const url = new URL("/auth/callback", siteUrl);
-  url.searchParams.set("token_hash", hashedToken);
-  url.searchParams.set("type", "recovery");
-  url.searchParams.set("next", safeNext);
-  return url.toString();
+  return buildAuthLinkUrl(siteUrl, {
+    hashedToken,
+    type: "recovery",
+    next,
+    fallbackNext: "/update-password",
+  });
 }
 
 export interface RecoveryInputs {

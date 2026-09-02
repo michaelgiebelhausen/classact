@@ -10,11 +10,12 @@ import {
   passwordSchema,
   signUpSchema,
 } from "@/lib/validators";
-import { normalizeJoinCode } from "@/lib/joincode";
+import { isValidJoinCodeFormat, normalizeJoinCode } from "@/lib/joincode";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { rateLimit } from "@/lib/ratelimit";
-import { sendSelfRecoveryEmail } from "@/lib/email";
+import { sendSelfRecoveryEmail, sendSignInLinkEmail } from "@/lib/email";
 import {
+  buildAuthLinkUrl,
   buildRecoveryUrl,
   recoveryOutcome,
   RECOVERY_LIMIT,
@@ -28,7 +29,88 @@ export type ActionResult<T = undefined> =
   | { ok: true; data?: T }
   | { ok: false; error: string };
 
-/** Send a magic link for a plain sign-in (professors, returning students). */
+/**
+ * Mint a `token_hash` sign-in link and send it ourselves.
+ *
+ * Shared by the two link buttons. Both used to call `signInWithOtp`, which
+ * hands the job to Supabase's built-in mailer and its dashboard-managed
+ * template — the only auth mail the app still didn't control. That path is
+ * rate-limited per IP (30 / 5 min; a classroom is one IP) and project-wide
+ * (30 / hour, an *hourly* ceiling that outlasts a class period), and whether
+ * its link is device-independent depends on a dashboard setting invisible to
+ * this repo. On 2026-09-01 a student on that path received a delivered email
+ * he could not use while students on the Resend path signed in within seconds.
+ *
+ * `createIfMissing` is the one difference between the two callers: joining a
+ * class legitimately creates an account, signing in never should.
+ */
+async function issueSignInLink(input: {
+  email: string;
+  next: string;
+  fallbackNext: string;
+  context: "login" | "join";
+  createIfMissing: boolean;
+}): Promise<ActionResult> {
+  if (!isConfigured.supabaseAdmin) {
+    return {
+      ok: false,
+      error: "This server can't issue sign-in links. Tell your professor.",
+    };
+  }
+
+  const email = input.email.trim().toLowerCase();
+
+  // Counted before we know whether the address is real, so the limit cannot
+  // itself become an oracle — same rule as recovery.
+  const { remaining } = rateLimit(`signinlink:${email}`, {
+    limit: RECOVERY_LIMIT,
+    windowMs: RECOVERY_WINDOW_MS,
+  });
+
+  // The link type is load-bearing, and not for the reason its name suggests.
+  // `magiclink` CREATES an account when the address has none — verified
+  // against the live project, which is how a typo in the login form used to
+  // become a second, empty account that then "didn't work". `recovery` mints
+  // only for an existing user and errors otherwise. Both verify through
+  // `verifyOtp` and both just sign the person in; `next` decides where they
+  // land, so a recovery-type token is a perfectly ordinary sign-in link.
+  const linkType = input.createIfMissing ? "magiclink" : "recovery";
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.auth.admin.generateLink({
+    type: linkType,
+    email,
+  });
+
+  const hashed = data?.properties?.hashed_token;
+
+  const decision = recoveryOutcome({
+    accountExists: !error && Boolean(hashed),
+    emailConfigured: isConfigured.email,
+    recentRequests: RECOVERY_LIMIT - remaining,
+  });
+
+  if (decision.send && hashed) {
+    // Not reported back: distinguishing a send failure from a missing account
+    // would turn this into an account-existence oracle. Logged so a silent
+    // outage is still visible to us.
+    const sent = await sendSignInLinkEmail(
+      email,
+      buildAuthLinkUrl(env.siteUrl, {
+        hashedToken: hashed,
+        type: linkType,
+        next: input.next,
+        fallbackNext: input.fallbackNext,
+      }),
+      input.context
+    );
+    if (!sent) console.error("[signinlink] send failed for a requested address");
+  }
+
+  return decision.result;
+}
+
+/** Send a sign-in link (professors, returning students). */
 export async function sendLoginLink(input: {
   email: string;
 }): Promise<ActionResult> {
@@ -36,28 +118,21 @@ export async function sendLoginLink(input: {
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0].message };
   }
-  if (!isConfigured.supabase) {
-    return {
-      ok: false,
-      error:
-        "ClassAct isn't connected to its database yet. Add the Supabase keys in .env.local (see HANDOFF.md).",
-    };
-  }
+  if (!isConfigured.supabase) return { ok: false, error: NOT_CONFIGURED };
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({
+  // No `createIfMissing`: the old `signInWithOtp` default created an account
+  // for any address typed into the login form, which is how a typo became a
+  // second, empty account that then "didn't work".
+  return issueSignInLink({
     email: parsed.data.email,
-    options: {
-      emailRedirectTo: `${env.siteUrl}/auth/callback?next=/dashboard`,
-    },
+    next: "/dashboard",
+    fallbackNext: "/dashboard",
+    context: "login",
+    createIfMissing: false,
   });
-  if (error) {
-    return { ok: false, error: "Couldn't send the sign-in link. Try again." };
-  }
-  return { ok: true };
 }
 
-/** Send a magic link for a student joining a course by code. */
+/** Send a sign-in link for a student joining a course by code. */
 export async function sendJoinLink(input: {
   code: string;
   email: string;
@@ -66,28 +141,45 @@ export async function sendJoinLink(input: {
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0].message };
   }
-  if (!isConfigured.supabase) {
+  if (!isConfigured.supabase) return { ok: false, error: NOT_CONFIGURED };
+
+  const code = normalizeJoinCode(parsed.data.code);
+  // Both checks happen before anything can create an account: this is the one
+  // unauthenticated path that mints users, so the join code has to be real
+  // first, or the form becomes a way to fill auth.users with arbitrary
+  // addresses. Unlike the email, a wrong code is safe to report plainly —
+  // it says nothing about who has an account.
+  if (!isValidJoinCodeFormat(code)) {
     return {
       ok: false,
-      error:
-        "ClassAct isn't connected to its database yet. Add the Supabase keys in .env.local (see HANDOFF.md).",
+      error: "That doesn't look like a join code — check it with your professor.",
+    };
+  }
+  if (!isConfigured.supabaseAdmin) {
+    return {
+      ok: false,
+      error: "This server can't issue sign-in links. Tell your professor.",
+    };
+  }
+  const { data: course } = await createAdminClient()
+    .from("courses")
+    .select("id")
+    .eq("join_code", code)
+    .maybeSingle();
+  if (!course) {
+    return {
+      ok: false,
+      error: "That join code didn't match a class — double-check it with your professor.",
     };
   }
 
-  const code = normalizeJoinCode(parsed.data.code);
-  const next = `/auth/join?code=${encodeURIComponent(code)}`;
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({
+  return issueSignInLink({
     email: parsed.data.email,
-    options: {
-      emailRedirectTo: `${env.siteUrl}/auth/callback?next=${encodeURIComponent(next)}`,
-    },
+    next: `/auth/join?code=${encodeURIComponent(code)}`,
+    fallbackNext: "/dashboard",
+    context: "join",
+    createIfMissing: true,
   });
-  if (error) {
-    return { ok: false, error: "Couldn't send the join link. Try again." };
-  }
-  return { ok: true };
 }
 
 /**

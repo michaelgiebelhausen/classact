@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
+  buildAuthLinkUrl,
   buildRecoveryUrl,
   recoveryOutcome,
   RECOVERY_SENT_MESSAGE,
   RECOVERY_LIMIT,
+  SIGN_IN_LINK_SENT_MESSAGE,
 } from "@/lib/recovery";
 
 describe("buildRecoveryUrl", () => {
@@ -110,5 +112,68 @@ describe("recoveryOutcome", () => {
   test("the message sent to students never confirms an account exists", () => {
     expect(RECOVERY_SENT_MESSAGE).not.toMatch(/\byour account\b/i);
     expect(RECOVERY_SENT_MESSAGE).toMatch(/if/i);
+  });
+});
+
+describe("buildAuthLinkUrl", () => {
+  test("mints a token_hash magic link, never a PKCE code", () => {
+    const url = new URL(
+      buildAuthLinkUrl("https://classact.college", {
+        hashedToken: "tok123",
+        type: "magiclink",
+        next: "/auth/join?code=AIT-WWRM",
+        fallbackNext: "/dashboard",
+      })
+    );
+
+    expect(url.pathname).toBe("/auth/callback");
+    expect(url.searchParams.get("token_hash")).toBe("tok123");
+    expect(url.searchParams.get("type")).toBe("magiclink");
+    expect(url.searchParams.get("next")).toBe("/auth/join?code=AIT-WWRM");
+    // The whole point of this path: no device-bound code, so the link opens
+    // on whatever phone or laptop the student actually reads mail on.
+    expect(url.searchParams.get("code")).toBeNull();
+  });
+
+  test("falls back rather than following an absolute destination", () => {
+    const url = new URL(
+      buildAuthLinkUrl("https://classact.college", {
+        hashedToken: "tok123",
+        type: "magiclink",
+        next: "https://evil.test/steal",
+        fallbackNext: "/dashboard",
+      })
+    );
+
+    expect(url.searchParams.get("next")).toBe("/dashboard");
+  });
+
+  test("refuses a protocol-relative destination", () => {
+    // "//evil.test" is a valid absolute URL to a browser and starts with "/",
+    // so a naive startsWith check lets a login token walk off-site.
+    const url = new URL(
+      buildAuthLinkUrl("https://classact.college", {
+        hashedToken: "tok123",
+        type: "magiclink",
+        next: "//evil.test/steal",
+        fallbackNext: "/dashboard",
+      })
+    );
+
+    expect(url.searchParams.get("next")).toBe("/dashboard");
+  });
+});
+
+describe("SIGN_IN_LINK_SENT_MESSAGE", () => {
+  test("never confirms an account exists", () => {
+    expect(SIGN_IN_LINK_SENT_MESSAGE).not.toMatch(/\byour account\b/i);
+    expect(SIGN_IN_LINK_SENT_MESSAGE).toMatch(/if/i);
+  });
+
+  test("tells students where the mail actually lands", () => {
+    // Andrew Paul's link was DELIVERED to his university address and he never
+    // saw it. "Check your email" was true and useless.
+    expect(SIGN_IN_LINK_SENT_MESSAGE).toMatch(/junk|spam/i);
+    expect(RECOVERY_SENT_MESSAGE).toMatch(/junk|spam/i);
   });
 });
