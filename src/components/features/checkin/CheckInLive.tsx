@@ -21,6 +21,7 @@ import { RoomMap } from "@/components/features/rooms/RoomMap";
 import { NeighborPrompts, type NeighborPromptRow } from "@/components/features/checkin/NeighborPrompts";
 import { SeatActionCard } from "@/components/features/checkin/SeatActionCard";
 import { deriveSeatRing, type SeatRing } from "@/lib/seatrings";
+import { reconcileOccupants } from "@/lib/checkinpoll";
 import { stablePhotoUrl } from "@/lib/photopin";
 import type { TableFootprint } from "@/lib/roomlayout";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
@@ -195,13 +196,45 @@ export function CheckInLive({
     });
   }, []);
 
-  // Waiting room: with a schedule set, re-check every 30s so the map
+  // Waiting room: with a schedule set, re-check every ~30s so the map
   // appears on its own the moment auto-open fires — no manual reload.
+  //
+  // The check is one scoped SELECT for an open session, and the page only
+  // refreshes once one exists. It used to be `router.refresh()` on the timer
+  // itself: a full render of this page (a dozen queries plus the roster
+  // directory) from every laptop in the room every 30s, before class had
+  // even opened — and each refresh re-armed the sidebar's route prefetches
+  // on top. Jittered so a room that loaded together doesn't tick together.
   useEffect(() => {
     if (sessionId || !scheduleHint) return;
-    const timer = setInterval(() => router.refresh(), 30_000);
-    return () => clearInterval(timer);
-  }, [sessionId, scheduleHint, router]);
+    const supabase = createClient();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      timer = setTimeout(
+        () => void check(),
+        25_000 + Math.floor(Math.random() * 10_000)
+      );
+    };
+    async function check() {
+      if (cancelled) return;
+      const { data } = await supabase
+        .from("class_sessions")
+        .select("id")
+        .eq("course_id", courseId)
+        .is("closed_at", null)
+        .limit(1)
+        .maybeSingle();
+      if (cancelled) return;
+      if (data) router.refresh();
+      else schedule();
+    }
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [sessionId, scheduleHint, courseId, router]);
 
   // Realtime subscription with 5s polling fallback (FR-010).
   useEffect(() => {
@@ -225,6 +258,27 @@ export function CheckInLive({
         keepalive: true,
       }).catch(() => {});
     };
+
+    // Authoritative read for the degraded path. A row for someone the
+    // directory doesn't know (activated after this page loaded) still needs
+    // the one-time refresh below to learn their name and face.
+    async function pollCheckIns() {
+      const { data } = await supabase
+        .from("check_ins")
+        .select(
+          "id, enrollment_id, seat_id, verified, denied_count, professor_confirmed_at"
+        )
+        .eq("session_id", sessionId!);
+      if (!data) return;
+      setOccupants((prev) => reconcileOccupants(prev, data) as typeof prev);
+      if (
+        !unknownEnrollment.current &&
+        data.some((r) => !directory[r.enrollment_id])
+      ) {
+        unknownEnrollment.current = true;
+        router.refresh();
+      }
+    }
 
     const channel = supabase
       .channel(`session:${sessionId}`)
@@ -279,20 +333,20 @@ export function CheckInLive({
         const ok = status === "SUBSCRIBED";
         setLive(ok);
         if (!ok && !pollTimer) {
-          // The fallback is the prime suspect for the room freezing. Every
-          // client that loses realtime starts refreshing the WHOLE page —
-          // about eleven queries — and forty phones dropping together at
-          // 9:29 then hammer in lockstep, against the same database realtime
-          // is already struggling with.
+          // The fallback WAS what froze the room. Every client that lost
+          // realtime started refreshing the WHOLE page — about eleven
+          // queries plus the roster directory, and in Next a refresh also
+          // re-prefetches every sidebar route — and forty phones dropping
+          // together at 9:29 hammered in lockstep against the same database
+          // realtime was already struggling with.
           //
-          // Jittered and slowed until the instrumentation says otherwise:
-          // 6–12s instead of a synchronised 5s roughly halves the sustained
-          // rate and, more importantly, spreads it out instead of arriving
-          // as one spike per interval. The cost is a map up to twelve
-          // seconds stale while realtime is down, which is the state where
-          // it is already degraded.
+          // Now it's one scoped SELECT of this session's check_ins,
+          // reconciled into the map. Still jittered (6–12s) so a room that
+          // dropped together doesn't poll together. The cost is a map up to
+          // twelve seconds stale while realtime is down, which is the state
+          // where it is already degraded.
           const period = 6000 + Math.floor(Math.random() * 6000);
-          pollTimer = setInterval(() => router.refresh(), period);
+          pollTimer = setInterval(() => void pollCheckIns(), period);
           degradedSince = Date.now();
           report("down", { reason: status });
         }

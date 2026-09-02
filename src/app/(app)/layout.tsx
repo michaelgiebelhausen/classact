@@ -56,6 +56,7 @@ export default async function AppLayout({
             {/* The obvious place people click for their own account. */}
             <Link
               href="/profile"
+              prefetch={false}
               className="flex items-center gap-3 rounded-full pl-2 transition-opacity hover:opacity-80"
               aria-label="My profile"
             >

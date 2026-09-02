@@ -81,6 +81,13 @@ function RailLink({
   return (
     <Link
       href={href}
+      // Never prefetch. The rail is on every page, so the router used to
+      // prefetch all thirteen destinations whenever a link (re)entered the
+      // viewport — and the check-in page's periodic refresh re-armed that on
+      // every tick. In a room of 35 laptops that was ~90 server renders a
+      // second against the database, which is what froze the 9:30 class on
+      // 2026-09-01. A click now costs one round trip; nothing costs thirteen.
+      prefetch={false}
       className={`${base} ${
         active
           ? "bg-[var(--sidebar-accent)] text-white"
@@ -102,6 +109,7 @@ export function Sidebar() {
     <nav className="sticky top-0 z-20 flex h-screen w-[84px] shrink-0 flex-col items-center gap-1.5 bg-[var(--sidebar)] py-5">
       <Link
         href="/dashboard"
+        prefetch={false}
         className="mb-3 grid size-11 place-items-center rounded-[13px] bg-gradient-to-br from-[var(--flame)] to-[#c33d1c] font-[family-name:var(--font-heading)] text-xl font-semibold text-white shadow-[0_6px_16px_-4px_rgba(224,85,47,0.6)]"
         aria-label="ClassAct home"
       >
