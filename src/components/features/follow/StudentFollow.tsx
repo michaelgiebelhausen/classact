@@ -599,7 +599,7 @@ export function StudentFollow({
           );
         } else if (raw > 0) {
           toast.success(
-            "Welcome back — the lecture was paused, so that didn't count."
+            "Welcome back — focus tracking was paused, so that didn't count."
           );
         }
       }
@@ -747,7 +747,7 @@ export function StudentFollow({
           <div className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
             <Pause className="size-4 shrink-0" />
             <span>
-              <span className="font-medium">Lecture paused.</span> Your
+              <span className="font-medium">Focus tracking paused.</span> Your
               professor opened a browsing window — leaving this tab won&apos;t
               count against you until they resume.
             </span>
@@ -843,8 +843,8 @@ export function StudentFollow({
           <CardContent className="grid gap-2">
             {paused && (
               <Badge className="w-fit" variant="outline">
-                <Pause className="mr-1 size-3" /> Paused — aways don&apos;t
-                count right now
+                <Pause className="mr-1 size-3" /> Focus tracking paused — aways
+                don&apos;t count right now
               </Badge>
             )}
             {awayCount === 0 ? (
@@ -892,8 +892,8 @@ export function StudentFollow({
               <p className="text-sm text-muted-foreground">
                 Looking something up because your professor asked? If this is
                 an official activity, remind them to hit{" "}
-                <span className="font-medium">Pause lecture</span> — paused
-                time never counts against anyone.
+                <span className="font-medium">Pause focus tracking</span> —
+                paused time never counts against anyone.
               </p>
               <Button className="w-full" onClick={() => setWarning(null)}>
                 Back to the lecture

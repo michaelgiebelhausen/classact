@@ -888,8 +888,8 @@ export function ProfessorPresenter({
     capture(nowPaused ? "lecture_paused" : "lecture_resumed", {});
     toast.success(
       nowPaused
-        ? "Paused — student tab-aways aren't counted until you resume."
-        : "Resumed — focus tracking is back on."
+        ? "Focus tracking paused — student tab-aways won't count until you resume."
+        : "Focus tracking on again."
     );
   }
 
@@ -1019,9 +1019,10 @@ export function ProfessorPresenter({
         Fullscreen. This window stays your private dashboard.
       </span>
       <span className="block">
-        <span className="font-medium">Pause lecture</span> when you send the
-        class to look something up: paused time never counts against
-        anyone&apos;s focus score.
+        <span className="font-medium">Pause focus tracking</span> (in the
+        Attention panel) when you send the class to look something up: paused
+        time never counts against anyone&apos;s focus score. Slides keep
+        working — only monitoring pauses.
       </span>
       <span className="block">
         <span className="font-medium">Think-Pair-Share</span> questions offer
@@ -1090,22 +1091,24 @@ export function ProfessorPresenter({
         <Button size="sm" variant="outline" onClick={openStage}>
           <MonitorUp className="mr-2 size-4" /> Project slides
         </Button>
-        <Button
-          size="sm"
-          variant={paused ? "default" : "outline"}
-          onClick={() => void togglePause()}
-          disabled={pauseBusy}
-        >
-          {paused ? (
-            <>
-              <Play className="mr-2 size-4" /> Resume
-            </>
-          ) : (
-            <>
-              <Pause className="mr-2 size-4" /> Pause lecture
-            </>
-          )}
-        </Button>
+        {/*
+          The pause toggle lives in the Attention card now — pausing is about
+          monitoring, and the failure we're fixing was a professor forgetting
+          it was on. So while paused, a loud amber chip rides the sticky bar
+          the whole time, and one click resumes from wherever you're looking.
+        */}
+        {paused && (
+          <button
+            type="button"
+            onClick={() => void togglePause()}
+            disabled={pauseBusy}
+            className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-700 disabled:opacity-60 dark:text-amber-300"
+          >
+            <Pause className="size-3.5" />
+            Focus tracking paused
+            <span className="text-amber-600 dark:text-amber-400">· Resume</span>
+          </button>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -1156,13 +1159,6 @@ export function ProfessorPresenter({
         />
       )}
       </div>
-
-      {paused && (
-        <p className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
-          <span className="font-medium">Paused.</span> Students can browse
-          freely — tab-aways aren&apos;t counted until you resume.
-        </p>
-      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="grid content-start gap-4">
@@ -1440,6 +1436,8 @@ export function ProfessorPresenter({
           occupants={occupants}
           attention={attention}
           paused={paused}
+          pauseBusy={pauseBusy}
+          onTogglePause={() => void togglePause()}
         />
       </div>
 

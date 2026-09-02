@@ -435,8 +435,8 @@ export function StageView({
 
       {paused && !poll && (
         <div className="absolute left-1/2 top-6 z-10 -translate-x-1/2 rounded-full bg-white/10 px-6 py-2.5 text-center text-[clamp(0.875rem,2vmin,1.25rem)] font-medium text-white/90 backdrop-blur">
-          Lecture paused — browse away, it doesn&apos;t count. Come back when
-          your professor resumes.
+          Focus tracking paused — browse away, it doesn&apos;t count. Come back
+          when your professor resumes.
         </div>
       )}
 

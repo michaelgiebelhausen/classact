@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import { EyeOff } from "lucide-react";
+import { EyeOff, Pause, Play } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -40,6 +41,10 @@ interface Props {
   /** The presenter's live rows (already sorted: away first). */
   attention: AttentionRow[];
   paused: boolean;
+  /** Toggle in flight — disables the button while the server round-trips. */
+  pauseBusy: boolean;
+  /** Pause or resume focus tracking (monitoring). */
+  onTogglePause: () => void;
 }
 
 function initials(name: string): string {
@@ -56,7 +61,14 @@ function firstName(name: string): string {
   return name.split(/\s+/)[0] ?? name;
 }
 
-export function ClassroomAttention({ seats, occupants, attention, paused }: Props) {
+export function ClassroomAttention({
+  seats,
+  occupants,
+  attention,
+  paused,
+  pauseBusy,
+  onTogglePause,
+}: Props) {
   const byEnrollment = useMemo(
     () => new Map(attention.map((a) => [a.enrollmentId, a])),
     [attention]
@@ -73,12 +85,35 @@ export function ClassroomAttention({ seats, occupants, attention, paused }: Prop
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <EyeOff className="size-4" /> Attention
-        </CardTitle>
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <EyeOff className="size-4" /> Attention
+          </CardTitle>
+          <Button
+            size="sm"
+            variant={paused ? "default" : "outline"}
+            className={
+              paused
+                ? "shrink-0 bg-amber-500 text-white hover:bg-amber-500/90"
+                : "shrink-0"
+            }
+            onClick={onTogglePause}
+            disabled={pauseBusy}
+          >
+            {paused ? (
+              <>
+                <Play className="mr-1.5 size-4" /> Resume tracking
+              </>
+            ) : (
+              <>
+                <Pause className="mr-1.5 size-4" /> Pause focus tracking
+              </>
+            )}
+          </Button>
+        </div>
         <CardDescription>
           {paused
-            ? "Paused — students are free to browse; new tab-aways aren't counted."
+            ? "Focus tracking paused — students can browse freely; new tab-aways aren't counted."
             : (awayNow === 0
                 ? "Everyone's tab is on the lecture."
                 : `${awayNow} ${awayNow === 1 ? "student is" : "students are"} away right now.`) +
