@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import posthog from "posthog-js";
+import type { PostHog } from "posthog-js";
 
 const KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY;
 const HOST = process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com";
@@ -36,20 +36,44 @@ export type AnalyticsEvent =
   | "ta_asked"
   | "ta_indexed";
 
+/**
+ * PostHog is loaded on demand, after the page is interactive, and only when
+ * a key is configured. Imported statically it rode in the shared chunk of
+ * every route — ~60 KB gzipped that 300 laptops on one access point paid
+ * before the check-in map could render, even on a deployment with no key.
+ */
+let client: Promise<PostHog | null> | null = null;
+
+function load(): Promise<PostHog | null> {
+  if (!KEY) return Promise.resolve(null);
+  if (!client) {
+    client = import("posthog-js")
+      .then(({ default: posthog }) => {
+        posthog.init(KEY, {
+          api_host: HOST,
+          capture_pageview: true,
+          persistence: "localStorage",
+          autocapture: false, // deliberate: only the named funnel events + pageviews
+        });
+        return posthog;
+      })
+      .catch(() => null);
+  }
+  return client;
+}
+
 export function capture(event: AnalyticsEvent, props?: Record<string, unknown>) {
   if (!KEY) return;
-  posthog.capture(event, props);
+  void load().then((posthog) => posthog?.capture(event, props));
 }
 
 export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!KEY) return;
-    posthog.init(KEY, {
-      api_host: HOST,
-      capture_pageview: true,
-      persistence: "localStorage",
-      autocapture: false, // deliberate: only the named funnel events + pageviews
-    });
+    // Let the page settle first; the first pageview still lands within a
+    // second and nothing in the classroom path waits on it.
+    const timer = setTimeout(() => void load(), 800);
+    return () => clearTimeout(timer);
   }, []);
   return <>{children}</>;
 }
