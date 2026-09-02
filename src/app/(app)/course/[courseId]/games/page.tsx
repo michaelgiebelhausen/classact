@@ -156,7 +156,7 @@ export default async function GamesPage({
             .eq("profile_id", course.professor_id),
         ]);
       const paths = (profPhotos ?? []).map((p) => p.storage_path);
-      const urlMap = await getSignedPhotoUrls(admin, paths);
+      const urlMap = await getSignedPhotoUrls(admin, paths, { width: 320 });
       const urls = paths
         .map((p) => urlMap[p])
         .filter((u): u is string => Boolean(u));

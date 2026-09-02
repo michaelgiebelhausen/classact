@@ -620,7 +620,16 @@ export function RoomMap({
             {(state.kind === "taken" || state.kind === "verified" || state.kind === "mine") &&
             state.name ? (
               <Avatar className="h-7 w-7">
-                {state.photoUrl && <AvatarImage src={state.photoUrl} alt={state.name} />}
+                {state.photoUrl && (
+                  <AvatarImage
+                    src={state.photoUrl}
+                    alt={state.name}
+                    loading="lazy"
+                    decoding="async"
+                    width={28}
+                    height={28}
+                  />
+                )}
                 <AvatarFallback className="text-[9px]">
                   {initialsOf(state.name)}
                 </AvatarFallback>

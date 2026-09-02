@@ -178,40 +178,71 @@ export async function getSignedPhotoUrl(
   return map[path] ?? null
 }
 
-/** Batch signed URLs; returns a map keyed by storage path (nulls dropped). */
+/**
+ * Batch signed URLs; returns a map keyed by storage path (nulls dropped).
+ *
+ * `width` asks Storage for a square, cover-cropped thumbnail of that many
+ * pixels instead of the original. Photos are uploaded at up to 1280 px
+ * (~250 KB) and the seat map draws them at 28 px: a 192 px thumbnail is
+ * ~4 KB, sharp at retina density, and a 300-seat map stops being tens of
+ * megabytes over the classroom Wi-Fi. Thumbnails are cached under their own
+ * key so a full-size caller never gets a small one.
+ */
 export async function getSignedPhotoUrls(
   client: SupabaseClient<Database>,
-  paths: string[]
+  paths: string[],
+  options: { width?: number } = {}
 ): Promise<Record<string, string>> {
   if (paths.length === 0) return {}
+  const width = options.width
+  const cacheKey = (path: string) => (width ? `${path}#w${width}` : path)
   const now = Date.now()
   const map: Record<string, string> = {}
   const misses: string[] = []
   for (const path of paths) {
-    const hit = signedPhotoCache.get(path)
+    const key = cacheKey(path)
+    const hit = signedPhotoCache.get(key)
     if (hit && hit.expires > now) {
       map[path] = hit.url
     } else {
       // Purge an expired entry rather than set() over it later: Map.set on
       // an existing key keeps its ORIGINAL position, which would leave the
       // freshest re-signed entries at the eviction front.
-      if (hit) signedPhotoCache.delete(path)
+      if (hit) signedPhotoCache.delete(key)
       misses.push(path)
     }
   }
   if (misses.length > 0) {
-    const { data, error } = await client.storage
-      .from(PHOTO_BUCKET)
-      .createSignedUrls(misses, SIGNED_URL_TTL_SECONDS)
-    // On error the cache hits still go out — stale-but-valid beats nothing.
-    if (!error && data) {
-      for (const item of data) {
-        if (item.signedUrl && item.path) {
-          map[item.path] = item.signedUrl
-          signedPhotoCache.set(item.path, {
-            url: item.signedUrl,
-            expires: now + SIGNED_PHOTO_CACHE_TTL_MS,
-          })
+    const remember = (path: string, url: string) => {
+      map[path] = url
+      signedPhotoCache.set(cacheKey(path), {
+        url,
+        expires: now + SIGNED_PHOTO_CACHE_TTL_MS,
+      })
+    }
+    if (width) {
+      // The batch endpoint can't transform, so thumbnails are signed one per
+      // path — in parallel, and only on a cache miss (45 min per path).
+      const signed = await Promise.all(
+        misses.map((path) =>
+          client.storage
+            .from(PHOTO_BUCKET)
+            .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, {
+              transform: { width, height: width, resize: "cover" },
+            })
+            .then((r) => [path, r.data?.signedUrl ?? null] as const)
+            .catch(() => [path, null] as const)
+        )
+      )
+      for (const [path, url] of signed) if (url) remember(path, url)
+    } else {
+      const { data, error } = await client.storage
+        .from(PHOTO_BUCKET)
+        .createSignedUrls(misses, SIGNED_URL_TTL_SECONDS)
+      // On error the cache hits still go out — stale-but-valid beats nothing.
+      if (!error && data) {
+        for (const item of data) {
+          if (item.signedUrl && item.path) remember(item.path, item.signedUrl)
         }
       }
     }
@@ -263,7 +294,8 @@ export async function resolveEnrollmentPhotos(
       .map((e) => e.roster_photo_path)
       .filter((p): p is string => Boolean(p)),
   ]
-  const urlMap = await getSignedPhotoUrls(client, allPaths)
+  // Directory faces render at 28–96 CSS px; 192 covers retina at the largest.
+  const urlMap = await getSignedPhotoUrls(client, allPaths, { width: 192 })
 
   const uploadedByProfile = new Map<string, string[]>()
   for (const p of uploaded ?? []) {
@@ -335,7 +367,8 @@ export async function resolveEnrollmentPhotosByKind(
       .map((e) => e.roster_photo_path)
       .filter((p): p is string => Boolean(p)),
   ]
-  const urlMap = await getSignedPhotoUrls(client, allPaths)
+  // Name-game cards render at up to 112 CSS px; 320 keeps them sharp.
+  const urlMap = await getSignedPhotoUrls(client, allPaths, { width: 320 })
 
   const byProfile = new Map<string, Partial<Record<PhotoKind, string>>>()
   for (const p of uploaded ?? []) {
