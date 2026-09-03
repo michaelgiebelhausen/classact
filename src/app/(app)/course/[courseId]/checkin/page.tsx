@@ -203,6 +203,8 @@ async function renderCheckIn(courseId: string) {
     .eq("course_id", courseId)
     .eq("profile_id", profile.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   myEnrollmentId = myEnrollment?.id ?? null;
 

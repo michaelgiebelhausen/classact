@@ -244,6 +244,8 @@ export default async function ParticipatePage({
     .eq("course_id", courseId)
     .eq("profile_id", profile.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   let stats = { answered: 0, firstCorrect: 0, changedToCorrect: 0 };

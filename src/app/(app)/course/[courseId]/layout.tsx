@@ -49,6 +49,8 @@ export default async function CourseLayout({
     .eq("course_id", courseId)
     .eq("profile_id", profile.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!enrollment) return bare;
 

@@ -136,6 +136,8 @@ export async function GET(request: NextRequest) {
       .eq("course_id", course.id)
       .eq("profile_id", user.id)
       .neq("status", "dropped")
+      .order("created_at", { ascending: true })
+      .limit(1)
       .maybeSingle();
 
     if (!alreadyIn) {

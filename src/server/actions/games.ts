@@ -31,6 +31,8 @@ export async function recordGameScore(input: {
     .eq("course_id", parsed.data.courseId)
     .eq("profile_id", user.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!enrollment) {
     // Professor or observer: let them play, just don't score it.

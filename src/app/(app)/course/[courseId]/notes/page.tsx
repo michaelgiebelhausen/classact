@@ -48,6 +48,8 @@ export default async function NotesPage({
     .eq("course_id", courseId)
     .eq("profile_id", profile.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   // No enrollment means the viewer is the professor, or someone not yet on the

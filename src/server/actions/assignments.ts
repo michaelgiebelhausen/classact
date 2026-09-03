@@ -64,6 +64,8 @@ async function myEnrollment(
     .eq("course_id", courseId)
     .eq("profile_id", profileId)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   return data?.id ?? null;
 }

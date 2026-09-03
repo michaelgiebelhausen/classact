@@ -83,6 +83,8 @@ export default async function AssignmentPage({
     .eq("course_id", courseId)
     .eq("profile_id", profile.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   const enrollmentId = myEnrollment?.id ?? null;
 

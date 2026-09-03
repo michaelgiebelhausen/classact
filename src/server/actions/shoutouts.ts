@@ -26,6 +26,8 @@ async function myEnrollment(courseId: string) {
     .eq("course_id", courseId)
     .eq("profile_id", user.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   return { supabase, enrollmentId: data?.id ?? null };
 }

@@ -259,6 +259,8 @@ export async function submitAbsence(
     .eq("course_id", input.courseId)
     .eq("profile_id", user.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!enrollment) {
     return { ok: false, error: "You're not on this course's active roster." };
@@ -688,6 +690,8 @@ export async function listMyAbsences(courseId: string): Promise<MyAbsenceView[]>
     .select("id")
     .eq("course_id", courseId)
     .eq("profile_id", user.id)
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!enrollment) return [];
   const { data: rows } = await admin

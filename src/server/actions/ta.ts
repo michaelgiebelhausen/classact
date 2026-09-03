@@ -55,6 +55,8 @@ async function requireMember(courseId: string) {
       .eq("course_id", courseId)
       .eq("profile_id", user.id)
       .eq("status", "active")
+      .order("created_at", { ascending: true })
+      .limit(1)
       .maybeSingle();
     if (!enrollment) {
       return {

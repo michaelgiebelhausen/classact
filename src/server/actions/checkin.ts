@@ -164,6 +164,8 @@ async function runCheckIn(
     .eq("course_id", session.course_id)
     .eq("profile_id", user.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!enrollment) {
     return {
@@ -261,6 +263,8 @@ export async function verifyNeighbor(
     .eq("course_id", session.course_id)
     .eq("profile_id", user.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!me) return { ok: false, error: "You're not in this course." };
 
@@ -365,6 +369,8 @@ export async function denyNeighbor(
     .eq("course_id", session.course_id)
     .eq("profile_id", user.id)
     .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!me) return { ok: false, error: "You're not in this course." };
   if (subjectEnrollmentId === me.id) {
@@ -459,6 +465,8 @@ export async function moveSeat(
         .eq("course_id", session.course_id)
         .eq("profile_id", user.id)
         .eq("status", "active")
+        .order("created_at", { ascending: true })
+        .limit(1)
         .maybeSingle()
     : { data: null };
 
