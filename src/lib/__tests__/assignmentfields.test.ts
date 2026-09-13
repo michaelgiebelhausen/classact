@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { normalizeInstructions, normalizePoints } from "@/lib/assignmentfields";
+import {
+  normalizeInstructions,
+  normalizePoints,
+  reconcilePeerClose,
+} from "@/lib/assignmentfields";
 
 describe("normalizeInstructions", () => {
   test("trims surrounding whitespace", () => {
@@ -105,5 +109,56 @@ describe("normalizePoints", () => {
 
     if (verdict.ok) throw new Error("expected refusal");
     expect(verdict.message.length).toBeGreaterThan(0);
+  });
+});
+
+describe("reconcilePeerClose", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const deadline = new Date("2026-09-15T23:59:00Z");
+
+  test("leaves the window alone when peer grading still closes after the new deadline", () => {
+    expect(
+      reconcilePeerClose({
+        deadline,
+        peerCloseAt: new Date(deadline.getTime() + day),
+        peerReview: true,
+        peerWindowDays: 5,
+      })
+    ).toEqual({ ok: true, peerCloseAt: null });
+  });
+
+  test("refuses a deadline past the peer window when students grade each other", () => {
+    const verdict = reconcilePeerClose({
+      deadline,
+      peerCloseAt: new Date(deadline.getTime() - day),
+      peerReview: true,
+      peerWindowDays: 5,
+    });
+
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) throw new Error("expected refusal");
+    expect(verdict.message).toMatch(/peer grading/);
+  });
+
+  test("moves an inert peer window along with the deadline when peer review is off", () => {
+    expect(
+      reconcilePeerClose({
+        deadline,
+        peerCloseAt: new Date(deadline.getTime() - day),
+        peerReview: false,
+        peerWindowDays: 5,
+      })
+    ).toEqual({ ok: true, peerCloseAt: new Date(deadline.getTime() + 5 * day) });
+  });
+
+  test("moves the inert window even when it lands exactly on the deadline", () => {
+    expect(
+      reconcilePeerClose({
+        deadline,
+        peerCloseAt: deadline,
+        peerReview: false,
+        peerWindowDays: 2,
+      })
+    ).toEqual({ ok: true, peerCloseAt: new Date(deadline.getTime() + 2 * day) });
   });
 });

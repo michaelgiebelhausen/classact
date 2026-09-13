@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   normalizeInstructions,
   normalizePoints,
+  reconcilePeerClose,
 } from "@/lib/assignmentfields";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -653,14 +654,15 @@ export async function updateAssignment(input: {
 
   const { data: assignment } = await supabase
     .from("assignments")
-    .select("id, course_id, state, deadline, peer_close_at, courses!inner(professor_id)")
+    .select(
+      "id, course_id, state, deadline, peer_close_at, settings, courses!inner(professor_id, grading_defaults)"
+    )
     .eq("id", input.assignmentId)
     .single();
-  if (
-    !assignment ||
-    (assignment.courses as unknown as { professor_id: string }).professor_id !==
-      user.id
-  ) {
+  const course = assignment?.courses as unknown as
+    | { professor_id: string; grading_defaults: unknown }
+    | undefined;
+  if (!assignment || !course || course.professor_id !== user.id) {
     return { ok: false, error: "Only the course owner can edit an assignment." };
   }
 
@@ -755,17 +757,21 @@ export async function updateAssignment(input: {
       };
     }
     patch.peer_close_at = next.toISOString();
-  } else if (
-    patch.deadline &&
-    new Date(assignment.peer_close_at) <= deadline
-  ) {
-    // The deadline moved past the peer window: keep the invariant rather
-    // than erroring on a field the professor didn't touch.
-    return {
-      ok: false,
-      error:
-        "That deadline is after peer grading closes — move the peer grading close too.",
-    };
+  } else if (patch.deadline) {
+    // The deadline moved: the peer window must still close after it. When
+    // students grade each other that window is theirs to place, so refuse
+    // and let the professor move it. When peer review is off the window is
+    // never shown and never consulted, so it slides along silently — an
+    // error there would block the edit on a field nobody can see.
+    const verdict = reconcilePeerClose({
+      deadline,
+      peerCloseAt: new Date(assignment.peer_close_at),
+      peerReview: resolveGradingAxes(assignment.settings).peerReview,
+      peerWindowDays: resolveSettings(course.grading_defaults, assignment.settings)
+        .peerWindowDays,
+    });
+    if (!verdict.ok) return { ok: false, error: verdict.message };
+    if (verdict.peerCloseAt) patch.peer_close_at = verdict.peerCloseAt.toISOString();
   }
 
   if (Object.keys(patch).length === 0) return { ok: true };

@@ -68,3 +68,42 @@ export function normalizePoints(
   // -0 passes both checks above and is a nuisance downstream.
   return { ok: true, value: parsed === 0 ? 0 : parsed };
 }
+
+export type PeerCloseVerdict =
+  | { ok: true; peerCloseAt: Date | null }
+  | { ok: false; message: string };
+
+/**
+ * What happens to the peer grading close when the submission deadline moves.
+ *
+ * Every assignment carries a peer_close_at — the column is not null — so
+ * an assignment without peer review still has one, set at creation and
+ * never shown to the professor. Moving the deadline past it must not fail
+ * on a field they can't see: for a peer-off assignment the window is
+ * inert, so it slides along to keep the column invariant (peer close
+ * after deadline). With peer review on, the window is real and the
+ * professor decides where it goes, so the move is refused instead.
+ *
+ * Returns null for "leave it as it is."
+ */
+export function reconcilePeerClose(args: {
+  deadline: Date;
+  peerCloseAt: Date;
+  peerReview: boolean;
+  peerWindowDays: number;
+}): PeerCloseVerdict {
+  if (args.peerCloseAt > args.deadline) return { ok: true, peerCloseAt: null };
+  if (args.peerReview) {
+    return {
+      ok: false,
+      message:
+        "That deadline is after peer grading closes — move the peer grading close too.",
+    };
+  }
+  return {
+    ok: true,
+    peerCloseAt: new Date(
+      args.deadline.getTime() + args.peerWindowDays * 24 * 60 * 60 * 1000
+    ),
+  };
+}
