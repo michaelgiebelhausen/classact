@@ -57,11 +57,11 @@ function RailLink({
   disabled?: boolean;
 }) {
   const base =
-    "group relative flex w-[62px] flex-col items-center gap-1.5 rounded-xl px-1 py-2.5 text-[10px] font-semibold tracking-tight transition-colors";
+    "group relative flex w-[62px] shrink-0 flex-col items-center gap-1.5 rounded-xl px-1 py-2.5 text-[10px] font-semibold tracking-tight transition-colors";
   const inner = (
     <>
       {active && (
-        <span className="absolute -left-3 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-[var(--sidebar-primary)]" />
+        <span className="absolute -left-[11px] top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-[var(--sidebar-primary)]" />
       )}
       <Icon className="size-5" strokeWidth={1.75} />
       <span className="leading-none">{label}</span>
@@ -106,11 +106,17 @@ export function Sidebar() {
   const homeActive = pathname === "/dashboard" || pathname === "/";
 
   return (
-    <nav className="sticky top-0 z-20 flex h-screen w-[84px] shrink-0 flex-col items-center gap-1.5 bg-[var(--sidebar)] py-5">
+    // The rail is its own scroll container. Fourteen links stacked run
+    // taller than the usable height of a 1366x768 laptop, and the rail is
+    // pinned to the viewport, so without this the bottom of it (Assignments,
+    // Profile) was unreachable: a longer page scrolls past a pinned rail, it
+    // never reveals more of it. h-dvh rather than h-screen so a browser with
+    // a collapsing toolbar doesn't hide the last link behind it.
+    <nav className="sticky top-0 z-20 flex h-dvh w-[84px] shrink-0 flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden bg-[var(--sidebar)] py-5 [scrollbar-width:thin] [scrollbar-color:var(--sidebar-accent)_transparent]">
       <Link
         href="/dashboard"
         prefetch={false}
-        className="mb-3 grid size-11 place-items-center rounded-[13px] bg-gradient-to-br from-[var(--flame)] to-[#c33d1c] font-[family-name:var(--font-heading)] text-xl font-semibold text-white shadow-[0_6px_16px_-4px_rgba(224,85,47,0.6)]"
+        className="mb-3 grid size-11 shrink-0 place-items-center rounded-[13px] bg-gradient-to-br from-[var(--flame)] to-[#c33d1c] font-[family-name:var(--font-heading)] text-xl font-semibold text-white shadow-[0_6px_16px_-4px_rgba(224,85,47,0.6)]"
         aria-label="ClassAct home"
       >
         C
@@ -123,7 +129,7 @@ export function Sidebar() {
         active={homeActive}
       />
 
-      <div className="my-1.5 h-px w-8 bg-white/10" />
+      <div className="my-1.5 h-px w-8 shrink-0 bg-white/10" />
 
       {COURSE_NAV.map((item) => {
         const href =
@@ -146,7 +152,7 @@ export function Sidebar() {
       })}
 
       <div className="flex-1" />
-      <div className="my-1.5 h-px w-8 bg-white/10" />
+      <div className="my-1.5 h-px w-8 shrink-0 bg-white/10" />
       <RailLink
         label="Feedback"
         icon={MessageSquarePlus}
