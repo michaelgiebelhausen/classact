@@ -8,6 +8,7 @@ import {
   noticeLabel,
   parseAttendancePolicy,
   policyOverride,
+  revisionPatch,
   validateAssessment,
   type AbsenceAssessment,
 } from "@/lib/absences";
@@ -208,5 +209,39 @@ describe("flagPolicyConflicts", () => {
       { category: "other", advanceHours: 100 }
     );
     expect(flags).not.toContain("contradicts_policy");
+  });
+});
+
+describe("revisionPatch", () => {
+  it("marks the row as revised exactly once", () => {
+    const first = revisionPatch({ verdict: "unexcused", flags: ["vague"], appealedAt: null });
+    expect(first.ai_flags).toEqual(["vague", "revised"]);
+    const again = revisionPatch({ verdict: "unexcused", flags: first.ai_flags, appealedAt: null });
+    expect(again.ai_flags).toEqual(["vague", "revised"]);
+  });
+
+  it("closes a pending appeal when the revision comes back excused", () => {
+    const patch = revisionPatch({
+      verdict: "excused",
+      flags: [],
+      appealedAt: "2026-09-10T12:00:00Z",
+    });
+    expect(patch.appeal_note).toBeNull();
+    expect(patch.appealed_at).toBeNull();
+  });
+
+  it("leaves a pending appeal standing when the revision is still unexcused", () => {
+    const patch = revisionPatch({
+      verdict: "unexcused",
+      flags: [],
+      appealedAt: "2026-09-10T12:00:00Z",
+    });
+    expect("appeal_note" in patch).toBe(false);
+    expect("appealed_at" in patch).toBe(false);
+  });
+
+  it("never touches appeal fields when nothing was appealed", () => {
+    const patch = revisionPatch({ verdict: "excused", flags: [], appealedAt: null });
+    expect("appeal_note" in patch).toBe(false);
   });
 });

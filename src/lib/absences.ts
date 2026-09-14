@@ -274,10 +274,34 @@ export function policyOverride(
         `Your professor's policy requires documentation for ${categoryLabel(
           input.category
         ).toLowerCase()}. This is recorded as unexcused for now — you can ` +
-        `appeal once you have something to attach.`,
+        `edit this report to attach it once you have it, or appeal to your professor.`,
     };
   }
   return null;
+}
+
+/** Set on ai_flags when a student revises a report; the professor sees it. */
+export const REVISED_FLAG = "revised";
+
+/**
+ * What a revision changes on the row beyond the fresh assessment. The flag
+ * tells the professor the verdict was re-run on new material. A pending
+ * appeal is closed only when the revision resolves it — the row is now
+ * excused, so there is nothing left to argue. If it's still unexcused the
+ * appeal stands; the professor should still hear the student's case.
+ */
+export function revisionPatch(input: {
+  verdict: AbsenceVerdict;
+  flags: string[];
+  appealedAt: string | null;
+}): { ai_flags: string[]; appeal_note?: null; appealed_at?: null } {
+  const ai_flags = input.flags.includes(REVISED_FLAG)
+    ? input.flags
+    : [...input.flags, REVISED_FLAG];
+  if (input.appealedAt && input.verdict === "excused") {
+    return { ai_flags, appeal_note: null, appealed_at: null };
+  }
+  return { ai_flags };
 }
 
 export const MAX_DOC_BASE64_CHARS = 8_000_000; // ≈ 6 MB, same cap as room photos

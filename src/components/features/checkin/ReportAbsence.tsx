@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CalendarOff, CheckCircle2, Paperclip, XCircle } from "lucide-react";
+import { CalendarOff, CheckCircle2, Paperclip, Pencil, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -15,13 +15,23 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ABSENCE_CATEGORIES, MAX_DOC_BASE64_CHARS } from "@/lib/absences";
-import { appealAbsence, submitAbsence, type MyAbsenceView } from "@/server/actions/absences";
+import {
+  appealAbsence,
+  submitAbsence,
+  updateAbsence,
+  type MyAbsenceView,
+} from "@/server/actions/absences";
 import type { AbsenceCategory } from "@/types/db";
 
 /**
  * Student side: report an absence instead of emailing the professor, and see
  * the verdict immediately. Documentation is uploaded, assessed, and dropped —
  * this component never gets it back and the server never stores it.
+ *
+ * The same form also revises an existing report: the common case is a
+ * student who reported without documentation, got "unexcused — docs
+ * required", and comes back with the clinic note. Without this they email
+ * the professor the file, which is exactly what the feature exists to avoid.
  */
 export function ReportAbsence({
   courseId,
@@ -44,6 +54,8 @@ export function ReportAbsence({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  /** Id of the report being revised; null when filing a new one. */
+  const [editing, setEditing] = useState<MyAbsenceView | null>(null);
   const offered = [...upcomingDates, ...pastDates];
   const [date, setDate] = useState(offered[0] ?? "");
   // The dates refresh as classes pass; if the one we're holding is no longer
@@ -70,12 +82,26 @@ export function ReportAbsence({
    */
   function closeForm() {
     setOpen(false);
+    setEditing(null);
     setExplanation("");
+    setCategory("illness");
     setFile(null);
     setDate(offered[0] ?? "");
     // The <input type="file"> keeps its own value; reset the element too or
     // it still shows the old filename.
     if (fileInput.current) fileInput.current.value = "";
+  }
+
+  /** Reopen the form on an existing report. A fresh document has to be re-attached: the old one was never kept. */
+  function startEdit(a: MyAbsenceView) {
+    setEditing(a);
+    setDate(a.date);
+    setCategory(a.category);
+    setExplanation(a.explanation);
+    setFile(null);
+    if (fileInput.current) fileInput.current.value = "";
+    setAppealFor(null);
+    setOpen(true);
   }
 
   async function submit() {
@@ -94,20 +120,33 @@ export function ReportAbsence({
         }
         document = { mimeType: file.type, base64 };
       }
-      const result = await submitAbsence({
-        courseId,
-        date,
-        category,
-        explanation,
-        document,
-      });
+      const result = editing
+        ? await updateAbsence({
+            absenceId: editing.id,
+            category,
+            explanation,
+            document,
+          })
+        : await submitAbsence({
+            courseId,
+            date,
+            category,
+            explanation,
+            document,
+          });
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
       const excused = result.data!.verdict === "excused";
       toast[excused ? "success" : "message"](
-        excused ? "Recorded as excused." : "Recorded as unexcused.",
+        editing
+          ? excused
+            ? "Updated — now excused."
+            : "Updated — still unexcused."
+          : excused
+            ? "Recorded as excused."
+            : "Recorded as unexcused.",
         { description: result.data!.reason, duration: 12000 }
       );
       closeForm();
@@ -167,9 +206,24 @@ export function ReportAbsence({
 
         {open && (
           <div className="grid gap-4 rounded-lg border border-dashed p-4">
+            {editing && (
+              <p className="text-sm">
+                <span className="font-medium">Editing your report for {formatDate(editing.date)}.</span>{" "}
+                <span className="text-muted-foreground">
+                  ClassAct will look at it again with whatever you change or attach.
+                </span>
+              </p>
+            )}
             <div className="grid gap-1.5">
               <Label htmlFor="absence-date">Which class?</Label>
-              {upcomingDates.length + pastDates.length > 0 ? (
+              {editing ? (
+                <p id="absence-date" className="text-sm">
+                  {formatDate(editing.date)}{" "}
+                  <span className="text-xs text-muted-foreground">
+                    — wrong day? Report the right one separately.
+                  </span>
+                </p>
+              ) : upcomingDates.length + pastDates.length > 0 ? (
                 <select
                   id="absence-date"
                   value={date}
@@ -206,7 +260,7 @@ export function ReportAbsence({
                   className="max-w-xs rounded-md border bg-background px-3 py-2 text-sm"
                 />
               )}
-              {pastDates.length > 0 && (
+              {!editing && pastDates.length > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Missed one already? It&apos;s under &ldquo;Already
                   missed&rdquo; — reporting late counts against you less than
@@ -257,6 +311,12 @@ export function ReportAbsence({
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                 className="max-w-sm text-sm"
               />
+              {editing?.hasDocumentation && !file && (
+                <p className="text-xs text-muted-foreground">
+                  Your earlier document was checked and discarded, so it isn&apos;t
+                  here to keep — attach it again if it still applies.
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 A travel letter, interview confirmation, clinic note — whatever
                 supports it.{" "}
@@ -270,7 +330,7 @@ export function ReportAbsence({
 
             <div className="flex flex-wrap gap-2">
               <Button onClick={submit} disabled={busy}>
-                {busy ? "Checking…" : "Submit"}
+                {busy ? "Checking…" : editing ? "Save changes" : "Submit"}
               </Button>
               <Button variant="ghost" onClick={closeForm} disabled={busy}>
                 Cancel
@@ -308,6 +368,21 @@ export function ReportAbsence({
                       <span className="font-medium">Your professor:</span>{" "}
                       {a.professorNote}
                     </p>
+                  )}
+                  {!a.overridden && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant={a.verdict === "unexcused" && !a.hasDocumentation ? "outline" : "ghost"}
+                        onClick={() => startEdit(a)}
+                        disabled={busy || editing?.id === a.id}
+                      >
+                        <Pencil className="mr-1 size-3" />
+                        {a.verdict === "unexcused" && !a.hasDocumentation
+                          ? "Edit or add documentation"
+                          : "Edit"}
+                      </Button>
+                    </div>
                   )}
                   {a.verdict === "unexcused" && !a.overridden && !a.appealedAt && (
                     <div className="mt-2">

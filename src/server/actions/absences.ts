@@ -16,6 +16,8 @@ import {
   noticeLabel,
   parseAttendancePolicy,
   policyOverride,
+  revisionPatch,
+  type AbsenceAssessment,
   type AttendancePolicy,
 } from "@/lib/absences";
 import {
@@ -36,7 +38,7 @@ import {
 import { rosterDisplayName } from "@/lib/names";
 import { rateLimit } from "@/lib/ratelimit";
 import { sendAbsenceAppealNotification } from "@/lib/email";
-import type { AbsenceRow, AbsenceVerdict } from "@/types/db";
+import type { AbsenceCategory, AbsenceRow, AbsenceVerdict } from "@/types/db";
 import type { ActionResult } from "@/server/actions/auth";
 
 /**
@@ -225,29 +227,9 @@ export async function submitAbsence(
   if (!DATE_RE.test(input.date) || !isRealDate(input.date)) {
     return { ok: false, error: "Pick the class date." };
   }
-  if (!isAbsenceCategory(input.category)) {
-    return { ok: false, error: "Pick the reason that fits best." };
-  }
-  const explanation = input.explanation.trim();
-  if (explanation.length < 10) {
-    return { ok: false, error: "Say a sentence or two about what's going on." };
-  }
-  if (explanation.length > 2000) {
-    return { ok: false, error: "Keep the explanation under 2,000 characters." };
-  }
-  let document: { mimeType: string; base64: string } | null = null;
-  if (input.document) {
-    if (!ALLOWED_DOC_MIME.has(input.document.mimeType)) {
-      return { ok: false, error: "Attach a JPEG, PNG, WebP, or PDF." };
-    }
-    if (input.document.base64.length > MAX_DOC_BASE64_CHARS) {
-      return { ok: false, error: "That file is too large — keep it under about 6 MB." };
-    }
-    if (!/^[A-Za-z0-9+/=\s]+$/.test(input.document.base64.slice(0, 2000))) {
-      return { ok: false, error: "That attachment couldn't be read." };
-    }
-    document = input.document;
-  }
+  const fields = validateReportFields(input);
+  if (!fields.ok) return fields;
+  const { category, explanation, document } = fields.data!;
 
   const admin = createAdminClient();
   const course = await loadCourse(input.courseId);
@@ -301,7 +283,7 @@ export async function submitAbsence(
       ok: false,
       error: `You already reported an absence for ${input.date} — it's ${finalVerdict(
         existing
-      )}. Appeal that one if you need to.`,
+      )}. Edit that report instead.`,
     };
   }
 
@@ -332,65 +314,23 @@ export async function submitAbsence(
     input.date
   );
 
-  // Policy facts first; the model only rules on what's genuinely a judgment.
-  const override = policyOverride(course.policy, {
-    category: input.category,
-    hasDocumentation: document !== null,
+  const judged = await judgeReport({
+    courseId: input.courseId,
+    course,
+    category,
+    explanation,
+    document,
+    absenceDate: input.date,
+    notice,
+    meetingLabel,
+    priorExcused,
+    priorUnexcused,
+    attendedElsewhere,
+    revised: false,
   });
-
-  let verdict: AbsenceVerdict;
-  let legitimacy: number;
-  let summary: string;
-  let reason: string;
-  let docKind: string | null = null;
-  let docAuthenticity: number | null = null;
-  let flags: string[] = [];
-
-  if (override) {
-    verdict = override.verdict;
-    legitimacy = 50;
-    summary = override.summary;
-    reason = override.reason;
-    flags = ["contradicts_policy"];
-  } else {
-    const creds = await resolveCourseAi(input.courseId, "absence");
-    if (!creds) {
-      return {
-        ok: false,
-        error:
-          "Absence assessment isn't available right now — the server has no AI key configured. Email your professor instead.",
-      };
-    }
-    const result = await assessAbsence(
-      {
-        courseName: course.name,
-        policy: course.policy,
-        category: input.category,
-        explanation,
-        absenceDate: input.date,
-        meetingLabel,
-        advanceHours: notice,
-        priorExcused,
-        priorUnexcused,
-        attendedElsewhere,
-        document,
-      },
-      creds
-    );
-    if (!result.ok) return { ok: false, error: result.error };
-    verdict = result.assessment.verdict;
-    legitimacy = result.assessment.legitimacy;
-    summary = result.assessment.summary;
-    reason = result.assessment.reason;
-    docKind = result.assessment.docKind;
-    docAuthenticity = result.assessment.docAuthenticity;
-    // Shape validation can't catch a verdict that disagrees with the policy
-    // it was handed — flag it so the professor sees the disagreement.
-    flags = flagPolicyConflicts(result.assessment, course.policy, {
-      category: input.category,
-      advanceHours: notice,
-    });
-  }
+  if (!judged.ok) return judged;
+  const { verdict, legitimacy, summary, reason, docKind, docAuthenticity, flags } =
+    judged.data!;
 
   // The document is out of scope from here on — nothing below touches it.
   const { data: created, error } = await admin
@@ -399,7 +339,7 @@ export async function submitAbsence(
       course_id: input.courseId,
       enrollment_id: enrollment.id,
       absence_date: input.date,
-      category: input.category,
+      category,
       explanation,
       submitted_at: submittedAt.toISOString(),
       advance_hours: notice,
@@ -431,7 +371,266 @@ export async function submitAbsence(
   };
 }
 
+/* ---------------- Shared by submit and revise ---------------- */
+
+interface ReportFields {
+  category: AbsenceCategory;
+  explanation: string;
+  document: { mimeType: string; base64: string } | null;
+}
+
+/**
+ * Everything a student can type or attach, checked before anything is
+ * spent on it. Every AI call is paid for by the platform, so nothing
+ * reaches the model until the report is known to be well-formed.
+ */
+function validateReportFields(input: {
+  category: string;
+  explanation: string;
+  document: { mimeType: string; base64: string } | null;
+}): ActionResult<ReportFields> {
+  if (!isAbsenceCategory(input.category)) {
+    return { ok: false, error: "Pick the reason that fits best." };
+  }
+  const explanation = input.explanation.trim();
+  if (explanation.length < 10) {
+    return { ok: false, error: "Say a sentence or two about what's going on." };
+  }
+  if (explanation.length > 2000) {
+    return { ok: false, error: "Keep the explanation under 2,000 characters." };
+  }
+  let document: { mimeType: string; base64: string } | null = null;
+  if (input.document) {
+    if (!ALLOWED_DOC_MIME.has(input.document.mimeType)) {
+      return { ok: false, error: "Attach a JPEG, PNG, WebP, or PDF." };
+    }
+    if (input.document.base64.length > MAX_DOC_BASE64_CHARS) {
+      return { ok: false, error: "That file is too large — keep it under about 6 MB." };
+    }
+    if (!/^[A-Za-z0-9+/=\s]+$/.test(input.document.base64.slice(0, 2000))) {
+      return { ok: false, error: "That attachment couldn't be read." };
+    }
+    document = input.document;
+  }
+  return { ok: true, data: { category: input.category, explanation, document } };
+}
+
+type Judgment = Omit<AbsenceAssessment, "flags"> & { flags: string[] };
+
+/**
+ * Policy facts first; the model only rules on what's genuinely a judgment.
+ * The document goes in here and nowhere else — it is assessed and dropped.
+ */
+async function judgeReport(args: {
+  courseId: string;
+  course: NonNullable<Awaited<ReturnType<typeof loadCourse>>>;
+  category: AbsenceCategory;
+  explanation: string;
+  document: { mimeType: string; base64: string } | null;
+  absenceDate: string;
+  notice: number | null;
+  meetingLabel: string | null;
+  priorExcused: number;
+  priorUnexcused: number;
+  attendedElsewhere: boolean;
+  revised: boolean;
+}): Promise<ActionResult<Judgment>> {
+  const override = policyOverride(args.course.policy, {
+    category: args.category,
+    hasDocumentation: args.document !== null,
+  });
+  if (override) {
+    return {
+      ok: true,
+      data: {
+        verdict: override.verdict,
+        legitimacy: 50,
+        summary: override.summary,
+        reason: override.reason,
+        docKind: null,
+        docAuthenticity: null,
+        flags: ["contradicts_policy"],
+      },
+    };
+  }
+
+  const creds = await resolveCourseAi(args.courseId, "absence");
+  if (!creds) {
+    return {
+      ok: false,
+      error:
+        "Absence assessment isn't available right now — the server has no AI key configured. Email your professor instead.",
+    };
+  }
+  const result = await assessAbsence(
+    {
+      courseName: args.course.name,
+      policy: args.course.policy,
+      category: args.category,
+      explanation: args.explanation,
+      absenceDate: args.absenceDate,
+      meetingLabel: args.meetingLabel,
+      advanceHours: args.notice,
+      priorExcused: args.priorExcused,
+      priorUnexcused: args.priorUnexcused,
+      attendedElsewhere: args.attendedElsewhere,
+      revised: args.revised,
+      document: args.document,
+    },
+    creds
+  );
+  if (!result.ok) return { ok: false, error: result.error };
+  const a = result.assessment;
+  return {
+    ok: true,
+    data: {
+      ...a,
+      // Shape validation can't catch a verdict that disagrees with the
+      // policy it was handed — flag it so the professor sees the disagreement.
+      flags: flagPolicyConflicts(a, args.course.policy, {
+        category: args.category,
+        advanceHours: args.notice,
+      }),
+    },
+  };
+}
+
+/* ---------------- Revise (student) ---------------- */
+
+export interface UpdateAbsenceInput {
+  absenceId: string;
+  category: string;
+  explanation: string;
+  document: { mimeType: string; base64: string } | null;
+}
+
+/**
+ * A student comes back to a report — typically to attach the documentation
+ * they didn't have the first time, or to say it better. The class date is
+ * fixed (report the right date separately if it was wrong). The original
+ * submission time and notice stand: they gave notice when they gave it.
+ * The AI re-assesses the report as it now stands; the professor sees it
+ * flagged as revised. Once the professor has ruled, the report is closed.
+ */
+export async function updateAbsence(
+  input: UpdateAbsenceInput
+): Promise<ActionResult<SubmitAbsenceResult>> {
+  const gate = needsAdmin();
+  if (gate) return gate;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Sign in first." };
+
+  const fields = validateReportFields(input);
+  if (!fields.ok) return fields;
+  const { category, explanation, document } = fields.data!;
+
+  const admin = createAdminClient();
+  const { data: row } = await admin
+    .from("absences")
+    .select(
+      "id, course_id, enrollment_id, absence_date, advance_hours, appealed_at, professor_verdict, enrollments!inner(profile_id)"
+    )
+    .eq("id", input.absenceId)
+    .maybeSingle();
+  const owner = row?.enrollments as unknown as { profile_id: string | null } | null;
+  if (!row || owner?.profile_id !== user.id) {
+    return { ok: false, error: "That absence isn't yours to edit." };
+  }
+  if (row.professor_verdict) {
+    return {
+      ok: false,
+      error: "Your professor has already ruled on this one — email them if something changed.",
+    };
+  }
+
+  // Same bucket as new reports: a revision is a platform-paid model call too.
+  const limit = rateLimit(`absence:${user.id}`, { limit: 6, windowMs: 60 * 60 * 1000 });
+  if (!limit.allowed) {
+    return {
+      ok: false,
+      error:
+        "That's a lot of absence reports at once — try again in an hour, or email your professor.",
+    };
+  }
+
+  const course = await loadCourse(row.course_id);
+  if (!course) return { ok: false, error: "Course not found." };
+  const meetingLabel = course.schedule ? formatSchedule(course.schedule) : null;
+
+  // History this term, not counting the report being revised.
+  const { data: priors } = await admin
+    .from("absences")
+    .select("id, ai_verdict, professor_verdict")
+    .eq("enrollment_id", row.enrollment_id);
+  let priorExcused = 0;
+  let priorUnexcused = 0;
+  for (const p of priors ?? []) {
+    if (p.id === row.id) continue;
+    if (finalVerdict(p) === "excused") priorExcused++;
+    else priorUnexcused++;
+  }
+
+  const attendedElsewhere = await checkedInElsewhere(
+    user.id,
+    row.course_id,
+    row.absence_date
+  );
+
+  const judged = await judgeReport({
+    courseId: row.course_id,
+    course,
+    category,
+    explanation,
+    document,
+    absenceDate: row.absence_date,
+    notice: row.advance_hours,
+    meetingLabel,
+    priorExcused,
+    priorUnexcused,
+    attendedElsewhere,
+    revised: true,
+  });
+  if (!judged.ok) return judged;
+  const { verdict, legitimacy, summary, reason, docKind, docAuthenticity, flags } =
+    judged.data!;
+
+  // The document is out of scope from here on — nothing below touches it.
+  const { error } = await admin
+    .from("absences")
+    .update({
+      category,
+      explanation,
+      has_documentation: document !== null,
+      documentation_kind: docKind,
+      ai_doc_authenticity: docAuthenticity,
+      ai_verdict: verdict,
+      ai_legitimacy: legitimacy,
+      ai_summary: summary,
+      ai_reason: reason,
+      attended_elsewhere: attendedElsewhere,
+      ...revisionPatch({ verdict, flags, appealedAt: row.appealed_at }),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", row.id);
+  if (error) {
+    console.error("[absences] revise failed:", error.message);
+    return { ok: false, error: "Couldn't save your changes. Try again." };
+  }
+
+  revalidatePath(`/course/${row.course_id}/checkin`);
+  revalidatePath(`/course/${row.course_id}/metrics`);
+  return {
+    ok: true,
+    data: { id: row.id, verdict, reason, date: row.absence_date },
+  };
+}
+
 /* ---------------- Appeal (student) ---------------- */
+
 
 export async function appealAbsence(
   absenceId: string,
@@ -662,6 +861,7 @@ function toView(
 export interface MyAbsenceView {
   id: string;
   date: string;
+  category: AbsenceCategory;
   categoryLabel: string;
   explanation: string;
   verdict: AbsenceVerdict;
@@ -704,6 +904,7 @@ export async function listMyAbsences(courseId: string): Promise<MyAbsenceView[]>
   return (rows ?? []).map((r) => ({
     id: r.id,
     date: r.absence_date,
+    category: r.category,
     categoryLabel: categoryLabel(r.category),
     explanation: r.explanation,
     verdict: finalVerdict(r),

@@ -37,6 +37,7 @@ const FLAG_LABELS: Record<string, string> = {
   doc_looks_edited: "document looks edited",
   repeat_pattern: "repeat pattern",
   no_doc_required_doc: "extra documentation",
+  revised: "revised by student",
 };
 
 export function ScheduledAbsences({
