@@ -473,12 +473,15 @@ export async function submitWork(
     .eq("id", assignmentId)
     .single();
   if (!assignment) return { ok: false, error: "Assignment not found." };
-  // Late submissions are allowed until the professor starts grading: while the
-  // assignment is still "open", a post-deadline submit is accepted and shows as
-  // late (submitted_at > deadline) in the professor's view.
-  if (assignment.state !== "open") {
-    return { ok: false, error: "Grading has started — submissions are closed." };
+  // Grading starts on its own at the deadline, but late work is still taken
+  // right up until the professor publishes: it shows as late (submitted_at >
+  // deadline) and the grading tick scores it and slots it into the ranking.
+  // Once grading has started, though, a submission is handed in once — a
+  // replacement would quietly invalidate a score already given.
+  if (assignment.state === "published") {
+    return { ok: false, error: "Grades are out — submissions are closed." };
   }
+  const gradingStarted = assignment.state !== "open";
   const enrollmentId = await myEnrollment(supabase, assignment.course_id, user.id);
   if (!enrollmentId) return { ok: false, error: "You're not on this course's roster." };
   if (!storagePath.startsWith(`${assignment.course_id}/sub/${enrollmentId}/`)) {
@@ -504,7 +507,9 @@ export async function submitWork(
     assignment.settings
   );
   const axes = resolveGradingAxes(assignment.settings);
-  if (axes.gated) {
+  // Taste files close when grading starts (the rubric is already drawn from
+  // them), so a late submitter can't be asked for one — that would deadlock.
+  if (!gradingStarted && axes.gated) {
     const { data: taste } = await supabase
       .from("taste_files")
       .select("locked_at")
@@ -518,6 +523,7 @@ export async function submitWork(
       };
     }
   } else if (
+    !gradingStarted &&
     axes.tasteSource === "cocreated" &&
     settings.tasteRequirement === "required"
   ) {
@@ -548,6 +554,12 @@ export async function submitWork(
     .eq("assignment_id", assignmentId)
     .eq("enrollment_id", enrollmentId)
     .maybeSingle();
+  if (existing && gradingStarted) {
+    return {
+      ok: false,
+      error: "Grading has started — your submission is locked in and can't be replaced.",
+    };
+  }
   if (existing) {
     const { error } = await supabase
       .from("submissions")

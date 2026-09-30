@@ -6,10 +6,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { advanceAnalysis } from "@/server/actions/grading";
 
 /**
- * Turns the analysis crank once the professor has kicked grading off: polls
- * advanceAnalysis (each call is one bounded chunk) until peer grading opens,
- * then refreshes. The professor's open page drives it — advanceAnalysis is
- * professor-only, and this renders only for them.
+ * Shows grading progress on the professor's page. The every-minute grading
+ * tick drives the analysis on its own; calling advanceAnalysis from here too
+ * (each call is one bounded chunk, under the engine's lock) just makes the
+ * progress visible sooner. Refreshes when the state moves on.
  */
 
 const PHASE_LABELS: Record<string, string> = {
@@ -64,7 +64,7 @@ export function AnalysisRunner({
         }
         // Paused on a missing key: retry slowly; otherwise keep cranking.
         await new Promise((r) =>
-          setTimeout(r, data.state === "awaiting_key" ? 30_000 : 1500)
+          setTimeout(r, data.state === "awaiting_key" ? 30_000 : 3000)
         );
       }
       running.current = false;
@@ -88,7 +88,7 @@ export function AnalysisRunner({
         )}
         {error && <p className="text-sm text-muted-foreground">{error}</p>}
         <p className="text-xs text-muted-foreground">
-          Keep this page open until it finishes — it grades in the background.
+          You can close this page — grading keeps going on its own.
         </p>
       </CardContent>
     </Card>

@@ -38,6 +38,8 @@ import {
   type SubmissionRosterRow,
 } from "@/components/features/assignments/SubmissionRoster";
 import { AssignmentEdit } from "@/components/features/assignments/AssignmentEdit";
+import { GradingQueueNotice } from "@/components/features/assignments/GradingQueueNotice";
+import { classifyUnscored, type ScoreFailure } from "@/lib/gradingqueue";
 import type { ThemeScore } from "@/types/db";
 
 /**
@@ -88,6 +90,26 @@ export default async function AssignmentPage({
     .maybeSingle();
   const enrollmentId = myEnrollment?.id ?? null;
 
+  // Grading starts on its own at the deadline, but a student who hasn't
+  // turned anything in can still hand it in late until grades publish — so
+  // they get the submit form, not a "grading is underway" card.
+  let lateSubmitOpen = false;
+  if (
+    !isProfessor &&
+    enrollmentId &&
+    assignment.state !== "open" &&
+    assignment.state !== "published"
+  ) {
+    const { data: mine } = await supabase
+      .from("submissions")
+      .select("id")
+      .eq("assignment_id", assignmentId)
+      .eq("enrollment_id", enrollmentId)
+      .limit(1)
+      .maybeSingle();
+    lateSubmitOpen = !mine;
+  }
+
   const header = (
     <div className="grid gap-3">
       <div>
@@ -105,12 +127,11 @@ export default async function AssignmentPage({
     </div>
   );
 
-  // ---------- Grading in progress (the professor kicked it off) ----------
-  // Grading is professor-triggered, so the deadline passing no longer starts
-  // anything on its own. Once the professor presses Start, the state is
-  // "analyzing" — only they drive the crank; a student sees a status card and
-  // never triggers analysis.
-  if (assignment.state === "analyzing") {
+  // ---------- Grading in progress ----------
+  // The grading tick starts this at the deadline and drives it server-side;
+  // the professor's open page only shows progress (and nudges it along). A
+  // student sees a status card and never triggers analysis.
+  if (assignment.state === "analyzing" && !lateSubmitOpen) {
     return (
       <div className="grid gap-6">
         {header}
@@ -129,7 +150,7 @@ export default async function AssignmentPage({
   }
 
   // ---------- Paused: no working AI key (BYOK) ----------
-  if (assignment.state === "awaiting_key") {
+  if (assignment.state === "awaiting_key" && !lateSubmitOpen) {
     return (
       <div className="grid gap-6">
         {header}
@@ -315,7 +336,8 @@ export default async function AssignmentPage({
             <Card className="border-primary/50">
               <CardContent className="grid gap-3 py-10 text-center">
                 <p className="font-medium">
-                  The deadline has passed — ready to grade.
+                  The deadline has passed — grading starts on its own within a
+                  minute or two.
                 </p>
                 <p className="text-sm text-muted-foreground">
                   {submitted ?? 0} submissions
@@ -323,14 +345,15 @@ export default async function AssignmentPage({
                   {axes.tasteSource === "cocreated"
                     ? ` · ${tastes ?? 0} taste files`
                     : ""}
-                  . Students can still turn work in — it&apos;s marked late —
-                  until you start. Starting grading closes submissions and{" "}
+                  . Grading{" "}
                   {axes.tasteSource === "cocreated"
                     ? "builds the rubric from the class's taste files"
                     : "grades every submission against your taste file"}
                   {axes.peerReview
                     ? ", drafts the ranking, and opens peer grading."
-                    : " and hands you the ranking to finalize."}
+                    : " and hands you the ranking to finalize."}{" "}
+                  Late work is still accepted and graded as it arrives, until
+                  you publish. You don&apos;t need to keep this page open.
                 </p>
                 <div className="flex justify-center">
                   <StartGradingButton assignmentId={assignmentId} />
@@ -353,9 +376,10 @@ export default async function AssignmentPage({
                     : ""}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  When the deadline passes you&apos;ll start grading here —
-                  nothing runs until you do. Students can keep submitting past
-                  the deadline (marked late) right up until you start.
+                  Grading starts on its own when the deadline passes — you
+                  don&apos;t need to be here. Late work is still accepted after
+                  that (marked late) and graded as it arrives, right up until
+                  you publish.
                 </p>
                 {estimate !== null && pricing && (
                   <p className="text-sm text-muted-foreground">
@@ -461,6 +485,22 @@ export default async function AssignmentPage({
       similarity: p.similarity,
     }));
 
+    // Late work still in the grader, and anything it gave up on. Only scored
+    // submissions have a ranking row, so the rest are one of the two.
+    const failures =
+      ((assignment.analysis as { failures?: Record<string, ScoreFailure> } | null)
+        ?.failures) ?? {};
+    const gradingQueue = classifyUnscored({
+      submissionIds: (subRows ?? []).map((s) => s.id),
+      scoredIds: new Set((rankRows ?? []).map((r) => r.submission_id)),
+      failures,
+      now,
+    });
+    const unreadable = gradingQueue.givenUp.map((id) => ({
+      name: nameOfSub(id),
+      reason: failures[id]?.error ?? "",
+    }));
+
     // The bands the professor opens on: their own if they've saved any, then a
     // course template's, then the points-scaled A+/A/B/C default — Worth
     // pre-filled from the assignment's point total.
@@ -489,6 +529,13 @@ export default async function AssignmentPage({
           briefUrl={briefUrl}
           briefExt={briefExt}
         />
+        {assignment.state !== "published" && (
+          <GradingQueueNotice
+            assignmentId={assignmentId}
+            pending={gradingQueue.ready.length + gradingQueue.waiting.length}
+            unreadable={unreadable}
+          />
+        )}
         <GradingCockpit
           assignmentId={assignmentId}
           state={
@@ -539,7 +586,7 @@ export default async function AssignmentPage({
     );
   }
 
-  if (assignment.state === "open") {
+  if (assignment.state === "open" || lateSubmitOpen) {
     const [{ data: taste }, { data: submission }] = await Promise.all([
       supabase
         .from("taste_files")
@@ -618,6 +665,7 @@ export default async function AssignmentPage({
           tasteLocked={tasteLocked}
           instructorTaste={instructorTaste}
           deliverableType={deliverableType}
+          gradingStarted={lateSubmitOpen}
         />
       </div>
     );

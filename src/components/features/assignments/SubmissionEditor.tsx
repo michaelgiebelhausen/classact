@@ -65,6 +65,10 @@ interface Props {
   instructorTaste?: string;
   /** What the professor asked students to hand in; restricts the picker. */
   deliverableType?: DeliverableType;
+  /** Grading already started and this student hasn't submitted: a one-time
+   *  late hand-in. Taste files are closed by then, and the file can't be
+   *  replaced once it's in. */
+  gradingStarted?: boolean;
 }
 
 export function SubmissionEditor({
@@ -84,6 +88,7 @@ export function SubmissionEditor({
   tasteLocked = false,
   instructorTaste = "",
   deliverableType = "any",
+  gradingStarted = false,
 }: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -93,9 +98,11 @@ export function SubmissionEditor({
   // Students write a taste file whenever the source is co-created; the gated
   // flow always shows the editor, legacy tasty respects the requirement knob.
   const isCocreated = tasteSource === "cocreated";
-  const showTasteEditor = isCocreated && (gated || tasteRequirement !== "off");
+  // Taste files close when grading starts, so a late hand-in skips them.
+  const showTasteEditor =
+    !gradingStarted && isCocreated && (gated || tasteRequirement !== "off");
   // In the gated flow the upload stays sealed until the taste file is locked.
-  const uploadBlocked = gated && !tasteLocked;
+  const uploadBlocked = !gradingStarted && gated && !tasteLocked;
   const [note, setNote] = useState(submissionNote);
   const [uploading, setUploading] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
@@ -157,11 +164,12 @@ export function SubmissionEditor({
 
   async function handleFile(file: File) {
     // Past the deadline is allowed — it's a late submission, not a closed one;
-    // the server still refuses once the professor has started grading.
+    // the server only refuses once grades are published.
 
     // Legacy tasty with a required taste (the gated flow blocks the button
     // until locked, so this only matters there). The server refuses too.
     if (
+      !gradingStarted &&
       isCocreated &&
       !gated &&
       tasteRequirement === "required" &&
@@ -202,9 +210,11 @@ export function SubmissionEditor({
       toast.success(
         submittedAt
           ? "Submission replaced."
-          : deadlinePassed
-            ? "Submitted late — you can still replace it until grading starts."
-            : "Submitted. You can replace it until grading starts."
+          : gradingStarted
+            ? "Submitted late — it will be graded automatically."
+            : deadlinePassed
+              ? "Submitted late — it will be graded automatically."
+              : "Submitted. You can replace it until the deadline."
       );
       router.refresh();
     } else {
@@ -319,8 +329,9 @@ export function SubmissionEditor({
             One file — {acceptLabel}, up to 20 MB — your entire submission
             for this assignment, so combine any parts into a single file.
             Don&apos;t put your name in it — your work is judged anonymously.
-            Resubmitting replaces the file (your last edit is what counts for
-            timeliness).
+            {gradingStarted
+              ? " Grading has already started, so this goes in once — check it's the right file before you upload."
+              : " Resubmitting replaces the file (your last edit is what counts for timeliness)."}
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -422,8 +433,8 @@ export function SubmissionEditor({
           {deadlinePassed && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
               The deadline has passed, but you can still turn in your work — it
-              will be marked late. Submissions close for good once your
-              professor starts grading.
+              will be marked late and graded automatically. Submissions close
+              for good when your professor publishes grades.
             </p>
           )}
         </CardContent>

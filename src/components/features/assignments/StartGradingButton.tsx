@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button";
 import { advanceAnalysis } from "@/server/actions/grading";
 
 /**
- * Kicks off grading on the professor's command. Nothing runs after the
- * deadline until this is clicked. The first advanceAnalysis call flips the
- * assignment out of "open" — which is what closes the late-submission window —
- * and runs the first chunk; the refresh then re-renders under "analyzing",
- * where AnalysisRunner takes over and cranks the rest to peer grading.
+ * Starts grading now instead of waiting for the next tick (which starts it on
+ * its own within a minute of the deadline). The first advanceAnalysis call
+ * flips the assignment to "analyzing" and runs the first chunk; the refresh
+ * then re-renders under "analyzing", where AnalysisRunner shows progress.
+ * Late work stays open either way, until the professor publishes.
  */
 export function StartGradingButton({ assignmentId }: { assignmentId: string }) {
   const router = useRouter();
@@ -38,7 +38,7 @@ export function StartGradingButton({ assignmentId }: { assignmentId: string }) {
 
   return (
     <Button onClick={() => void start()} disabled={starting} size="lg">
-      {starting ? "Starting…" : "Start grading"}
+      {starting ? "Starting…" : "Start now"}
     </Button>
   );
 }

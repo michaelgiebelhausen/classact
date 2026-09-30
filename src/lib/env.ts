@@ -35,6 +35,9 @@ export const env = {
   stripeWebhookSecret: orUndef(process.env.STRIPE_WEBHOOK_SECRET),
   stripePriceId: orUndef(process.env.STRIPE_PRICE_ID),
   billingEnabled: process.env.BILLING_ENABLED === "true",
+  // Shared with pg_cron (Vault: grading_tick_secret) — authenticates the
+  // every-minute grading tick at /api/cron/grading.
+  cronSecret: orUndef(process.env.CRON_SECRET),
 } as const
 
 export const isConfigured = {

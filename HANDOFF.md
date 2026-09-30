@@ -358,6 +358,47 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Grading runs on its own (0048)
+
+Grading used to advance only while the professor kept the assignment page open
+— their browser turned the crank. Close the tab and it stopped (NB03–NB05 sat
+half-graded for two weeks). Now a server tick at `/api/cron/grading`, pinged
+every minute by pg_cron, starts grading once a deadline passes, resumes anything
+stalled, and scores late work as it arrives. **Late submissions stay open until
+the professor publishes** (a student who already submitted can't replace the
+file once grading starts); publishing waits until any late work is scored.
+A file the AI can't read no longer freezes the class: oversized images are
+shrunk first, and anything that still fails after 4 tries is listed in the
+cockpit for grading by hand (with a "Try these again" button).
+
+Safe to deploy BEFORE this setup: until it's done the endpoint answers 503 and
+grading just runs the old way, from the professor's open page.
+
+1. **Supabase SQL editor** — create the shared secret and print it:
+   ```sql
+   select vault.create_secret(
+     replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
+     'grading_tick_secret');
+   select decrypted_secret from vault.decrypted_secrets where name = 'grading_tick_secret';
+   ```
+2. **Vercel → Settings → Environment Variables** — add `CRON_SECRET` (Production)
+   with that value, then redeploy.
+3. **Supabase SQL editor** — run `supabase/migrations/0048_grading_tick.sql`.
+4. **Check it's alive** a couple of minutes later:
+   ```sql
+   select status_code, content, created from net._http_response
+   order by created desc limit 5;
+   ```
+   `202` = working. `401` = the two secrets differ. `503` = `CRON_SECRET` isn't
+   on the deployment yet (redeploy).
+
+No schema changes; the engine keeps its lock and retry bookkeeping inside
+`assignments.analysis`. Stop it any time with `select cron.unschedule('grading-tick');`.
+
+**Heads-up — the backlog starts immediately:** every past-due assignment that was
+never graded begins grading on the first tick, on the course owner's OpenRouter
+key (≈400 submissions across ~12 assignments at the time of writing).
+
 ## Two grading axes, locked co-created taste, and a standards signal (0045)
 
 **Run `supabase/migrations/0045_taste_lock_standards.sql` BEFORE deploying.**
