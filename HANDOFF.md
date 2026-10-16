@@ -358,6 +358,13 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Cron history stays small (0049)
+
+pg_cron logs every run, and the grading tick runs every minute (~1,440 rows a
+day). **Supabase SQL editor** — run `supabase/migrations/0049_cron_history_cleanup.sql`.
+It sweeps `cron.job_run_details` every 10 minutes, keeping successful runs for
+an hour and failed runs for a week (roughly a hundred rows). Safe to re-run.
+
 ## Grading runs on its own (0048)
 
 Grading used to advance only while the professor kept the assignment page open
