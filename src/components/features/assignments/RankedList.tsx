@@ -6,7 +6,14 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { computeScores, displayPoints, type Band, type ScoreMode } from "@/lib/bands";
+import {
+  computeScores,
+  displayPoints,
+  moveRow,
+  normalizeDividers,
+  type Band,
+  type ScoreMode,
+} from "@/lib/bands";
 
 /**
  * The grading surface: the class in order, best at top, with the grade lines
@@ -44,7 +51,11 @@ interface Props {
   canEditBands: boolean;
   /** Why reordering is unavailable, when it is. */
   lockedReason?: string;
-  onReorder: (submissionId: string, toPosition: number) => void;
+  /**
+   * A row moved. `dividers` are the lines after the move: they shift with the
+   * row so that only the moved student changes band.
+   */
+  onReorder: (submissionId: string, toPosition: number, dividers: number[]) => void;
   onBandsChange: (bands: Band[], dividers: number[]) => void;
   onOpen: (submissionId: string) => void;
   openId: string | null;
@@ -323,13 +334,55 @@ export function RankedList({
     );
   }
 
-  function handleDrop(position: number) {
+  /** The band whose rows sit just below the gap at `position`. */
+  function bandBelow(position: number): number {
+    return scored[position]?.bandIndex ?? Math.max(0, bands.length - 1);
+  }
+
+  /**
+   * Move row `index` into `toBand` at `gap`, carrying the lines along so
+   * nobody else changes band.
+   */
+  function place(index: number, gap: number, toBand: number) {
+    const student = students[index];
+    if (!student) return;
+    const before = normalizeDividers(dividers, students.length, bands.length);
+    const { to, dividers: next } = moveRow({
+      rowCount: students.length,
+      dividers,
+      bandCount: bands.length,
+      from: index,
+      gap,
+      toBand,
+    });
+    if (to === index && next.every((d, i) => d === before[i])) return;
+    onReorder(student.submissionId, to, next);
+  }
+
+  /**
+   * Arrow keys move one step at a time. At a band's edge that step is the
+   * line itself — the row joins the next band without passing anyone — so
+   * every position in every band is reachable from the keyboard.
+   */
+  function nudge(index: number, direction: -1 | 1) {
+    const band = scored[index]?.bandIndex ?? 0;
+    const lines = normalizeDividers(dividers, students.length, bands.length);
+    const top = band === 0 ? 0 : lines[band - 1];
+    const bottom = band === lines.length ? students.length - 1 : lines[band] - 1;
+    if (direction < 0) {
+      if (index > top) place(index, index - 1, band);
+      else if (band > 0) place(index, index, band - 1);
+    } else {
+      if (index < bottom) place(index, index + 2, band);
+      else if (band < lines.length) place(index, index + 1, band + 1);
+    }
+  }
+
+  /** `band` is the band the drop target belongs to; a row joins it. */
+  function handleDrop(position: number, band: number = bandBelow(position)) {
     if (!drag) return;
     if (drag.kind === "row") {
-      const student = students[drag.index];
-      // Dropping below its own position: the list closes up behind it first.
-      const to = position > drag.index ? position - 1 : position;
-      if (student && to !== drag.index) onReorder(student.submissionId, to);
+      place(drag.index, position, band);
     } else {
       moveDivider(drag.index, position);
     }
@@ -368,7 +421,7 @@ export function RankedList({
         onDragEnd={endDrag}
         onMove={moveDivider}
         onOverHere={() => setOver(dividers[line])}
-        onDropHere={() => handleDrop(dividers[line])}
+        onDropHere={() => handleDrop(dividers[line], line + 1)}
         onSetBand={(patch) => setBand(line + 1, patch)}
         onRemove={() => removeBand(line + 1)}
       />
@@ -457,8 +510,11 @@ export function RankedList({
               }}
               onDrop={(e) => {
                 e.preventDefault();
+                // A student dropped on a student joins that student's band,
+                // whichever half they land on.
                 handleDrop(
-                  dropHalf(e.currentTarget.getBoundingClientRect(), e.clientY, index)
+                  dropHalf(e.currentTarget.getBoundingClientRect(), e.clientY, index),
+                  scored[index]?.bandIndex
                 );
               }}
               className={[
@@ -483,12 +539,12 @@ export function RankedList({
                 aria-label={`Reorder ${student.name}. Use arrow keys to move them.`}
                 onKeyDown={(e) => {
                   if (!canReorder) return;
-                  if (e.key === "ArrowUp" && index > 0) {
+                  if (e.key === "ArrowUp") {
                     e.preventDefault();
-                    onReorder(student.submissionId, index - 1);
-                  } else if (e.key === "ArrowDown" && index < students.length - 1) {
+                    nudge(index, -1);
+                  } else if (e.key === "ArrowDown") {
                     e.preventDefault();
-                    onReorder(student.submissionId, index + 1);
+                    nudge(index, 1);
                   }
                 }}
                 className="w-4 shrink-0 cursor-grab text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-30 active:cursor-grabbing"

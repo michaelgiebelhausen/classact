@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -225,10 +225,34 @@ export function GradingCockpit({
     return false;
   }
 
-  async function reorder(submissionId: string, toPosition: number) {
+  async function reorder(
+    submissionId: string,
+    toPosition: number,
+    nextDividers: number[]
+  ) {
     const result = await reorderSubmission(assignmentId, submissionId, toPosition);
-    if (result.ok) router.refresh();
-    else toast.error(result.error);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    // The lines moved with the student. Saved straight away like the order
+    // is — unless band edits are already waiting on Save, which will carry
+    // these lines with them.
+    if (!bandsDirty && !problem) {
+      const saved = await saveBands(assignmentId, bands, nextDividers);
+      if (!saved.ok) {
+        setBandsDirty(true);
+        toast.error(saved.error);
+      }
+    } else {
+      setBandsDirty(true);
+    }
+    // Lines and order land in one render, so nobody flickers across a line
+    // while the new order is on its way.
+    startTransition(() => {
+      setDividers(nextDividers);
+      router.refresh();
+    });
   }
 
   async function savePoints() {

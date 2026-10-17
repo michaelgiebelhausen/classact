@@ -7,6 +7,7 @@ import {
   cutScoresFromDividers,
   displayPoints,
   dividersFromThresholds,
+  moveRow,
   normalizeDividers,
   persistPoints,
   type Band,
@@ -222,6 +223,64 @@ describe("applyLocalMove", () => {
   it("ignores ids it does not know", () => {
     expect(applyLocalMove(["a", "b"], "zz", "a")).toEqual(["a", "b"]);
     expect(applyLocalMove(["a", "b"], "a", "a")).toEqual(["a", "b"]);
+  });
+});
+
+describe("moveRow", () => {
+  // Ten rows: A = 0–1, B = 2–4, C = 5–9.
+  const base = { rowCount: 10, dividers: [2, 5], bandCount: 3 };
+
+  it("grows the band a student is dragged into instead of pushing one out", () => {
+    // Row 7 (C) dropped above row 0 joins A: A is now three, nobody else moves band.
+    expect(moveRow({ ...base, from: 7, gap: 0, toBand: 0 })).toEqual({
+      to: 0,
+      dividers: [3, 6],
+    });
+  });
+
+  it("lands at the foot of a band when dropped on its last row's lower half", () => {
+    expect(moveRow({ ...base, from: 7, gap: 2, toBand: 0 })).toEqual({
+      to: 2,
+      dividers: [3, 6],
+    });
+  });
+
+  it("shrinks the band a student is dragged out of", () => {
+    // Row 0 (A) dropped below everyone joins C; A keeps only its other student.
+    expect(moveRow({ ...base, from: 0, gap: 10, toBand: 2 })).toEqual({
+      to: 9,
+      dividers: [1, 4],
+    });
+  });
+
+  it("leaves the lines alone for a move inside one band", () => {
+    expect(moveRow({ ...base, from: 4, gap: 2, toBand: 1 })).toEqual({
+      to: 2,
+      dividers: [2, 5],
+    });
+  });
+
+  it("keeps the landing spot inside the band it was dropped into", () => {
+    // Asked for B but aimed at the top of the list: it lands at B's top.
+    expect(moveRow({ ...base, from: 8, gap: 0, toBand: 1 })).toEqual({
+      to: 2,
+      dividers: [2, 6],
+    });
+  });
+
+  it("crosses a line without passing anyone", () => {
+    // Row 2 is B's first row; stepping into A keeps it in place.
+    expect(moveRow({ ...base, from: 2, gap: 2, toBand: 0 })).toEqual({
+      to: 2,
+      dividers: [3, 5],
+    });
+  });
+
+  it("fills an empty band", () => {
+    // B is empty (both lines at 2); row 6 dropped onto B's line joins it.
+    expect(
+      moveRow({ rowCount: 10, dividers: [2, 2], bandCount: 3, from: 6, gap: 2, toBand: 1 })
+    ).toEqual({ to: 2, dividers: [2, 3] });
   });
 });
 

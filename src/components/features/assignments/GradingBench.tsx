@@ -85,7 +85,8 @@ export function GradingBench({ courses, runs }: Props) {
   });
 
   /** The mock has no server: reorder in place, same shape as the real one. */
-  function reorder(submissionId: string, toPosition: number) {
+  function reorder(submissionId: string, toPosition: number, nextDividers: number[]) {
+    setDividers(nextDividers);
     setStudents((prev) => {
       const from = prev.findIndex((s) => s.submissionId === submissionId);
       if (from < 0) return prev;

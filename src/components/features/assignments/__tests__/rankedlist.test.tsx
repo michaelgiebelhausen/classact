@@ -101,7 +101,26 @@ describe("RankedList", () => {
     fireEvent.keyDown(screen.getByLabelText(/Reorder Student 0/), {
       key: "ArrowDown",
     });
-    expect(onReorder).toHaveBeenCalledWith("s0", 1);
+    expect(onReorder).toHaveBeenCalledWith("s0", 1, [2]);
+  });
+
+  test("dragging a student into the top band grows it, not pushes one out", () => {
+    const { onReorder } = setup();
+    // Two in the top band (s0, s1); s4 dropped on s1 joins them.
+    fireEvent.dragStart(screen.getByLabelText(/Reorder Student 4/));
+    const target = screen.getByRole("button", { name: "Student 1" }).closest("li")!;
+    fireEvent.drop(target, { clientY: 0 });
+    expect(onReorder).toHaveBeenCalledWith("s4", 1, [3]);
+  });
+
+  test("an arrow key at a band's edge steps over the line, passing no one", () => {
+    const { onReorder } = setup();
+    // s2 heads the second band; one press up puts it at the top band's foot.
+    fireEvent.keyDown(screen.getByLabelText(/Reorder Student 2/), { key: "ArrowUp" });
+    expect(onReorder).toHaveBeenLastCalledWith("s2", 2, [3]);
+    // s1 is the top band's foot; one press down drops it below the line.
+    fireEvent.keyDown(screen.getByLabelText(/Reorder Student 1/), { key: "ArrowDown" });
+    expect(onReorder).toHaveBeenLastCalledWith("s1", 1, [1]);
   });
 
   test("the top row cannot be moved above itself", () => {

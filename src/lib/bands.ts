@@ -68,6 +68,13 @@ function bandRanges(
   return out;
 }
 
+/** The band a row at `position` sits in, under already-normalized lines. */
+function bandOf(position: number, lines: number[]): number {
+  let b = 0;
+  for (const line of lines) if (line <= position) b++;
+  return b;
+}
+
 /** Band index for each row position. */
 export function assignBands(
   rowCount: number,
@@ -77,9 +84,7 @@ export function assignBands(
   const lines = normalizeDividers(dividers, rowCount, bandCount);
   const out: number[] = [];
   for (let p = 0; p < rowCount; p++) {
-    let b = 0;
-    for (const line of lines) if (line <= p) b++;
-    out.push(Math.min(b, Math.max(0, bandCount - 1)));
+    out.push(Math.min(bandOf(p, lines), Math.max(0, bandCount - 1)));
   }
   return out;
 }
@@ -158,6 +163,45 @@ export function displayPoints(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/**
+ * A professor drag: one row moves and every other row keeps its band. The
+ * moved row leaves its band and joins `toBand`, and the lines shift by one to
+ * make room — so dragging a third student into a two-student top band leaves
+ * a three-student top band rather than pushing one of the two out.
+ *
+ * `gap` is where the row was dropped, counted in the list as it stood
+ * (0 = above everyone, rowCount = below everyone). The landing position is
+ * kept inside `toBand`, so a drop can never strand the row across a line.
+ */
+export function moveRow(input: {
+  rowCount: number;
+  dividers: number[];
+  bandCount: number;
+  from: number;
+  gap: number;
+  toBand: number;
+}): { to: number; dividers: number[] } {
+  const { rowCount, from, gap } = input;
+  const lines = normalizeDividers(input.dividers, rowCount, input.bandCount);
+  const lastBand = lines.length;
+  const fromBand = bandOf(from, lines);
+  const toBand = Math.min(lastBand, Math.max(0, Math.round(input.toBand)));
+
+  // Lift the row out: its band shrinks, so every line below it rises one.
+  const without = lines.map((d, k) => (k >= fromBand ? d - 1 : d));
+  // Where the target band runs in the shortened list (`end` inclusive: an
+  // insert there lands at the band's foot, still inside it).
+  const start = toBand === 0 ? 0 : without[toBand - 1];
+  const end = toBand === lastBand ? rowCount - 1 : without[toBand];
+  const wanted = gap > from ? gap - 1 : gap;
+  const to = Math.min(end, Math.max(start, wanted));
+  // Drop it in: the target band grows, so every line below it falls one.
+  return {
+    to,
+    dividers: without.map((d, k) => (k >= toBand ? d + 1 : d)),
+  };
 }
 
 /**
