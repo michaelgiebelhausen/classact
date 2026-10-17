@@ -32,6 +32,14 @@ const MOCK_NAMES = [
   "Sophie Wilson", "John McCarthy",
 ];
 
+const MOCK_THEMES = [
+  "Full Sources Panel",
+  "Junk Is Fine, Emptiness Isn't",
+  "Engage, Don't Just Ask",
+  "Quiz as Proof of Learning",
+  "Above Chance, Below Suspicion",
+];
+
 function mockStudents(): RankedStudent[] {
   return MOCK_NAMES.map((name, i) => ({
     submissionId: `mock-${i}`,
@@ -40,6 +48,10 @@ function mockStudents(): RankedStudent[] {
     // A plausible spread: bunched in the middle, thin at the tails.
     score: Math.round(100 - i * 3.2 - (i % 3) * 1.5),
     comparisons: (i * 7) % 5,
+    // Theme scores that drift down the list, with some texture per theme.
+    themeScores: MOCK_THEMES.map((_, t) =>
+      Math.max(1, Math.min(10, 10 - Math.floor(i / 4) - ((i + t * 3) % 3)))
+    ),
   }));
 }
 
@@ -222,6 +234,7 @@ export function GradingBench({ courses, runs }: Props) {
 
           <RankedList
             students={students}
+            themes={MOCK_THEMES}
             bands={bands}
             dividers={dividers}
             scoreMode={scoreMode}

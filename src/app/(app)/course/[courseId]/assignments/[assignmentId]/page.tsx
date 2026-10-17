@@ -399,8 +399,13 @@ export default async function AssignmentPage({
     }
 
     // Cockpit states: peer_review / finalizing / published.
-    const [{ data: rankRows }, { data: subRows }, { data: comparisonRows }] =
-      await Promise.all([
+    const [
+      { data: rankRows },
+      { data: subRows },
+      { data: comparisonRows },
+      { data: scoreRows },
+      { data: themeRows },
+    ] = await Promise.all([
         supabase
           .from("rankings")
           .select("submission_id, bt_score, rank, final_rank, letter")
@@ -413,7 +418,33 @@ export default async function AssignmentPage({
           .from("comparisons")
           .select("left_submission_id, right_submission_id, judge_enrollment_id, verdict")
           .eq("assignment_id", assignmentId),
+        // The AI's per-theme read of every submission, laid out as columns on
+        // the ranked list — the professor sees why a row sits where it does
+        // without opening it.
+        supabase
+          .from("ai_scores")
+          .select("submission_id, theme_scores")
+          .eq("assignment_id", assignmentId),
+        supabase
+          .from("rubric_themes")
+          .select("id, name")
+          .eq("assignment_id", assignmentId)
+          .order("position"),
       ]);
+    const rubricThemes = themeRows ?? [];
+    const themeScoresBySub = new Map(
+      (scoreRows ?? []).map((row) => {
+        const byTheme = new Map(
+          ((row.theme_scores ?? []) as Array<{ themeId: string; score: number }>).map(
+            (t) => [t.themeId, Number(t.score)]
+          )
+        );
+        return [
+          row.submission_id,
+          rubricThemes.map((t) => byTheme.get(t.id) ?? null),
+        ] as const;
+      })
+    );
 
     // Who came in after the bell — carried onto the ranked list as a badge.
     const lateBySub = new Map(
@@ -465,6 +496,7 @@ export default async function AssignmentPage({
           letter: r.letter,
           comparisons: touch.get(r.submission_id) ?? 0,
           late: lateBySub.get(r.submission_id) ?? false,
+          themeScores: themeScoresBySub.get(r.submission_id),
         };
       })
       .sort((a, b) => a.rank - b.rank);
@@ -545,6 +577,7 @@ export default async function AssignmentPage({
           }
           peerCloseAt={assignment.peer_close_at}
           students={students}
+          themes={rubricThemes.map((t) => t.name)}
           initialBands={initialBands}
           // Where the lines start: saved positions if the professor has any,
           // otherwise derived from the AI's scores against the resolved cut

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { GripVertical, Minus, Plus } from "lucide-react";
+import { EyeOff, GripVertical, Minus, Plus } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,10 +26,14 @@ export interface RankedStudent {
   comparisons: number;
   /** True when the work was turned in after the deadline. */
   late?: boolean;
+  /** The AI's 0–10 score per rubric theme, aligned with the list's `themes`. */
+  themeScores?: Array<number | null>;
 }
 
 interface Props {
   students: RankedStudent[];
+  /** Rubric theme names, one score column each between name and grade. */
+  themes?: string[];
   bands: Band[];
   dividers: number[];
   scoreMode: ScoreMode;
@@ -65,6 +69,40 @@ function initials(name: string): string {
  */
 function dropHalf(rect: DOMRect, clientY: number, index: number): number {
   return clientY - rect.top > rect.height / 2 ? index + 1 : index;
+}
+
+/**
+ * One rubric score in a row: the number over a small meter, so a column of
+ * them reads as a profile at a glance. Columns only appear once the list is
+ * wide enough to give the name room — below that, the open view has them.
+ */
+function ScoreCell({ theme, score }: { theme: string; score: number | null }) {
+  if (score === null) {
+    return (
+      <span
+        className="w-14 text-center text-xs text-muted-foreground"
+        aria-label={`${theme}: not scored`}
+      >
+        –
+      </span>
+    );
+  }
+  const shown = Number.isInteger(score) ? score : score.toFixed(1);
+  return (
+    <span
+      className="grid w-14 justify-items-center gap-1"
+      title={`${theme}: ${shown}/10`}
+      aria-label={`${theme}: ${shown} of 10`}
+    >
+      <span className="text-xs tabular-nums leading-none">{shown}</span>
+      <span className="h-1 w-9 overflow-hidden rounded-full bg-muted">
+        <span
+          className="block h-full rounded-full bg-primary"
+          style={{ width: `${Math.min(100, Math.max(0, score * 10))}%` }}
+        />
+      </span>
+    </span>
+  );
 }
 
 /** The gap between two rows: where a dragged row or line comes to rest. */
@@ -217,6 +255,7 @@ function DividerRow({
 
 export function RankedList({
   students,
+  themes = [],
   bands,
   dividers,
   scoreMode,
@@ -334,8 +373,12 @@ export function RankedList({
     ));
   }
 
+  // The theme columns share one width rule with their header, so a row and
+  // the names above it can't drift apart.
+  const themeColumns = "hidden shrink-0 items-center gap-1 @2xl/ranked:flex";
+
   return (
-    <div className="grid gap-3">
+    <div className="@container/ranked grid gap-3">
       {/* The top band's own label and value — it has no line above it. */}
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
         <span className="text-xs text-muted-foreground">Top band:</span>
@@ -366,6 +409,28 @@ export function RankedList({
 
       {!canReorder && lockedReason && (
         <p className="text-xs text-muted-foreground">{lockedReason}</p>
+      )}
+
+      {themes.length > 0 && (
+        <div
+          aria-hidden
+          className="hidden items-end gap-3 border border-transparent px-3 text-[10px] leading-tight text-muted-foreground @2xl/ranked:flex"
+        >
+          {/* Grip, position and face, measured to match the rows below. */}
+          <span className="w-4 shrink-0" />
+          <span className="w-6 shrink-0" />
+          <span className="w-8 shrink-0" />
+          <span className="flex-1">Student</span>
+          <span className={themeColumns}>
+            {themes.map((theme, i) => (
+              <span key={i} title={theme} className="line-clamp-2 w-14 text-center">
+                {theme}
+              </span>
+            ))}
+          </span>
+          <span className="w-9 shrink-0" />
+          <span className="w-14 shrink-0 text-right">Points</span>
+        </div>
       )}
 
       <ul className="grid gap-1">
@@ -417,16 +482,16 @@ export function RankedList({
                     onReorder(student.submissionId, index + 1);
                   }
                 }}
-                className="cursor-grab text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-30 active:cursor-grabbing"
+                className="w-4 shrink-0 cursor-grab text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-30 active:cursor-grabbing"
               >
                 <GripVertical className="size-4" />
               </button>
 
-              <span className="w-6 text-right text-sm tabular-nums text-muted-foreground">
+              <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
                 {index + 1}
               </span>
 
-              <Avatar className="size-8 border border-border">
+              <Avatar className="size-8 shrink-0 border border-border">
                 {student.photoUrl && (
                   <AvatarImage src={student.photoUrl} alt={student.name} />
                 )}
@@ -435,31 +500,53 @@ export function RankedList({
                 </AvatarFallback>
               </Avatar>
 
-              <button
-                type="button"
-                onClick={() => onOpen(student.submissionId)}
-                className="flex-1 truncate text-left text-sm font-medium hover:underline"
-              >
-                {student.name}
-              </button>
-
-              {student.late && (
-                <Badge
-                  variant="outline"
-                  className="border-amber-500/50 text-[10px] text-amber-600 dark:text-amber-400"
+              {/* Name and its flags travel together, so the score columns
+                  to the right stay lined up whatever a row is flagged with. */}
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpen(student.submissionId)}
+                  className="truncate text-left text-sm font-medium hover:underline"
                 >
-                  Late
-                </Badge>
+                  {student.name}
+                </button>
+                {student.late && (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 border-amber-500/50 text-[10px] text-amber-600 dark:text-amber-400"
+                  >
+                    Late
+                  </Badge>
+                )}
+                {student.comparisons === 0 && (
+                  <span
+                    title="No human eyes yet — only the AI has placed this one"
+                    className="shrink-0 text-muted-foreground"
+                  >
+                    <EyeOff className="size-3.5" aria-hidden />
+                    <span className="sr-only">no human eyes</span>
+                  </span>
+                )}
+              </span>
+
+              {themes.length > 0 && (
+                <span className={themeColumns}>
+                  {themes.map((theme, t) => (
+                    <ScoreCell
+                      key={t}
+                      theme={theme}
+                      score={student.themeScores?.[t] ?? null}
+                    />
+                  ))}
+                </span>
               )}
-              {student.comparisons === 0 && (
-                <Badge variant="outline" className="text-[10px]">
-                  no human eyes
-                </Badge>
-              )}
-              {scored[index]?.label && (
-                <Badge variant="secondary">{scored[index].label}</Badge>
-              )}
-              <span className="w-14 text-right text-sm font-semibold tabular-nums">
+
+              <span className="flex w-9 shrink-0 justify-center">
+                {scored[index]?.label && (
+                  <Badge variant="secondary">{scored[index].label}</Badge>
+                )}
+              </span>
+              <span className="w-14 shrink-0 text-right text-sm font-semibold tabular-nums">
                 {displayPoints(scored[index]?.points ?? null)}
               </span>
             </li>

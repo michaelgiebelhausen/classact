@@ -71,7 +71,9 @@ export default async function AppLayout({
             </Link>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-6xl flex-1 px-8 py-8">
+        {/* A page opts into a big monitor's full width with data-wide (the
+            grading cockpit does); everything else keeps a readable measure. */}
+        <main className="mx-auto w-full max-w-6xl flex-1 px-8 py-8 has-[[data-wide]]:max-w-[120rem]">
           {children}
         </main>
       </div>

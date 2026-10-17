@@ -65,6 +65,21 @@ describe("RankedList", () => {
     expect(screen.getByText("no human eyes")).toBeInTheDocument();
   });
 
+  test("lays each rubric theme's score on the row, in rubric order", () => {
+    setup({
+      themes: ["Sources", "Depth"],
+      students: students.map((s, i) =>
+        i === 0 ? { ...s, themeScores: [8, null] } : s
+      ),
+    });
+    const row = screen.getByRole("button", { name: "Student 0" }).closest("li")!;
+    expect(within(row).getByLabelText("Sources: 8 of 10")).toBeInTheDocument();
+    expect(within(row).getByLabelText("Depth: not scored")).toBeInTheDocument();
+    // A row without scores still holds its columns, so the grid stays aligned.
+    const other = screen.getByRole("button", { name: "Student 1" }).closest("li")!;
+    expect(within(other).getByLabelText("Sources: not scored")).toBeInTheDocument();
+  });
+
   test("moving a student down reports the position they land on", () => {
     const { onReorder } = setup();
     fireEvent.keyDown(screen.getByLabelText(/Reorder Student 0/), {

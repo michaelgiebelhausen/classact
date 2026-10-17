@@ -66,6 +66,8 @@ export interface CockpitStudent {
   comparisons: number;
   /** True when the work was turned in after the deadline. */
   late?: boolean;
+  /** The AI's 0–10 score per rubric theme, aligned with `themes`. */
+  themeScores?: Array<number | null>;
 }
 
 interface Props {
@@ -74,6 +76,8 @@ interface Props {
   peerCloseAt: string;
   /** Already sorted best-first by the page (final_rank ?? rank). */
   students: CockpitStudent[];
+  /** Rubric theme names, in rubric order — one score column each. */
+  themes: string[];
   initialBands: Band[];
   initialDividers: number[];
   scoreMode: ScoreMode;
@@ -100,6 +104,7 @@ export function GradingCockpit({
   state,
   peerCloseAt,
   students,
+  themes,
   initialBands,
   initialDividers,
   scoreMode: initialScoreMode,
@@ -296,10 +301,15 @@ export function GradingCockpit({
     }
   }
 
-  const openStudent = students.find((s) => s.submissionId === openId) ?? null;
+  const openIndex = students.findIndex((s) => s.submissionId === openId);
+  const openStudent = openIndex >= 0 ? students[openIndex] : null;
+  const prevStudent = openIndex > 0 ? students[openIndex - 1] : null;
+  const nextStudent = openIndex >= 0 ? (students[openIndex + 1] ?? null) : null;
 
   return (
-    <div className="grid gap-4">
+    // data-wide lets the app shell give this page the full width of a big
+    // monitor: on one, the work opens beside the list instead of below it.
+    <div data-wide className="@container/cockpit grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={published ? "default" : "secondary"}>
           {published
@@ -322,6 +332,10 @@ export function GradingCockpit({
         </Badge>
       </div>
 
+      {/* Wide enough, the list and the open work sit side by side, the work
+          pinned in view while the list scrolls past it. Narrower, the work
+          stacks below the list as it always has. */}
+      <div className="grid gap-4 @[84rem]/cockpit:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] @[84rem]/cockpit:items-start">
       <Card>
         <CardHeader>
           <CardTitle>The class, ranked</CardTitle>
@@ -391,6 +405,7 @@ export function GradingCockpit({
 
           <RankedList
             students={students}
+            themes={themes}
             bands={bands}
             dividers={dividers}
             scoreMode={scoreMode}
@@ -410,14 +425,26 @@ export function GradingCockpit({
         </CardContent>
       </Card>
 
-      {openStudent && (
-        <SpeedView
-          assignmentId={assignmentId}
-          submissionId={openStudent.submissionId}
-          studentName={openStudent.name}
-          onClose={() => setOpenId(null)}
-        />
-      )}
+      {/* Pinned just under the app's 4rem header, as tall as the window
+          allows: the work is what the professor came to read. */}
+      <div className="@[84rem]/cockpit:sticky @[84rem]/cockpit:top-20 @[84rem]/cockpit:h-[calc(100vh-6rem)]">
+        {openStudent ? (
+          <SpeedView
+            assignmentId={assignmentId}
+            submissionId={openStudent.submissionId}
+            studentName={openStudent.name}
+            onClose={() => setOpenId(null)}
+            onPrev={prevStudent ? () => setOpenId(prevStudent.submissionId) : undefined}
+            onNext={nextStudent ? () => setOpenId(nextStudent.submissionId) : undefined}
+            docHeightClass="h-[75vh] @[84rem]/cockpit:h-full"
+          />
+        ) : (
+          <div className="hidden h-full place-items-center rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground @[84rem]/cockpit:grid">
+            Click a name to read the work here.
+          </div>
+        )}
+      </div>
+      </div>
 
       <Card>
         <CardHeader>
