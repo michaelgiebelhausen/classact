@@ -80,6 +80,22 @@ describe("RankedList", () => {
     expect(within(other).getByLabelText("Sources: not scored")).toBeInTheDocument();
   });
 
+  test("marks the rows the professor has already read, unless one is open", () => {
+    setup({
+      students: students.map((s, i) => (i <= 1 ? { ...s, viewed: true } : s)),
+      openId: "s1",
+    });
+    const row = (name: string) =>
+      screen.getByRole("button", { name }).closest("li")!;
+    expect(row("Student 0")).toHaveAttribute("data-viewed");
+    expect(row("Student 0").className).toContain("bg-green-500/10");
+    expect(within(row("Student 0")).getByText("(already read)")).toBeInTheDocument();
+    // The open row keeps its own highlight while it's open.
+    expect(row("Student 1").className).toContain("bg-primary/5");
+    expect(row("Student 1").className).not.toContain("bg-green-500/10");
+    expect(row("Student 2")).not.toHaveAttribute("data-viewed");
+  });
+
   test("moving a student down reports the position they land on", () => {
     const { onReorder } = setup();
     fireEvent.keyDown(screen.getByLabelText(/Reorder Student 0/), {

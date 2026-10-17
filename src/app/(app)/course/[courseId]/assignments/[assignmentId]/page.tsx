@@ -405,6 +405,7 @@ export default async function AssignmentPage({
       { data: comparisonRows },
       { data: scoreRows },
       { data: themeRows },
+      { data: viewRows },
     ] = await Promise.all([
         supabase
           .from("rankings")
@@ -412,7 +413,7 @@ export default async function AssignmentPage({
           .eq("assignment_id", assignmentId),
         supabase
           .from("submissions")
-          .select("id, enrollment_id, submitted_at")
+          .select("id, enrollment_id, submitted_at, last_edit_at")
           .eq("assignment_id", assignmentId),
         supabase
           .from("comparisons")
@@ -430,6 +431,12 @@ export default async function AssignmentPage({
           .select("id, name")
           .eq("assignment_id", assignmentId)
           .order("position"),
+        // Which rows the professor has already opened. Its own query, so a
+        // database without 0050 just shows every row unread.
+        supabase
+          .from("submission_views")
+          .select("submission_id, viewed_at")
+          .eq("assignment_id", assignmentId),
       ]);
     const rubricThemes = themeRows ?? [];
     const themeScoresBySub = new Map(
@@ -466,6 +473,20 @@ export default async function AssignmentPage({
       }
     }
 
+    // Read means opened since the student last changed it: work replaced
+    // after the professor looked comes back unread.
+    const viewedAtBySub = new Map(
+      (viewRows ?? []).map((v) => [v.submission_id, v.viewed_at])
+    );
+    const viewedSubs = new Set(
+      (subRows ?? [])
+        .filter((s) => {
+          const viewedAt = viewedAtBySub.get(s.id);
+          return viewedAt !== undefined && new Date(viewedAt) >= new Date(s.last_edit_at);
+        })
+        .map((s) => s.id)
+    );
+
     const enrollmentBySub = new Map(
       (subRows ?? []).map((s) => [s.id, s.enrollment_id])
     );
@@ -497,6 +518,7 @@ export default async function AssignmentPage({
           comparisons: touch.get(r.submission_id) ?? 0,
           late: lateBySub.get(r.submission_id) ?? false,
           themeScores: themeScoresBySub.get(r.submission_id),
+          viewed: viewedSubs.has(r.submission_id),
         };
       })
       .sort((a, b) => a.rank - b.rank);

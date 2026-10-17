@@ -392,6 +392,14 @@ export type RubricViewRow = {
   first_viewed_at: string
 }
 
+/** When the professor last opened a submission in the grading cockpit (0050). */
+export type SubmissionViewRow = {
+  submission_id: string
+  assignment_id: string
+  course_id: string
+  viewed_at: string
+}
+
 /** Neighbor seat labels by relation — persisted, layout-agnostic adjacency. */
 export type SeatNeighbors = Partial<Record<SeatRelation, string>>
 
@@ -836,6 +844,7 @@ export type Database = {
       comparisons: TableShape<ComparisonRow>
       rankings: TableShape<RankingRow>
       rubric_views: TableShape<RubricViewRow>
+      submission_views: TableShape<SubmissionViewRow>
       shout_outs: TableShape<ShoutOutRow>
       participation_comparisons: TableShape<ParticipationComparisonRow>
       student_flags: TableShape<StudentFlagRow>

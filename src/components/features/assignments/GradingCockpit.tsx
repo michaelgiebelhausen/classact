@@ -68,6 +68,8 @@ export interface CockpitStudent {
   late?: boolean;
   /** The AI's 0–10 score per rubric theme, aligned with `themes`. */
   themeScores?: Array<number | null>;
+  /** True once the professor has opened this work since it last changed. */
+  viewed?: boolean;
 }
 
 interface Props {
@@ -127,6 +129,20 @@ export function GradingCockpit({
     initialPoints === null ? "" : String(initialPoints)
   );
   const [openId, setOpenId] = useState<string | null>(null);
+  // Opened on this visit. The server records each open too, but the page
+  // isn't refreshed for it, so the row turns read from here straight away.
+  const [openedHere, setOpenedHere] = useState<ReadonlySet<string>>(new Set());
+  function openWork(id: string) {
+    setOpenId(id);
+    setOpenedHere((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }
+  const listed = useMemo(
+    () =>
+      students.map((s) =>
+        !s.viewed && openedHere.has(s.submissionId) ? { ...s, viewed: true } : s
+      ),
+    [students, openedHere]
+  );
   const [pair, setPair] = useState<{
     comparisonId: string;
     left: string;
@@ -404,7 +420,7 @@ export function GradingCockpit({
           {problem && <p className="text-sm text-destructive">{problem}</p>}
 
           <RankedList
-            students={students}
+            students={listed}
             themes={themes}
             bands={bands}
             dividers={dividers}
@@ -419,7 +435,7 @@ export function GradingCockpit({
             }
             onReorder={reorder}
             onBandsChange={changeBands}
-            onOpen={(id) => setOpenId((prev) => (prev === id ? null : id))}
+            onOpen={(id) => (openId === id ? setOpenId(null) : openWork(id))}
             openId={openId}
           />
         </CardContent>
@@ -434,8 +450,8 @@ export function GradingCockpit({
             submissionId={openStudent.submissionId}
             studentName={openStudent.name}
             onClose={() => setOpenId(null)}
-            onPrev={prevStudent ? () => setOpenId(prevStudent.submissionId) : undefined}
-            onNext={nextStudent ? () => setOpenId(nextStudent.submissionId) : undefined}
+            onPrev={prevStudent ? () => openWork(prevStudent.submissionId) : undefined}
+            onNext={nextStudent ? () => openWork(nextStudent.submissionId) : undefined}
             docHeightClass="h-[75vh] @[84rem]/cockpit:h-full"
           />
         ) : (

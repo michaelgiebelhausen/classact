@@ -656,7 +656,7 @@ export async function getSubmissionReview(
     await Promise.all([
       admin
         .from("submissions")
-        .select("id, storage_path, note")
+        .select("id, course_id, storage_path, note")
         .eq("id", submissionId)
         .eq("assignment_id", assignmentId)
         .single(),
@@ -673,9 +673,19 @@ export async function getSubmissionReview(
     ]);
   if (!submission) return { ok: false, error: "Submission not found." };
 
-  const { data: signed } = await admin.storage
-    .from(ASSIGNMENT_BUCKET)
-    .createSignedUrl(submission.storage_path, SIGNED_URL_SECONDS);
+  const [{ data: signed }] = await Promise.all([
+    admin.storage
+      .from(ASSIGNMENT_BUCKET)
+      .createSignedUrl(submission.storage_path, SIGNED_URL_SECONDS),
+    // Marks the row read on the ranked list. Its error is dropped on
+    // purpose: failing to remember a view must never stop the work opening.
+    admin.from("submission_views").upsert({
+      submission_id: submission.id,
+      assignment_id: assignmentId,
+      course_id: submission.course_id,
+      viewed_at: new Date().toISOString(),
+    }),
+  ]);
   if (!signed?.signedUrl) {
     return { ok: false, error: "Couldn't open the file — try again." };
   }

@@ -110,6 +110,11 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
     columns: [],
     migration: "0044_lecture_presence.sql",
   },
+  {
+    table: "submission_views",
+    columns: [],
+    migration: "0050_submission_views.sql",
+  },
 ];
 
 /**

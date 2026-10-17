@@ -28,6 +28,8 @@ export interface RankedStudent {
   late?: boolean;
   /** The AI's 0–10 score per rubric theme, aligned with the list's `themes`. */
   themeScores?: Array<number | null>;
+  /** True once the professor has opened this work since it last changed. */
+  viewed?: boolean;
 }
 
 interface Props {
@@ -462,8 +464,15 @@ export function RankedList({
               className={[
                 "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
                 drag?.kind === "row" && drag.index === index ? "opacity-50" : "",
-                openId === student.submissionId ? "border-primary bg-primary/5" : "",
+                // The open row's highlight wins; behind it, a read row turns
+                // green so the professor can see what's left to look at.
+                openId === student.submissionId
+                  ? "border-primary bg-primary/5"
+                  : student.viewed
+                    ? "border-green-500/40 bg-green-500/10"
+                    : "",
               ].join(" ")}
+              data-viewed={student.viewed ? "" : undefined}
             >
               <button
                 type="button"
@@ -527,6 +536,7 @@ export function RankedList({
                     <span className="sr-only">no human eyes</span>
                   </span>
                 )}
+                {student.viewed && <span className="sr-only">(already read)</span>}
               </span>
 
               {themes.length > 0 && (
