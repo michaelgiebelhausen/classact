@@ -115,6 +115,16 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
     columns: [],
     migration: "0050_submission_views.sql",
   },
+  {
+    table: "rubric_themes",
+    columns: ["weight"],
+    migration: "0051_rubric_library.sql",
+  },
+  {
+    table: "saved_rubrics",
+    columns: [],
+    migration: "0051_rubric_library.sql",
+  },
 ];
 
 /**

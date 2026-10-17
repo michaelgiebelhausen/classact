@@ -1,6 +1,7 @@
 import "server-only";
 import { env } from "@/lib/env";
 import type { ThemeProvenance } from "@/types/db";
+import { MAX_CRITERIA, proposedWeights } from "@/lib/rubric";
 
 /**
  * Tasty Grading's AI layer (OpenRouter, same account/model as question
@@ -202,6 +203,8 @@ export interface EmergentTheme {
   description: string;
   provenance: ThemeProvenance;
   items: Array<{ quote: string; enrollment_id: string | null }>;
+  /** Set when this theme IS one of the professor's seed criteria. */
+  seedId?: string;
 }
 
 export async function emergeRubric(
@@ -214,9 +217,15 @@ export async function emergeRubric(
        *  rendered as prose by tasteProse(). */
       text: string;
     }>;
+    /** The professor's rubric grid, when they built one before the deadline.
+     *  Fixed: every seed comes back exactly as written (the class can only
+     *  add evidence to it), and the class's own themes join beside them. */
+    seeds?: Array<{ id: string; name: string; description: string }>;
   },
   creds: AiCallCreds
 ): Promise<AiResult<EmergentTheme[]>> {
+  const seeds = input.seeds ?? [];
+  const seedByTag = new Map(seeds.map((s, i) => [`P${i + 1}`, s]));
   const corpus = input.tasteFiles
     .map((tf, i) => {
       const who = tf.enrollmentId === null ? "PROFESSOR" : `S${i}`;
@@ -234,15 +243,27 @@ export async function emergeRubric(
     "Extract 4-8 emergent THEMES (latent constructs, like scales in psychometrics). Each theme is evidenced by ITEMS: near-verbatim quotes of the best sentences students actually wrote, each tagged with its author tag (S3, PROFESSOR, ...).",
     "Prefer themes several voices support. If a PROFESSOR taste file is present, its themes are seeds that must survive (provenance 'professor', or 'both' when the class echoes them). Themes only the class raised get provenance 'class'.",
     "Theme names: short and vivid. Descriptions: 1-2 sentences defining the construct.",
-    'Reply with ONLY JSON: {"themes":[{"name":string,"description":string,"provenance":"professor"|"class"|"both","items":[{"quote":string,"author":string}]}]}',
+    ...(seeds.length > 0
+      ? [
+          'The PROFESSOR has already fixed some rubric criteria, tagged P1, P2, ... below. Return EVERY one of them exactly once with "seed" set to its tag, and attach as items any class quotes that evidence it (items may be empty). Do not rename, merge, or split them.',
+          'Then add the themes ONLY the class raised that no seed already covers, without a "seed" field.',
+        ]
+      : []),
+    'Reply with ONLY JSON: {"themes":[{"name":string,"description":string,"provenance":"professor"|"class"|"both","seed"?:string,"items":[{"quote":string,"author":string}]}]}',
   ].join("\n");
+  const seedText =
+    seeds.length > 0
+      ? `\n\nThe professor's fixed criteria:\n${seeds
+          .map((sd, i) => `[P${i + 1}] ${sd.name} — ${sd.description}`)
+          .join("\n")}`
+      : "";
 
   const result = await callModel(
     [
       { role: "system", content: system },
       {
         role: "user",
-        content: `Assignment: "${input.assignmentTitle}".\n\nTaste files:\n\n${corpus.slice(0, 120_000)}`,
+        content: `Assignment: "${input.assignmentTitle}".${seedText}\n\nTaste files:\n\n${corpus.slice(0, 120_000)}`,
       },
     ],
     150_000,
@@ -255,11 +276,13 @@ export async function emergeRubric(
     return { ok: false, error: "Rubric analysis failed — try again." };
   }
   const themes: EmergentTheme[] = [];
+  const seedThemes = new Map<string, EmergentTheme>();
   for (const raw of parsed.themes) {
     if (typeof raw !== "object" || raw === null) continue;
     const t = raw as Record<string, unknown>;
+    const seed = typeof t.seed === "string" ? seedByTag.get(t.seed) : undefined;
     const name = typeof t.name === "string" ? t.name.trim().slice(0, 80) : "";
-    if (!name) continue;
+    if (!name && !seed) continue;
     const provenance: ThemeProvenance =
       t.provenance === "professor" || t.provenance === "both" ? t.provenance : "class";
     const items: EmergentTheme["items"] = [];
@@ -274,7 +297,20 @@ export async function emergeRubric(
         items.push({ quote, enrollment_id: idByTag.get(tag) ?? null });
       }
     }
-    if (items.length === 0) continue;
+    if (seed) {
+      // The professor's words stand; the class only adds evidence. A seed the
+      // model returned twice keeps the first.
+      if (seedThemes.has(seed.id)) continue;
+      seedThemes.set(seed.id, {
+        name: seed.name,
+        description: seed.description,
+        provenance: items.some((i) => i.enrollment_id !== null) ? "both" : "professor",
+        items,
+        seedId: seed.id,
+      });
+      continue;
+    }
+    if (items.length === 0 || themes.length >= 8) continue;
     themes.push({
       name,
       description:
@@ -282,12 +318,107 @@ export async function emergeRubric(
       provenance,
       items,
     });
-    if (themes.length >= 8) break;
   }
-  if (themes.length === 0) {
+  // Seeds always survive — one the model dropped comes back with no quotes.
+  const seeded: EmergentTheme[] = seeds.map(
+    (sd) =>
+      seedThemes.get(sd.id) ?? {
+        name: sd.name,
+        description: sd.description,
+        provenance: "professor",
+        items: [],
+        seedId: sd.id,
+      }
+  );
+  // A class theme that merely repeats a seed's name would be a duplicate row.
+  const seedNames = new Set(seeds.map((sd) => sd.name.trim().toLowerCase()));
+  const all = [
+    ...seeded,
+    ...themes.filter((t) => !seedNames.has(t.name.trim().toLowerCase())),
+  ].slice(0, Math.max(MAX_CRITERIA, seeds.length));
+  if (all.length === 0) {
     return { ok: false, error: "No usable themes emerged — try again." };
   }
-  return { ok: true, data: themes };
+  return { ok: true, data: all };
+}
+
+// ---------------------------------------------------------------------------
+// Taste file → rubric grid (the professor's own, while the assignment is open)
+// ---------------------------------------------------------------------------
+
+export interface DraftCriterion {
+  name: string;
+  description: string;
+  /** A percentage share; the set sums to roughly 100. */
+  weight: number;
+}
+
+/**
+ * Turn the professor's prose taste file into a rubric grid they can edit:
+ * criteria with what excellent looks like and a proposed weight. A faithful
+ * restructuring of THEIR standard — nothing they didn't say gets invented.
+ */
+export async function rubricFromTaste(
+  input: { assignmentTitle: string; instructions: string; tasteText: string },
+  creds: AiCallCreds
+): Promise<AiResult<DraftCriterion[]>> {
+  const system = [
+    "You turn a professor's free-form 'taste file' — their own prose about what makes work on an assignment good — into a rubric grid they will edit.",
+    "Extract 3-8 CRITERIA. Each: a short name (2-4 words), a description of what EXCELLENT work looks like on it (1-2 concrete, checkable sentences), and a weight: the percentage of the grade it deserves, judging by how much the professor emphasizes it. Weights sum to 100.",
+    "Stay faithful: every criterion must come from what the professor actually wrote. Do not add generic criteria (grammar, formatting, citations) unless they asked for them. Keep their own phrasing where you can.",
+    "If the taste file is really one instruction (e.g. 'count the questions marked correct'), one or two criteria is the right answer.",
+    'Reply with ONLY JSON: {"criteria":[{"name":string,"description":string,"weight":number}]}',
+  ].join("\n");
+  const instructions = input.instructions.trim();
+  const result = await callModel(
+    [
+      { role: "system", content: system },
+      {
+        role: "user",
+        content: `Assignment: "${input.assignmentTitle}".${
+          instructions
+            ? `\n\nInstructions given to students:\n${instructions.slice(0, 8000)}`
+            : ""
+        }\n\nThe professor's taste file:\n${input.tasteText.slice(0, 20_000)}`,
+      },
+    ],
+    90_000,
+    "rubricdraft",
+    creds
+  );
+  if (!result.ok) return result;
+  const parsed = parseJson<{ criteria?: unknown }>(result.data, "rubricdraft");
+  if (!parsed || !Array.isArray(parsed.criteria)) {
+    return { ok: false, error: "Couldn't turn the taste file into a rubric — try again." };
+  }
+  const rows: Array<{ name: string; description: string; weight: unknown }> = [];
+  const seen = new Set<string>();
+  for (const raw of parsed.criteria) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const c = raw as Record<string, unknown>;
+    const name = typeof c.name === "string" ? c.name.trim().slice(0, 80) : "";
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    rows.push({
+      name,
+      description:
+        typeof c.description === "string" ? c.description.trim().slice(0, 600) : "",
+      weight: c.weight,
+    });
+    if (rows.length >= MAX_CRITERIA) break;
+  }
+  if (rows.length === 0) {
+    return { ok: false, error: "Couldn't turn the taste file into a rubric — try again." };
+  }
+  const weights = proposedWeights(rows.map((r) => r.weight));
+  return {
+    ok: true,
+    data: rows.map((r, i) => ({
+      name: r.name,
+      description: r.description,
+      weight: weights[i],
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------

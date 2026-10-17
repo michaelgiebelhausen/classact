@@ -117,9 +117,10 @@ export function AssignmentEdit({
 
   const canEditDeadline = state === "open";
   const canEditPeerClose = state === "open" || state === "peer_review";
-  // The rubric is emerged from the taste file at the deadline, so a later
-  // edit would change nothing and quietly imply it had — the server refuses
-  // it too. Locked exactly like the deadline once grading starts.
+  // The taste file is drafted into the rubric grid while the assignment is
+  // open; once grading starts the grid itself is what's edited (and
+  // regraded), so the prose locks exactly like the deadline — the server
+  // refuses a later edit too.
   const canEditTaste = state === "open";
   // Whether a student taste file is required closes with submissions: changing
   // what the deliverable includes after they've handed it in would fail people
@@ -497,12 +498,12 @@ export function AssignmentEdit({
           />
           <p className="text-xs text-muted-foreground">
             {!canEditTaste
-              ? "Locked — the rubric was already drawn from this at the deadline."
+              ? "Locked — grading has started. Edit the rubric grid below instead; it can be regraded at any point."
               : legacyTasty
-                ? "Private. It joins the class's taste files as one voice among many — the rubric that emerges must carry your themes through."
+                ? "Private. It becomes your rubric grid below, which seeds the class's themes and survives word for word."
                 : source === "cocreated"
-                  ? "Students see this once they've locked their own — and each student's taste is scored against it."
-                  : "There's no emergent rubric here — students are graded against this."}
+                  ? "Students see this once they've locked their own — and each student's taste is scored against it. It also becomes your rubric grid below."
+                  : "Saving turns this into the rubric grid below — that grid is what every submission is graded against."}
           </p>
         </div>
 

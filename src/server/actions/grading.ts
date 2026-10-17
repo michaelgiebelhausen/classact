@@ -475,6 +475,13 @@ export async function reorderSubmission(
       error: "Close peer grading first — the order is still being refined.",
     };
   }
+  // A drag now would be thrown away when the regrade rebuilds the order.
+  if (((assignment.analysis ?? {}) as AnalysisState).regrade) {
+    return {
+      ok: false,
+      error: "A regrade is running — the list is rebuilt when it finishes, so reorder after.",
+    };
+  }
   if (!isConfigured.supabaseAdmin) {
     return { ok: false, error: "Server isn't configured (service role missing)." };
   }
@@ -528,6 +535,17 @@ export async function publishAssignment(assignmentId: string): Promise<ActionRes
     return { ok: false, error: "Server isn't configured (service role missing)." };
   }
   const admin = createAdminClient();
+
+  // Half the class re-read against the new rubric and half against the old
+  // is not a list anyone should publish.
+  const regrade = ((assignment.analysis ?? {}) as AnalysisState).regrade;
+  if (regrade) {
+    const left = regrade.pending.length;
+    return {
+      ok: false,
+      error: `The regrade is still re-reading ${left} submission${left === 1 ? "" : "s"} — publish once it finishes.`,
+    };
+  }
 
   // Submissions stay open until this click, so late work may still be in the
   // grader. Publishing now would leave it out of the grades — wait for it.

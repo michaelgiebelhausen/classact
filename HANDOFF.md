@@ -358,6 +358,37 @@ no redeploy.
 `SCHEMA_CONTRACT`.** A stale entry costs one wrong log line; a missing one
 costs an empty classroom.
 
+## Editable rubric, regrade, My rubrics (0051)
+
+The rubric is now a grid the professor owns at any point, shown under the
+taste file on the assignment page. **Supabase SQL editor** — run
+`supabase/migrations/0051_rubric_library.sql` (adds `rubric_themes.weight`
+and the `saved_rubrics` table). Safe to re-run. Until it's applied the grid
+shows the missing-column message read-only, and grading and ranking run
+exactly as before (the AI's holistic score ranks the class).
+
+- **Taste file → grid.** While the assignment is open, the professor's taste
+  file is drafted into criteria (name, what excellent looks like, weight) as
+  soon as it's saved, and redrafted whenever it changes — until the professor
+  edits the grid by hand. After that only "Rebuild from taste file" replaces
+  it.
+- **At the deadline** an instructor-sourced assignment grades against the
+  grid as-is (no emergence). Co-created: the grid seeds the class's themes and
+  survives word for word; class-only themes join at the seeds' average weight.
+- **Weights rank the class.** The ranking prior is the weighted mean of the
+  per-criterion scores (it was the AI's separate holistic score). This applies
+  to every assignment once 0051 is in, so a draft ranking still in peer review
+  can shift slightly on its next recompute; a list the professor already owns
+  doesn't move until they regrade.
+- **Regrade at any point after grading.** Weight-only changes re-rank
+  instantly with no AI call; changed wording re-reads every submission on the
+  professor's key, driven by the same grading tick. Either way the
+  professor's manual order is replaced by the new ranking (they confirm
+  first), and a **published** assignment is unpublished until they publish
+  again. Publishing and dragging wait while an AI regrade is running.
+- **My rubrics.** Save a grid under a name (same name replaces), import it
+  into any assignment in any course. Copies, never links.
+
 ## Cron history stays small (0049)
 
 pg_cron logs every run, and the grading tick runs every minute (~1,440 rows a

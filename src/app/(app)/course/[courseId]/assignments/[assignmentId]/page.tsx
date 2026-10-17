@@ -39,8 +39,12 @@ import {
 } from "@/components/features/assignments/SubmissionRoster";
 import { AssignmentEdit } from "@/components/features/assignments/AssignmentEdit";
 import { GradingQueueNotice } from "@/components/features/assignments/GradingQueueNotice";
+import { RubricGrid } from "@/components/features/assignments/RubricGrid";
 import { classifyUnscored, type ScoreFailure } from "@/lib/gradingqueue";
-import type { ThemeScore } from "@/types/db";
+import { fingerprint, readRubricMeta, rubricSignature } from "@/lib/rubric";
+import { describeQueryFailure } from "@/lib/dberror";
+import type { AnalysisState } from "@/server/gradingengine";
+import type { SavedCriterion, ThemeProvenance, ThemeScore } from "@/types/db";
 
 /**
  * Tasty Grading — one assignment, routed by role and lifecycle state:
@@ -213,6 +217,83 @@ export default async function AssignmentPage({
       ? await getSignedBriefUrl(supabase, assignment.storage_path)
       : null;
 
+    // The rubric grid under the taste file, and the professor's saved
+    // rubrics to import from. Either query failing on a database without
+    // 0051 turns the grid read-only with the reason, rather than the page.
+    const [{ data: gridRows, error: gridError }, { data: savedRows, error: savedError }] =
+      await Promise.all([
+        supabase
+          .from("rubric_themes")
+          .select("id, name, description, weight, provenance, items")
+          .eq("assignment_id", assignmentId)
+          .order("position"),
+        supabase
+          .from("saved_rubrics")
+          .select("id, name, criteria")
+          .order("updated_at", { ascending: false }),
+      ]);
+    const gridCriteria = (gridRows ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      weight: Number(t.weight),
+      provenance: t.provenance as ThemeProvenance,
+      quotes: ((t.items ?? []) as unknown[]).length,
+    }));
+    const rubricMeta = readRubricMeta(assignment.settings);
+    const analysisState = (assignment.analysis ?? {}) as AnalysisState;
+    const rubricGrid = (opts: { scoredCount: number; ownsOrder: boolean }) => (
+      <RubricGrid
+        // Re-mount on any saved change so the editor starts from what's stored.
+        key={fingerprint(JSON.stringify(gridCriteria))}
+        assignmentId={assignmentId}
+        title={assignment.title}
+        tasteSource={axes.tasteSource}
+        criteria={gridCriteria}
+        savedRubrics={(savedRows ?? []).map((s) => ({
+          id: s.id,
+          name: s.name,
+          criteria: (s.criteria ?? []) as SavedCriterion[],
+        }))}
+        phase={
+          assignment.state === "open"
+            ? "open"
+            : analysisState.phase === "done"
+              ? "graded"
+              : "busy"
+        }
+        hasTaste={professorTaste.length > 0}
+        autoDraftFrom={
+          assignment.state === "open" &&
+          professorTaste.length > 0 &&
+          !rubricMeta.edited &&
+          rubricMeta.draftedFrom !== fingerprint(professorTaste)
+            ? fingerprint(professorTaste)
+            : null
+        }
+        // Graded before signatures were recorded: the grid as stored is the
+        // best account of what the scores were read against.
+        scoredSignature={analysisState.rubricSig ?? rubricSignature(gridCriteria)}
+        scoredCount={opts.scoredCount}
+        ownsOrder={opts.ownsOrder}
+        published={assignment.state === "published"}
+        regrade={
+          analysisState.regrade
+            ? {
+                done: analysisState.regrade.total - analysisState.regrade.pending.length,
+                total: analysisState.regrade.total,
+              }
+            : null
+        }
+        schemaProblem={
+          gridError || savedError
+            ? (describeQueryFailure("rubric grid", gridError ?? savedError) ??
+              "The rubric couldn't load.")
+            : null
+        }
+      />
+    );
+
     if (assignment.state === "open") {
       const [{ data: subRows }, { data: tasteRows }, { data: activeRoster }] =
         await Promise.all([
@@ -311,6 +392,7 @@ export default async function AssignmentPage({
             briefUrl={briefUrl}
             briefExt={briefExt}
           />
+          {rubricGrid({ scoredCount: 0, ownsOrder: false })}
           {!creds && (
             <Card className="border-primary/50">
               <CardContent className="grid gap-1 py-6 text-center">
@@ -583,6 +665,15 @@ export default async function AssignmentPage({
           briefUrl={briefUrl}
           briefExt={briefExt}
         />
+        {rubricGrid({
+          scoredCount: (scoreRows ?? []).length,
+          // Past peer review the order is the professor's (materialized or
+          // about to be); a regrade replaces it, so the grid warns first.
+          ownsOrder:
+            (rankRows ?? []).some((r) => r.final_rank !== null) ||
+            assignment.state === "finalizing" ||
+            (assignment.state === "peer_review" && peerClosed),
+        })}
         {assignment.state !== "published" && (
           <GradingQueueNotice
             assignmentId={assignmentId}

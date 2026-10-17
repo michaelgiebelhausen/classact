@@ -325,7 +325,23 @@ export type RubricThemeRow = {
   provenance: ThemeProvenance
   items: ThemeItem[]
   position: number
+  /** 0051 — relative weight; the ranking prior is the weighted mean of the
+   *  per-theme scores. Not forced to sum to anything. */
+  weight: number
   created_at: string
+}
+
+/** A criterion as stored in a saved rubric (0051) — copied, never linked. */
+export type SavedCriterion = { name: string; description: string; weight: number }
+
+/** 0051 — a professor's reusable rubric, across all their courses. */
+export type SavedRubricRow = {
+  id: string
+  owner_id: string
+  name: string
+  criteria: SavedCriterion[]
+  created_at: string
+  updated_at: string
 }
 
 export type ThemeScore = { themeId: string; score: number; evidence: string }
@@ -845,6 +861,7 @@ export type Database = {
       rankings: TableShape<RankingRow>
       rubric_views: TableShape<RubricViewRow>
       submission_views: TableShape<SubmissionViewRow>
+      saved_rubrics: TableShape<SavedRubricRow>
       shout_outs: TableShape<ShoutOutRow>
       participation_comparisons: TableShape<ParticipationComparisonRow>
       student_flags: TableShape<StudentFlagRow>

@@ -23,6 +23,7 @@ import {
 import { fitImageForModel } from "@/server/imageprep";
 import { resolveCourseAi, type AiTask } from "@/server/aicreds";
 import { draftBody, isUntouchedTaste, tasteProse } from "@/lib/tasteprose";
+import { rubricSignature, weightedOverall } from "@/lib/rubric";
 import type { ActionResult } from "@/server/actions/auth";
 import type { AssignmentState } from "@/types/db";
 
@@ -44,6 +45,11 @@ import type { AssignmentState } from "@/types/db";
  * lock: `analysis.busyUntil` plus `analysis.lockId`, which doubles as a
  * version stamp — it changes on every write, and a write only lands if the
  * stamp is still the one its writer read.
+ *
+ * The professor can edit the rubric and regrade at any point after `done`:
+ * `analysis.regrade` holds the submissions still to re-read, a regrade chunk
+ * works through them under the same lock, and when the last one lands the
+ * order is rebuilt from the fresh scores.
  */
 
 const ASSIGNMENT_BUCKET = "assignment-docs";
@@ -72,6 +78,21 @@ export interface AnalysisState {
   error?: string;
   busyUntil?: string;
   lockId?: string;
+  /** rubricSignature of the criteria the current scores were read against.
+   *  A grid whose signature differs needs the AI again; one that matches
+   *  only changed weights, which is arithmetic. */
+  rubricSig?: string;
+  /** A regrade in flight — absent when none is. */
+  regrade?: RegradeState;
+}
+
+export interface RegradeState {
+  /** Submissions still to re-read. A row leaves on success, or when it runs
+   *  out of attempts (it keeps its earlier score). */
+  pending: string[];
+  failures: Record<string, ScoreFailure>;
+  total: number;
+  startedAt: string;
 }
 
 export interface EngineAssignment {
@@ -115,32 +136,49 @@ function blendedOverall(
 
 /** Recompute the ranking from AI scores + decided comparisons (admin). */
 export async function recomputeRanking(admin: Supa, assignmentId: string) {
-  const [{ data: assignment }, { data: scores }, { data: comparisons }] =
-    await Promise.all([
-      admin
-        .from("assignments")
-        .select("id, course_id, settings, courses!inner(grading_defaults)")
-        .eq("id", assignmentId)
-        .single(),
-      admin
-        .from("ai_scores")
-        .select("submission_id, overall, distinctiveness")
-        .eq("assignment_id", assignmentId),
-      admin
-        .from("comparisons")
-        .select("left_submission_id, right_submission_id, verdict, judge_enrollment_id")
-        .eq("assignment_id", assignmentId)
-        .not("verdict", "is", null),
-    ]);
+  const [
+    { data: assignment },
+    { data: scores },
+    { data: comparisons },
+    { data: themeRows, error: themeError },
+  ] = await Promise.all([
+    admin
+      .from("assignments")
+      .select("id, course_id, settings, courses!inner(grading_defaults)")
+      .eq("id", assignmentId)
+      .single(),
+    admin
+      .from("ai_scores")
+      .select("submission_id, overall, distinctiveness, theme_scores")
+      .eq("assignment_id", assignmentId),
+    admin
+      .from("comparisons")
+      .select("left_submission_id, right_submission_id, verdict, judge_enrollment_id")
+      .eq("assignment_id", assignmentId)
+      .not("verdict", "is", null),
+    admin.from("rubric_themes").select("id, weight").eq("assignment_id", assignmentId),
+  ]);
   if (!assignment || !scores || scores.length === 0) return;
   const settings = resolveSettings(
     (assignment.courses as unknown as { grading_defaults: unknown }).grading_defaults,
     assignment.settings
   );
+  // The prior is the rubric's weighted mean of the per-criterion scores, so
+  // the professor's weights are what rank the class. The AI's holistic
+  // overall stands in where that can't be computed — a database without
+  // 0051's weights, or a row scored before any current criterion existed.
+  const weights = themeError
+    ? null
+    : new Map((themeRows ?? []).map((t) => [t.id, Number(t.weight)]));
   const inputs = scores.map((s) => ({
     submissionId: s.submission_id,
     aiOverall: blendedOverall(
-      Number(s.overall),
+      (weights &&
+        weightedOverall(
+          (s.theme_scores ?? []) as Array<{ themeId: string; score: number }>,
+          weights
+        )) ??
+        Number(s.overall),
       s.distinctiveness === null ? null : Number(s.distinctiveness),
       settings.distinctivenessWeight
     ),
@@ -233,6 +271,21 @@ export async function ensureMaterialized(
   if (rows.every((r) => r.final_rank !== null)) return rows;
   await writeOrder(admin, assignmentId, rows);
   return rows.map((row, index) => ({ ...row, final_rank: index + 1 }));
+}
+
+/**
+ * After a regrade: recompute from the fresh scores and, if the professor
+ * already owned the order, replace it with the new one. This is the one place
+ * a drag is deliberately discarded — the professor confirmed it when they
+ * asked for the regrade. A draft (peer review still running) has no order of
+ * the professor's to replace; the recompute alone re-ranks it.
+ */
+export async function rebuildOrder(admin: Supa, assignmentId: string): Promise<void> {
+  await recomputeRanking(admin, assignmentId);
+  const rows = await readOrder(admin, assignmentId);
+  if (!rows.some((r) => r.final_rank !== null)) return;
+  const fresh = [...rows].sort((a, b) => a.rank - b.rank);
+  await writeOrder(admin, assignmentId, fresh);
 }
 
 // ---------------------------------------------------------------------------
@@ -395,9 +448,15 @@ async function scoreBatch(
   context: ScoringContext,
   creds: AiCallCreds,
   failures: Record<string, ScoreFailure>
-): Promise<{ texts: Record<string, string>; failures: Record<string, ScoreFailure>; scored: number }> {
+): Promise<{
+  texts: Record<string, string>;
+  failures: Record<string, ScoreFailure>;
+  scored: number;
+  scoredIds: string[];
+}> {
   const texts: Record<string, string> = {};
   const nextFailures = { ...failures };
+  const scoredIds: string[] = [];
   let scored = 0;
   await Promise.all(
     batch.map(async (sub) => {
@@ -419,26 +478,33 @@ async function scoreBatch(
           creds
         );
         if (!score.ok) return fail(score.error.replace(/ — try again\.?$/, "."));
-        const { error } = await admin.from("ai_scores").insert({
-          assignment_id: assignment.id,
-          course_id: assignment.course_id,
-          submission_id: sub.id,
-          theme_scores: score.data.themeScores,
-          overall: score.data.overall,
-          own_bar: score.data.ownBar,
-          distinctiveness: score.data.distinctiveness,
-          summary: score.data.summary,
-        });
+        // An upsert, so a regrade overwrites the earlier read in place. Only
+        // the columns named here change: the standards comparison (a read of
+        // the taste, not the work) survives a regrade untouched.
+        const { error } = await admin.from("ai_scores").upsert(
+          {
+            assignment_id: assignment.id,
+            course_id: assignment.course_id,
+            submission_id: sub.id,
+            theme_scores: score.data.themeScores,
+            overall: score.data.overall,
+            own_bar: score.data.ownBar,
+            distinctiveness: score.data.distinctiveness,
+            summary: score.data.summary,
+          },
+          { onConflict: "submission_id" }
+        );
         if (error) return fail("Couldn't save the score.");
         delete nextFailures[sub.id];
         texts[sub.id] = score.data.extractedText.slice(0, 8000);
+        scoredIds.push(sub.id);
         scored += 1;
       } catch (e) {
         fail(e instanceof Error ? e.message : "Unexpected error.");
       }
     })
   );
-  return { texts, failures: nextFailures, scored };
+  return { texts, failures: nextFailures, scored, scoredIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +550,9 @@ export async function runGradingChunk(
     return runPipelineChunk(admin, assignment);
   }
   if (GRADED_STATES.includes(assignment.state) && analysis.phase === "done") {
+    // A regrade goes first; late work waits for it, then is scored against
+    // the new rubric by the catch-up chunk as usual.
+    if (analysis.regrade) return runRegradeChunk(admin, assignment);
     return runCatchUpChunk(admin, assignment);
   }
   return idle(analysis.phase ?? "done", assignment.state);
@@ -544,13 +613,45 @@ async function runPipelineChunk(
 
   try {
     if (phase === "rubric") {
+      // The professor's grid, when they built one while the assignment was
+      // open (drafted from their taste file, or by hand). It is fixed: in
+      // instructor-sourced grading it IS the rubric; co-created, it seeds the
+      // class's themes and survives word for word. A 'class' row can only be
+      // left over from an interrupted run, so it's never a seed. Without
+      // 0051's weight column the select fails and grading runs as before.
+      const { data: gridRows } = await admin
+        .from("rubric_themes")
+        .select("id, name, description, weight, provenance")
+        .eq("assignment_id", assignmentId)
+        .order("position");
+      const seeds = (gridRows ?? []).filter((t) => t.provenance !== "class");
+      const keepGridAsRubric = async () => {
+        await admin
+          .from("rubric_themes")
+          .delete()
+          .eq("assignment_id", assignmentId)
+          .eq("provenance", "class");
+        await done({ phase: "baselines", error: undefined, rubricSig: rubricSignature(seeds) });
+        return worked("baselines", "analyzing", 0, total);
+      };
+      if (seeds.length > 0 && axes.tasteSource === "instructor") return keepGridAsRubric();
+
       let corpus: Array<{ enrollmentId: string | null; text: string }>;
       const { data: tasteRows } = await admin
         .from("taste_files")
         .select("enrollment_id, body, criteria, bar_statement")
         .eq("assignment_id", assignmentId);
 
-      if (axes.tasteSource === "instructor") {
+      if (seeds.length > 0) {
+        // Co-created with a grid: the class's own taste files are the corpus.
+        // The professor's prose already lives in the grid, and feeding it in
+        // twice would only echo the seeds back as "class" themes.
+        corpus = (tasteRows ?? [])
+          .filter((t) => t.enrollment_id !== null)
+          .map((t) => ({ enrollmentId: t.enrollment_id, text: tasteProse(t) }))
+          .filter((t) => t.text.length > 0);
+        if (corpus.length === 0) return keepGridAsRubric();
+      } else if (axes.tasteSource === "instructor") {
         // The instructor's taste file is the whole corpus. It lives in the
         // professor row now; settings.gradingInstructions is the pre-0037
         // home and stays readable for anything the backfill missed.
@@ -582,17 +683,44 @@ async function runPipelineChunk(
         return worked("done", idleState, 0, total);
       }
       const rubric = await emergeRubric(
-        { assignmentTitle: assignment.title, tasteFiles: corpus },
+        {
+          assignmentTitle: assignment.title,
+          tasteFiles: corpus,
+          seeds: seeds.map((s) => ({ id: s.id, name: s.name, description: s.description })),
+        },
         creds!
       );
       if (!rubric.ok) {
         await done({ error: rubric.error });
         return { ok: false, error: rubric.error };
       }
-      // Idempotence: clear any partial themes from an interrupted run.
-      await admin.from("rubric_themes").delete().eq("assignment_id", assignmentId);
+      // Idempotence: clear any partial themes from an interrupted run — every
+      // row when there's no grid, only the class's when there is (the seeds
+      // are updated in place, so their ids and weights carry through).
+      if (seeds.length > 0) {
+        await admin
+          .from("rubric_themes")
+          .delete()
+          .eq("assignment_id", assignmentId)
+          .eq("provenance", "class");
+      } else {
+        await admin.from("rubric_themes").delete().eq("assignment_id", assignmentId);
+      }
+      // A class theme joins at the seeds' average weight: one more voice of
+      // the same size, which the professor can reweigh afterwards.
+      const classWeight =
+        seeds.length > 0
+          ? Math.max(1, Math.round(seeds.reduce((sum, s) => sum + Number(s.weight), 0) / seeds.length))
+          : null;
       for (let i = 0; i < rubric.data.length; i++) {
         const t = rubric.data[i];
+        if (t.seedId) {
+          await admin
+            .from("rubric_themes")
+            .update({ provenance: t.provenance, items: t.items, position: i })
+            .eq("id", t.seedId);
+          continue;
+        }
         await admin.from("rubric_themes").insert({
           assignment_id: assignmentId,
           course_id: assignment.course_id,
@@ -601,9 +729,14 @@ async function runPipelineChunk(
           provenance: t.provenance,
           items: t.items,
           position: i,
+          ...(classWeight !== null ? { weight: classWeight } : {}),
         });
       }
-      await done({ phase: "baselines", error: undefined });
+      await done({
+        phase: "baselines",
+        error: undefined,
+        rubricSig: rubricSignature(rubric.data),
+      });
       return worked("baselines", "analyzing", 0, total);
     }
 
@@ -897,6 +1030,95 @@ async function runCatchUpChunk(
   }
 }
 
+/**
+ * A regrade the professor asked for: re-read every submission against the
+ * rubric as it stands now, a batch per chunk, overwriting scores in place.
+ * When the last one lands the order is rebuilt from the fresh scores. A file
+ * that keeps failing is dropped after the usual attempts and keeps its
+ * earlier score rather than holding the class.
+ */
+async function runRegradeChunk(
+  admin: Supa,
+  assignment: EngineAssignment
+): Promise<ChunkResult> {
+  const assignmentId = assignment.id;
+  const read = (assignment.analysis ?? {}) as AnalysisState;
+  const progress = (
+    regrade: RegradeState | undefined,
+    worked: boolean,
+    total = regrade?.total ?? 0
+  ): ChunkResult => ({
+    ok: true,
+    data: {
+      phase: "regrade",
+      state: assignment.state,
+      scored: regrade ? regrade.total - regrade.pending.length : 0,
+      total,
+      worked,
+    },
+  });
+  // No key: the old scores stand and the cockpit stays usable; retry later.
+  const creds = await resolveCourseAi(assignment.course_id, "scoring");
+  if (!creds) return progress(read.regrade, false);
+
+  const lock = await acquireLock(admin, assignment);
+  if (!lock) return progress(read.regrade, false, -1);
+  const regrade = lock.analysis.regrade;
+  if (!regrade) {
+    await release(admin, assignmentId, lock, {});
+    return progress(undefined, false);
+  }
+  try {
+    const queue = classifyUnscored({
+      submissionIds: regrade.pending,
+      scoredIds: new Set(),
+      failures: regrade.failures,
+      now: new Date(),
+    });
+    if (queue.ready.length === 0 && queue.waiting.length === 0) {
+      // Everything re-read (or given up on): the professor's order is rebuilt
+      // from the new scores — the regrade's whole point, and confirmed.
+      await rebuildOrder(admin, assignmentId);
+      await release(admin, assignmentId, lock, { regrade: undefined });
+      return progress({ ...regrade, pending: [] }, true);
+    }
+    if (queue.ready.length === 0) {
+      await release(admin, assignmentId, lock, {});
+      return progress(regrade, false);
+    }
+    const { data: subs } = await admin
+      .from("submissions")
+      .select("id, enrollment_id, storage_path")
+      .in("id", queue.ready.slice(0, SCORE_CONCURRENCY));
+    const context = await loadScoringContext(admin, assignmentId, lock.analysis);
+    const result = await scoreBatch(
+      admin,
+      assignment,
+      subs ?? [],
+      context,
+      creds,
+      regrade.failures
+    );
+    // A submission deleted mid-regrade has no row to re-read; drop it too.
+    const found = new Set((subs ?? []).map((s) => s.id));
+    const finished = new Set([
+      ...result.scoredIds,
+      ...queue.ready.slice(0, SCORE_CONCURRENCY).filter((id) => !found.has(id)),
+    ]);
+    const next: RegradeState = {
+      ...regrade,
+      pending: regrade.pending.filter((id) => !finished.has(id)),
+      failures: result.failures,
+    };
+    await release(admin, assignmentId, lock, { regrade: next });
+    return progress(next, true);
+  } catch (e) {
+    console.error(`[grading] regrade chunk failed:`, e);
+    await release(admin, assignmentId, lock, {});
+    return { ok: false, error: "Regrading hit a snag — it will resume on the next try." };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The tick
 // ---------------------------------------------------------------------------
@@ -922,6 +1144,11 @@ export async function findGradingWork(admin: Supa): Promise<string[]> {
   ]);
   const ids = (starting ?? []).map((a) => a.id);
   for (const a of graded ?? []) {
+    // A regrade in flight is work by definition; its chunk decides the rest.
+    if (((a.analysis ?? {}) as AnalysisState).regrade) {
+      ids.push(a.id);
+      continue;
+    }
     const [{ count: subs }, { count: scored }] = await Promise.all([
       admin
         .from("submissions")
