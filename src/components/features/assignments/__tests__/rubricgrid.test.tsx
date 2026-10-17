@@ -95,6 +95,20 @@ describe("RubricGrid", () => {
     await vi.waitFor(() => expect(saveRubric).toHaveBeenCalled());
   });
 
+  test("a criterion replaced by a new row with the same words still needs the AI", () => {
+    // The import case: identical wording, but the new row has no scores —
+    // treating it as weights-only would leave every score on a deleted id.
+    setup();
+    fireEvent.click(screen.getByLabelText("Remove criterion 2"));
+    fireEvent.click(screen.getByRole("button", { name: "Add criterion" }));
+    fireEvent.change(screen.getByLabelText("Criterion 2 name"), { target: { value: "Clarity" } });
+    fireEvent.change(screen.getByLabelText("Criterion 2 description"), {
+      target: { value: "Reads in one pass" },
+    });
+    fireEvent.change(screen.getByLabelText("Criterion 2 weight"), { target: { value: "40" } });
+    expect(screen.getByRole("button", { name: "Save & regrade 12" })).toBeTruthy();
+  });
+
   test("an owned order is warned about even for a weights-only re-rank", () => {
     setup({ ownsOrder: true });
     fireEvent.change(screen.getByLabelText("Criterion 1 weight"), { target: { value: "20" } });

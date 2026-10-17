@@ -71,18 +71,24 @@ async function requireProfessorAssignment(assignmentId: string) {
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
-/** Write rows to match the grid: update kept ids, insert new, delete removed. */
+/**
+ * Write rows to match the grid: update kept ids, insert new, delete removed.
+ * Returns the problem in words, or whether any row was inserted — a new row
+ * has no scores yet, so only an AI pass can fill it, even when its wording
+ * matches a criterion it replaced (an import of the same rubric, say).
+ */
 async function writeGrid(
   supabase: Supabase,
   assignment: { id: string; course_id: string },
   criteria: Criterion[],
   replaceAll: boolean
-): Promise<string | null> {
+): Promise<{ problem: string } | { added: boolean }> {
+  const fail = (problem: string) => ({ problem });
   const { data: existing, error: readError } = await supabase
     .from("rubric_themes")
     .select("id")
     .eq("assignment_id", assignment.id);
-  if (readError) return describeQueryFailure("rubric", readError) ?? "Couldn't read the rubric.";
+  if (readError) return fail(describeQueryFailure("rubric", readError) ?? "Couldn't read the rubric.");
   // Only ids that already belong to this assignment are updated; anything
   // else from the client is treated as a new row.
   const ownIds = new Set((existing ?? []).map((r) => r.id));
@@ -92,8 +98,9 @@ async function writeGrid(
   const removed = [...ownIds].filter((id) => !keep.has(id));
   if (removed.length > 0) {
     const { error } = await supabase.from("rubric_themes").delete().in("id", removed);
-    if (error) return describeQueryFailure("rubric", error) ?? "Couldn't save the rubric.";
+    if (error) return fail(describeQueryFailure("rubric", error) ?? "Couldn't save the rubric.");
   }
+  let added = false;
   for (let i = 0; i < criteria.length; i++) {
     const c = criteria[i];
     const fields = {
@@ -102,10 +109,11 @@ async function writeGrid(
       weight: c.weight,
       position: i,
     };
-    const { error } =
-      c.id && keep.has(c.id)
-        ? await supabase.from("rubric_themes").update(fields).eq("id", c.id)
-        : await supabase.from("rubric_themes").insert({
+    const kept = !!c.id && keep.has(c.id);
+    if (!kept) added = true;
+    const { error } = kept
+      ? await supabase.from("rubric_themes").update(fields).eq("id", c.id!)
+      : await supabase.from("rubric_themes").insert({
             ...fields,
             assignment_id: assignment.id,
             course_id: assignment.course_id,
@@ -114,9 +122,9 @@ async function writeGrid(
             provenance: "professor",
             items: [],
           });
-    if (error) return describeQueryFailure("rubric", error) ?? "Couldn't save the rubric.";
+    if (error) return fail(describeQueryFailure("rubric", error) ?? "Couldn't save the rubric.");
   }
-  return null;
+  return { added };
 }
 
 async function patchSettings(
@@ -240,8 +248,8 @@ export async function saveRubric(
     .from("rubric_themes")
     .select("name, description")
     .eq("assignment_id", assignmentId);
-  const problem = await writeGrid(supabase, assignment, criteria, false);
-  if (problem) return { ok: false, error: problem };
+  const written = await writeGrid(supabase, assignment, criteria, false);
+  if ("problem" in written) return { ok: false, error: written.problem };
   // Hand-edited from here on: the taste file no longer redrafts it.
   await patchSettings(supabase, assignment, { rubricEdited: true });
 
@@ -252,7 +260,8 @@ export async function saveRubric(
   return startRegrade(
     assignmentId,
     assignment.course_id,
-    false,
+    // A new criterion has no scores: only the AI can fill its column.
+    written.added,
     rubricSignature(before ?? [])
   );
 }
@@ -313,8 +322,8 @@ export async function draftRubricFromTaste(
   );
   if (!draft.ok) return draft;
 
-  const problem = await writeGrid(supabase, assignment, draft.data, true);
-  if (problem) return { ok: false, error: problem };
+  const written = await writeGrid(supabase, assignment, draft.data, true);
+  if ("problem" in written) return { ok: false, error: written.problem };
   await patchSettings(supabase, assignment, { rubricEdited: false, rubricDraftedFrom: from });
   revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
   return { ok: true, data: { drafted: true } };

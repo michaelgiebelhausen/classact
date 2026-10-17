@@ -166,9 +166,14 @@ export function RubricGrid(props: Props) {
   const readOnly = phase === "busy" || regrade !== null || !!schemaProblem;
   const dirty = JSON.stringify(payload(rows)) !== JSON.stringify(payload(initialRows));
   const shares = weightPercents(rows.map((r) => Math.max(0, Number(r.weight) || 0)));
+  // The AI is needed when the wording changed, or when any criterion is new:
+  // a new row has no scores, even if its words match one it replaced (an
+  // imported copy of the same rubric, say). The server decides the same way.
+  const filled = rows.filter((r) => r.name.trim() || r.description.trim());
   const needsAi =
     scoredSignature === null ||
-    rubricSignature(rows.filter((r) => r.name.trim() || r.description.trim())) !== scoredSignature;
+    filled.some((r) => !r.id) ||
+    rubricSignature(filled) !== scoredSignature;
 
   // Taste file → grid, on its own, while the grid is still the AI's draft —
   // once per version of the taste file, and never over unsaved edits. A
