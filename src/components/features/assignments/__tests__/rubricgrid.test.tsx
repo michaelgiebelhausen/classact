@@ -11,10 +11,11 @@ import { rubricSignature } from "@/lib/rubric";
 
 const saveRubric = vi.fn();
 const draftRubricFromTaste = vi.fn();
+const regradeAssignment = vi.fn();
 vi.mock("@/server/actions/rubric", () => ({
   saveRubric: (...args: unknown[]) => saveRubric(...args),
   draftRubricFromTaste: (...args: unknown[]) => draftRubricFromTaste(...args),
-  regradeAssignment: vi.fn(),
+  regradeAssignment: (...args: unknown[]) => regradeAssignment(...args),
   saveRubricToLibrary: vi.fn(),
   deleteSavedRubric: vi.fn(),
 }));
@@ -50,6 +51,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RubricGrid>> = {})
       ownsOrder={false}
       published={false}
       regrade={null}
+      staleCount={0}
       schemaProblem={null}
       {...overrides}
     />
@@ -59,6 +61,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RubricGrid>> = {})
 beforeEach(() => {
   saveRubric.mockReset().mockResolvedValue({ ok: true, data: { applied: "weights" } });
   draftRubricFromTaste.mockReset().mockResolvedValue({ ok: true, data: { drafted: false } });
+  regradeAssignment.mockReset().mockResolvedValue({ ok: true, data: { applied: "ai", count: 19 } });
 });
 
 describe("RubricGrid", () => {
@@ -133,8 +136,35 @@ describe("RubricGrid", () => {
   });
 
   test("read-only while a regrade runs", () => {
-    setup({ regrade: { done: 3, total: 12 } });
+    setup({ regrade: { done: 3, total: 12, blocked: null } });
     expect(screen.getByText(/Regrading — 3 of\s+12 re-read/)).toBeTruthy();
     expect((screen.getByLabelText("Criterion 1 name") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  test("a regrade waiting on the AI account says why instead of looking stuck", () => {
+    setup({
+      regrade: {
+        done: 28,
+        total: 47,
+        blocked: "Your OpenRouter account is out of credits. Add credits at openrouter.ai and grading picks up where it stopped.",
+      },
+    });
+    expect(screen.getByText(/Regrading paused — 28 of\s+47 re-read/)).toBeTruthy();
+    expect(screen.getByText(/out of credits/)).toBeTruthy();
+  });
+
+  test("rows left on an earlier rubric can be re-read on their own — after a confirm", async () => {
+    setup({ staleCount: 19, ownsOrder: true });
+    expect(screen.getByText(/19 submissions are still scored against an earlier version/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Re-read 19" }));
+    expect(regradeAssignment).not.toHaveBeenCalled();
+    expect(screen.getByText(/re-reads the 19 submissions still scored against an earlier rubric/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Regrade" }));
+    await vi.waitFor(() => expect(regradeAssignment).toHaveBeenCalledWith("a1", { onlyStale: true }));
+  });
+
+  test("no stale notice while a regrade is still running", () => {
+    setup({ staleCount: 19, regrade: { done: 3, total: 12, blocked: null } });
+    expect(screen.queryByText(/still scored against an earlier version/)).toBeNull();
   });
 });

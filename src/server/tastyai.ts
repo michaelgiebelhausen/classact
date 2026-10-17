@@ -13,7 +13,10 @@ import { MAX_CRITERIA, proposedWeights } from "@/lib/rubric";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-type AiResult<T> = { ok: true; data: T } | { ok: false; error: string };
+/** `account` marks a failure of the professor's OpenRouter account (out of
+ *  credits, key revoked) rather than of this input: retrying the same call
+ *  can't help until they fix it, so callers pause instead of giving up. */
+type AiResult<T> = { ok: true; data: T } | { ok: false; error: string; account?: true };
 
 function extractJson(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -107,6 +110,25 @@ async function callModel(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     console.error(`[tastyai:${label}] OpenRouter ${response.status}: ${detail.slice(0, 400)}`);
+    // 402: out of credits (OpenRouter also refuses when the balance can't
+    // cover the reply's maximum length). 401: the key itself is bad. Neither
+    // is about this submission. (403 is not here: it's also a moderation flag
+    // on one input.)
+    if (response.status === 402) {
+      return {
+        ok: false,
+        account: true,
+        error:
+          "Your OpenRouter account is out of credits. Add credits at openrouter.ai and grading picks up where it stopped.",
+      };
+    }
+    if (response.status === 401) {
+      return {
+        ok: false,
+        account: true,
+        error: "OpenRouter rejected your key. Check it in AI Settings and grading picks up where it stopped.",
+      };
+    }
     return { ok: false, error: `AI call failed (${response.status}) — try again.` };
   }
   try {

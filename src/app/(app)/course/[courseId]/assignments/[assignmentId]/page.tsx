@@ -41,9 +41,9 @@ import { AssignmentEdit } from "@/components/features/assignments/AssignmentEdit
 import { GradingQueueNotice } from "@/components/features/assignments/GradingQueueNotice";
 import { RubricGrid } from "@/components/features/assignments/RubricGrid";
 import { classifyUnscored, type ScoreFailure } from "@/lib/gradingqueue";
-import { fingerprint, readRubricMeta, rubricSignature } from "@/lib/rubric";
+import { fingerprint, readRubricMeta, rubricSignature, staleSubmissions } from "@/lib/rubric";
 import { describeQueryFailure } from "@/lib/dberror";
-import type { AnalysisState } from "@/server/gradingengine";
+import { aiPause, type AnalysisState } from "@/server/gradingengine";
 import type { SavedCriterion, ThemeProvenance, ThemeScore } from "@/types/db";
 
 /**
@@ -242,7 +242,11 @@ export default async function AssignmentPage({
     }));
     const rubricMeta = readRubricMeta(assignment.settings);
     const analysisState = (assignment.analysis ?? {}) as AnalysisState;
-    const rubricGrid = (opts: { scoredCount: number; ownsOrder: boolean }) => (
+    const rubricGrid = (opts: {
+      scoredCount: number;
+      ownsOrder: boolean;
+      staleCount: number;
+    }) => (
       <RubricGrid
         // Re-mount on any saved change so the editor starts from what's stored.
         key={fingerprint(JSON.stringify(gridCriteria))}
@@ -282,9 +286,11 @@ export default async function AssignmentPage({
             ? {
                 done: analysisState.regrade.total - analysisState.regrade.pending.length,
                 total: analysisState.regrade.total,
+                blocked: aiPause(analysisState),
               }
             : null
         }
+        staleCount={opts.staleCount}
         schemaProblem={
           gridError || savedError
             ? (describeQueryFailure("rubric grid", gridError ?? savedError) ??
@@ -392,7 +398,7 @@ export default async function AssignmentPage({
             briefUrl={briefUrl}
             briefExt={briefExt}
           />
-          {rubricGrid({ scoredCount: 0, ownsOrder: false })}
+          {rubricGrid({ scoredCount: 0, ownsOrder: false, staleCount: 0 })}
           {!creds && (
             <Card className="border-primary/50">
               <CardContent className="grid gap-1 py-6 text-center">
@@ -667,6 +673,10 @@ export default async function AssignmentPage({
         />
         {rubricGrid({
           scoredCount: (scoreRows ?? []).length,
+          staleCount: staleSubmissions(
+            scoreRows ?? [],
+            rubricThemes.map((t) => t.id)
+          ).length,
           // Past peer review the order is the professor's (materialized or
           // about to be); a regrade replaces it, so the grid warns first.
           ownsOrder:

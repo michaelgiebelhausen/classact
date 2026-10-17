@@ -136,11 +136,11 @@ export async function advanceAnalysis(
   }
   const result = await runGradingChunk(createAdminClient(), assignmentId);
   if (!result.ok) return result;
-  const { phase, state, scored, total } = result.data!;
+  const { phase, state, scored, total, blocked } = result.data!;
   if (state !== assignment.state) {
     revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
   }
-  return { ok: true, data: { phase, state, scored, total } };
+  return { ok: true, data: { phase, state, scored, total, ...(blocked ? { blocked } : {}) } };
 }
 
 /**

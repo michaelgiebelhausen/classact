@@ -3,6 +3,7 @@ import {
   cleanCriteria,
   proposedWeights,
   rubricSignature,
+  staleSubmissions,
   weightPercents,
   weightedOverall,
 } from "../rubric";
@@ -112,5 +113,22 @@ describe("proposedWeights", () => {
 
   it("falls back to equal shares if any is junk", () => {
     expect(proposedWeights([40, "lots", 30])).toEqual([34, 33, 33]);
+  });
+});
+
+describe("staleSubmissions", () => {
+  const current = ["c1", "c2", "c3"];
+  it("finds rows read against an earlier rubric, or missing a criterion", () => {
+    const scores = [
+      { submission_id: "fresh", theme_scores: [{ themeId: "c1" }, { themeId: "c2" }, { themeId: "c3" }] },
+      { submission_id: "old", theme_scores: [{ themeId: "x1" }, { themeId: "x2" }] },
+      { submission_id: "partial", theme_scores: [{ themeId: "c1" }, { themeId: "c3" }] },
+      { submission_id: "empty", theme_scores: null },
+    ];
+    expect(staleSubmissions(scores, current)).toEqual(["old", "partial", "empty"]);
+  });
+
+  it("is empty when there's no rubric to be stale against", () => {
+    expect(staleSubmissions([{ submission_id: "a", theme_scores: [] }], [])).toEqual([]);
   });
 });

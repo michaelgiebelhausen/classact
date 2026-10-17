@@ -57,6 +57,29 @@ const ASSIGNMENT_BUCKET = "assignment-docs";
 const SCORE_CONCURRENCY = 3;
 /** Longer than the slowest chunk (AI calls time out at 150s). */
 const LOCK_MS = 240_000;
+/** How long scoring waits after the AI account refuses before asking again. */
+const AI_PAUSE_MS = 5 * 60_000;
+
+/** The account problem scoring is waiting out, if the pause hasn't lapsed. */
+export function aiPause(analysis: AnalysisState, now = new Date()): string | null {
+  const blocked = analysis.aiBlocked;
+  if (!blocked || new Date(blocked.until).getTime() <= now.getTime()) return null;
+  return blocked.error;
+}
+
+/** The analysis patch after a scoring batch: pause on an account refusal,
+ *  clear the pause once anything scores again. */
+function pausePatch(result: { blocked: string | null; scored: number }): AnalysisState {
+  if (result.blocked) {
+    return {
+      aiBlocked: {
+        error: result.blocked,
+        until: new Date(Date.now() + AI_PAUSE_MS).toISOString(),
+      },
+    };
+  }
+  return result.scored > 0 ? { aiBlocked: undefined } : {};
+}
 
 export type Supa = ReturnType<typeof createAdminClient>;
 
@@ -84,6 +107,10 @@ export interface AnalysisState {
   rubricSig?: string;
   /** A regrade in flight — absent when none is. */
   regrade?: RegradeState;
+  /** The professor's AI account refused (out of credits, bad key): scoring
+   *  waits until `until`, then tries again. No submission is charged an
+   *  attempt for it — it isn't any file's fault. */
+  aiBlocked?: { error: string; until: string };
 }
 
 export interface RegradeState {
@@ -115,6 +142,8 @@ export interface ChunkData {
   total: number;
   /** Did this call do any work? The tick moves on when it didn't. */
   worked: boolean;
+  /** Set while scoring is paused on the professor's AI account. */
+  blocked?: string;
 }
 
 const PIPELINE_STATES: AssignmentState[] = ["open", "analyzing", "awaiting_key"];
@@ -439,7 +468,11 @@ async function loadScoringContext(
 /**
  * Score a batch in parallel. Each score is written the moment it lands, so a
  * chunk killed mid-batch keeps what it finished. Failures are recorded, never
- * thrown — the queue decides when to retry and when to give up.
+ * thrown — the queue decides when to retry and when to give up. A refusal of
+ * the professor's AI account is not recorded against the file: it comes back
+ * as `blocked`, and the caller pauses the whole assignment instead. (Counting
+ * it once ran four retries per file through an empty account in minutes and
+ * left most of a regraded class on the old rubric.)
  */
 async function scoreBatch(
   admin: Supa,
@@ -453,11 +486,13 @@ async function scoreBatch(
   failures: Record<string, ScoreFailure>;
   scored: number;
   scoredIds: string[];
+  blocked: string | null;
 }> {
   const texts: Record<string, string> = {};
   const nextFailures = { ...failures };
   const scoredIds: string[] = [];
   let scored = 0;
+  let blocked: string | null = null;
   await Promise.all(
     batch.map(async (sub) => {
       const fail = (error: string) => {
@@ -477,7 +512,14 @@ async function scoreBatch(
           },
           creds
         );
-        if (!score.ok) return fail(score.error.replace(/ — try again\.?$/, "."));
+        if (!score.ok) {
+          if (score.account) {
+            blocked = score.error;
+            console.error(`[grading] AI account refused while scoring ${sub.id}: ${score.error}`);
+            return;
+          }
+          return fail(score.error.replace(/ — try again\.?$/, "."));
+        }
         // An upsert, so a regrade overwrites the earlier read in place. Only
         // the columns named here change: the standards comparison (a read of
         // the taste, not the work) survives a regrade untouched.
@@ -504,7 +546,7 @@ async function scoreBatch(
       }
     })
   );
-  return { texts, failures: nextFailures, scored, scoredIds };
+  return { texts, failures: nextFailures, scored, scoredIds, blocked };
 }
 
 // ---------------------------------------------------------------------------
@@ -527,9 +569,15 @@ export async function loadEngineAssignment(
 
 type ChunkResult = ActionResult<ChunkData>;
 
-const idle = (phase: string, state: string, scored = 0, total = 0): ChunkResult => ({
+const idle = (
+  phase: string,
+  state: string,
+  scored = 0,
+  total = 0,
+  blocked?: string
+): ChunkResult => ({
   ok: true,
-  data: { phase, state, scored, total, worked: false },
+  data: { phase, state, scored, total, worked: false, ...(blocked ? { blocked } : {}) },
 });
 
 /**
@@ -785,6 +833,11 @@ async function runPipelineChunk(
         await done({});
         return idle("scoring", "analyzing", scoredIds.size, total);
       }
+      const paused = aiPause(analysis);
+      if (paused) {
+        await done({});
+        return idle("scoring", "analyzing", scoredIds.size, total, paused);
+      }
 
       const byId = new Map((submissions ?? []).map((s) => [s.id, s]));
       const batch = queue.ready.slice(0, SCORE_CONCURRENCY).map((id) => byId.get(id)!);
@@ -801,6 +854,7 @@ async function runPipelineChunk(
         phase: "scoring",
         texts: { ...(analysis.texts ?? {}), ...result.texts },
         failures: result.failures,
+        ...pausePatch(result),
       });
       return worked("scoring", "analyzing", scoredIds.size + result.scored, total);
     }
@@ -985,6 +1039,8 @@ async function runCatchUpChunk(
   if (queue.ready.length === 0) {
     return idle("done", assignment.state, scoredIds.size, total);
   }
+  const paused = aiPause(analysis);
+  if (paused) return idle("done", assignment.state, scoredIds.size, total, paused);
   // No key: leave the state alone (the cockpit stays usable) and retry later.
   const creds = await resolveCourseAi(assignment.course_id, "scoring");
   if (!creds) return idle("done", assignment.state, scoredIds.size, total);
@@ -1012,7 +1068,10 @@ async function runCatchUpChunk(
         await ensureMaterialized(admin, assignmentId);
       }
     }
-    await release(admin, assignmentId, lock, { failures: result.failures });
+    await release(admin, assignmentId, lock, {
+      failures: result.failures,
+      ...pausePatch(result),
+    });
     return {
       ok: true,
       data: {
@@ -1021,6 +1080,7 @@ async function runCatchUpChunk(
         scored: scoredIds.size + result.scored,
         total,
         worked: true,
+        ...(result.blocked ? { blocked: result.blocked } : {}),
       },
     };
   } catch (e) {
@@ -1046,7 +1106,8 @@ async function runRegradeChunk(
   const progress = (
     regrade: RegradeState | undefined,
     worked: boolean,
-    total = regrade?.total ?? 0
+    total = regrade?.total ?? 0,
+    blocked: string | null = null
   ): ChunkResult => ({
     ok: true,
     data: {
@@ -1055,8 +1116,12 @@ async function runRegradeChunk(
       scored: regrade ? regrade.total - regrade.pending.length : 0,
       total,
       worked,
+      ...(blocked ? { blocked } : {}),
     },
   });
+  // The account refused a moment ago: the regrade waits, nothing is lost.
+  const paused = aiPause(read);
+  if (paused) return progress(read.regrade, false, undefined, paused);
   // No key: the old scores stand and the cockpit stays usable; retry later.
   const creds = await resolveCourseAi(assignment.course_id, "scoring");
   if (!creds) return progress(read.regrade, false);
@@ -1110,8 +1175,8 @@ async function runRegradeChunk(
       pending: regrade.pending.filter((id) => !finished.has(id)),
       failures: result.failures,
     };
-    await release(admin, assignmentId, lock, { regrade: next });
-    return progress(next, true);
+    await release(admin, assignmentId, lock, { regrade: next, ...pausePatch(result) });
+    return progress(next, true, undefined, result.blocked);
   } catch (e) {
     console.error(`[grading] regrade chunk failed:`, e);
     await release(admin, assignmentId, lock, {});

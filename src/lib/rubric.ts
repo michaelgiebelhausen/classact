@@ -105,6 +105,27 @@ export function weightedOverall(
 }
 
 /**
+ * Submissions whose scores don't cover the rubric as it stands: read against
+ * an earlier version (a regrade that couldn't reach them) or missing a
+ * criterion. They show dashes on the ranked list and rank by the AI's
+ * holistic read, so the professor is offered a re-read of just these.
+ */
+export function staleSubmissions(
+  scores: ReadonlyArray<{ submission_id: string; theme_scores: unknown }>,
+  criterionIds: ReadonlyArray<string>
+): string[] {
+  if (criterionIds.length === 0) return [];
+  return scores
+    .filter((s) => {
+      const have = new Set(
+        ((s.theme_scores ?? []) as Array<{ themeId?: unknown }>).map((t) => t.themeId)
+      );
+      return criterionIds.some((id) => !have.has(id));
+    })
+    .map((s) => s.submission_id);
+}
+
+/**
  * A fingerprint of what the AI reads when it scores — each criterion's name
  * and description — independent of order and of weights. Two grids with the
  * same signature need no new AI pass between them; a weight change alone is

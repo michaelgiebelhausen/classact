@@ -90,8 +90,11 @@ interface Props {
   /** The professor already owns an order (dragged or past peer review). */
   ownsOrder: boolean;
   published: boolean;
-  /** A regrade in flight: how far along it is. */
-  regrade: { done: number; total: number } | null;
+  /** A regrade in flight: how far along it is, and why it's waiting when the
+   *  professor's AI account refused (out of credits, bad key). */
+  regrade: { done: number; total: number; blocked: string | null } | null;
+  /** Submissions still scored against an earlier version of the rubric. */
+  staleCount: number;
   /** Set when 0051 isn't applied: the grid can't be saved yet. */
   schemaProblem: string | null;
 }
@@ -150,6 +153,7 @@ export function RubricGrid(props: Props) {
     ownsOrder,
     published,
     regrade,
+    staleCount,
     schemaProblem,
   } = props;
   const router = useRouter();
@@ -158,7 +162,7 @@ export function RubricGrid(props: Props) {
   const [busy, setBusy] = useState<null | "save" | "draft" | "regrade">(null);
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<null | "save" | "rerun" | "rebuild">(null);
+  const [confirm, setConfirm] = useState<null | "save" | "rerun" | "stale" | "rebuild">(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryName, setLibraryName] = useState(title);
   const [progress, setProgress] = useState(regrade);
@@ -211,7 +215,11 @@ export function RubricGrid(props: Props) {
             break;
           }
           if (result.data.total >= 0) {
-            setProgress({ done: result.data.scored, total: result.data.total });
+            setProgress({
+              done: result.data.scored,
+              total: result.data.total,
+              blocked: result.data.blocked ?? null,
+            });
           }
         }
         await new Promise((r) => setTimeout(r, 5000));
@@ -241,10 +249,10 @@ export function RubricGrid(props: Props) {
     toast.success(`Imported "${saved.name}" — review it, then save.`);
   }
 
-  function afterRegrade(applied: string | undefined) {
+  function afterRegrade(applied: string | undefined, count = scoredCount) {
     if (applied === "ai") {
       toast.success(
-        `Regrading ${scoredCount} submission${scoredCount === 1 ? "" : "s"} against the new rubric — the list rebuilds when it's done.`
+        `Regrading ${count} submission${count === 1 ? "" : "s"} against the rubric — the list rebuilds when it's done.`
       );
     } else if (applied === "weights") {
       toast.success("Re-ranked with the new weights.");
@@ -265,13 +273,13 @@ export function RubricGrid(props: Props) {
     afterRegrade(result.data?.applied);
   }
 
-  async function rerun() {
+  async function rerun(onlyStale = false) {
     setConfirm(null);
     setBusy("regrade");
-    const result = await regradeAssignment(assignmentId);
+    const result = await regradeAssignment(assignmentId, { onlyStale });
     setBusy(null);
     if (!result.ok) return void toast.error(result.error);
-    afterRegrade(result.data?.applied);
+    afterRegrade(result.data?.applied, result.data?.count);
   }
 
   async function rebuild() {
@@ -386,7 +394,18 @@ export function RubricGrid(props: Props) {
             ranked list is up.
           </p>
         )}
-        {regrade && (
+        {regrade && (progress ?? regrade).blocked ? (
+          <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            <span className="font-medium">
+              Regrading paused — {progress?.done ?? regrade.done} of{" "}
+              {progress?.total ?? regrade.total} re-read.
+            </span>{" "}
+            <span className="text-muted-foreground">
+              {(progress ?? regrade).blocked} Nobody is skipped while it waits;
+              it checks again every few minutes.
+            </span>
+          </p>
+        ) : regrade ? (
           <p className="rounded-md border border-primary/50 bg-primary/5 p-3 text-sm">
             <span className="font-medium">
               Regrading — {progress?.done ?? regrade.done} of{" "}
@@ -398,6 +417,28 @@ export function RubricGrid(props: Props) {
               page open.
             </span>
           </p>
+        ) : null}
+        {phase === "graded" && !regrade && !dirty && staleCount > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-500/50 bg-amber-500/5 p-3 text-sm">
+            <p className="flex-1">
+              <span className="font-medium">
+                {staleCount} submission{staleCount === 1 ? " is" : "s are"} still
+                scored against an earlier version of this rubric
+              </span>{" "}
+              <span className="text-muted-foreground">
+                — the dashes on the ranked list. {staleCount === 1 ? "It ranks" : "They rank"} by
+                the AI&apos;s overall read, not your weights, until re-read.
+              </span>
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy !== null || !!schemaProblem}
+              onClick={() => setConfirm("stale")}
+            >
+              {busy === "regrade" ? "Starting…" : `Re-read ${staleCount}`}
+            </Button>
+          </div>
         )}
 
         {rows.length === 0 && !drafting ? (
@@ -539,14 +580,20 @@ export function RubricGrid(props: Props) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {confirm === "rebuild" ? "Replace the grid?" : "Regrade this assignment?"}
+              {confirm === "rebuild"
+                ? "Replace the grid?"
+                : confirm === "stale"
+                  ? `Re-read ${staleCount} submission${staleCount === 1 ? "" : "s"}?`
+                  : "Regrade this assignment?"}
             </DialogTitle>
             <DialogDescription>
               {confirm === "rebuild"
                 ? "The grid is redrafted from your taste file. Your edits to it are replaced."
                 : [
-                    (confirm === "rerun" || needsAi) &&
-                      `The AI re-reads all ${scoredCount} submission${scoredCount === 1 ? "" : "s"} against the rubric, on your AI credits.`,
+                    confirm === "stale"
+                      ? `The AI re-reads the ${staleCount} submission${staleCount === 1 ? "" : "s"} still scored against an earlier rubric, on your AI credits. The rest keep their scores.`
+                      : (confirm === "rerun" || needsAi) &&
+                        `The AI re-reads all ${scoredCount} submission${scoredCount === 1 ? "" : "s"} against the rubric, on your AI credits.`,
                     ownsOrder &&
                       "The ranked list is rebuilt from the new scores — your manual reordering is replaced. Grade lines stay where they are.",
                     published &&
@@ -562,7 +609,11 @@ export function RubricGrid(props: Props) {
             </Button>
             <Button
               onClick={() =>
-                void (confirm === "rebuild" ? rebuild() : confirm === "rerun" ? rerun() : save())
+                void (confirm === "rebuild"
+                  ? rebuild()
+                  : confirm === "rerun" || confirm === "stale"
+                    ? rerun(confirm === "stale")
+                    : save())
               }
             >
               {confirm === "rebuild" ? "Replace" : "Regrade"}

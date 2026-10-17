@@ -10,6 +10,7 @@ import {
   fingerprint,
   readRubricMeta,
   rubricSignature,
+  staleSubmissions,
   type Criterion,
 } from "@/lib/rubric";
 import { tasteProse } from "@/lib/tasteprose";
@@ -152,6 +153,9 @@ export type RegradeOutcome =
 /**
  * Start a regrade. `forceAi` re-reads every submission even when the
  * criteria text is unchanged — the professor asking for a fresh read.
+ * `onlyStale` re-reads just the submissions whose scores don't cover the
+ * current criteria (a regrade that couldn't reach them), so the rest aren't
+ * paid for twice.
  */
 async function startRegrade(
   assignmentId: string,
@@ -160,8 +164,9 @@ async function startRegrade(
   /** What the scores were read against when the engine never recorded it
    *  (graded before signatures existed): the grid as it stood before this
    *  save. Without it, a first weight tweak would re-read the whole class. */
-  fallbackSig?: string
-): Promise<ActionResult<{ applied: RegradeOutcome }>> {
+  fallbackSig?: string,
+  onlyStale = false
+): Promise<ActionResult<{ applied: RegradeOutcome; count: number }>> {
   if (!isConfigured.supabaseAdmin) {
     return { ok: false, error: "Server isn't configured (service role missing)." };
   }
@@ -170,19 +175,24 @@ async function startRegrade(
   if (!fresh) return { ok: false, error: "Assignment not found." };
   const analysis = (fresh.analysis ?? {}) as AnalysisState;
   if (!REGRADABLE.includes(fresh.state) || analysis.phase !== "done") {
-    return { ok: true, data: { applied: "saved" } };
+    return { ok: true, data: { applied: "saved", count: 0 } };
   }
   if (analysis.regrade) {
     return { ok: false, error: "A regrade is already running — it rebuilds the list when it finishes." };
   }
 
   const [{ data: themes }, { data: scored }] = await Promise.all([
-    admin.from("rubric_themes").select("name, description").eq("assignment_id", assignmentId),
-    admin.from("ai_scores").select("submission_id").eq("assignment_id", assignmentId),
+    admin.from("rubric_themes").select("id, name, description").eq("assignment_id", assignmentId),
+    admin.from("ai_scores").select("submission_id, theme_scores").eq("assignment_id", assignmentId),
   ]);
   const signature = rubricSignature(themes ?? []);
-  const needsAi = forceAi || signature !== (analysis.rubricSig ?? fallbackSig);
-  const pending = (scored ?? []).map((s) => s.submission_id);
+  const needsAi = forceAi || onlyStale || signature !== (analysis.rubricSig ?? fallbackSig);
+  const pending = onlyStale
+    ? staleSubmissions(scored ?? [], (themes ?? []).map((t) => t.id))
+    : (scored ?? []).map((s) => s.submission_id);
+  if (onlyStale && pending.length === 0) {
+    return { ok: false, error: "Every submission is already scored against this rubric." };
+  }
 
   // Published grades come down first: students go back to seeing nothing
   // until the professor publishes the regraded list.
@@ -201,7 +211,7 @@ async function startRegrade(
     // compares against the older signature and may ask for one AI pass more.
     await patchAnalysis(admin, fresh, () => ({ rubricSig: signature }));
     revalidatePath(`/course/${courseId}/assignments/${assignmentId}`);
-    return { ok: true, data: { applied: "weights" } };
+    return { ok: true, data: { applied: "weights", count: 0 } };
   }
 
   const started = await patchAnalysis(admin, fresh, () => ({
@@ -212,12 +222,15 @@ async function startRegrade(
       total: pending.length,
       startedAt: new Date().toISOString(),
     },
+    // The professor asking is the signal to try the account again now (they
+    // may have just added credits), not after the pause runs out.
+    aiBlocked: undefined,
   }));
   if (!started) {
     return { ok: false, error: "Grading is mid-step — try again in a minute." };
   }
   revalidatePath(`/course/${courseId}/assignments/${assignmentId}`);
-  return { ok: true, data: { applied: "ai" } };
+  return { ok: true, data: { applied: "ai", count: pending.length } };
 }
 
 /**
@@ -229,7 +242,7 @@ export async function saveRubric(
   assignmentId: string,
   rawCriteria: unknown,
   options: { regrade?: boolean } = {}
-): Promise<ActionResult<{ applied: RegradeOutcome }>> {
+): Promise<ActionResult<{ applied: RegradeOutcome; count: number }>> {
   const { error, supabase, assignment } = await requireProfessorAssignment(assignmentId);
   if (error || !assignment) return { ok: false, error: error ?? "Not found." };
   const criteria = cleanCriteria(rawCriteria);
@@ -255,7 +268,7 @@ export async function saveRubric(
 
   if (!options.regrade) {
     revalidatePath(`/course/${assignment.course_id}/assignments/${assignmentId}`);
-    return { ok: true, data: { applied: "saved" } };
+    return { ok: true, data: { applied: "saved", count: 0 } };
   }
   return startRegrade(
     assignmentId,
@@ -266,13 +279,17 @@ export async function saveRubric(
   );
 }
 
-/** Professor: re-read every submission against the rubric as it stands. */
+/**
+ * Professor: re-read every submission against the rubric as it stands — or,
+ * with `onlyStale`, just the ones still scored against an earlier version.
+ */
 export async function regradeAssignment(
-  assignmentId: string
-): Promise<ActionResult<{ applied: RegradeOutcome }>> {
+  assignmentId: string,
+  options: { onlyStale?: boolean } = {}
+): Promise<ActionResult<{ applied: RegradeOutcome; count: number }>> {
   const { error, assignment } = await requireProfessorAssignment(assignmentId);
   if (error || !assignment) return { ok: false, error: error ?? "Not found." };
-  return startRegrade(assignmentId, assignment.course_id, true);
+  return startRegrade(assignmentId, assignment.course_id, true, undefined, !!options.onlyStale);
 }
 
 /**
