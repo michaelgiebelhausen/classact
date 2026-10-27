@@ -38,7 +38,7 @@ attempts. Provider acceptance is recorded, not proof of inbox delivery.
 
 ## Release requirements and limits
 
-- Apply `supabase/migrations/0051_late_checkins.sql` before enabling the new
+- Apply `supabase/migrations/0052_late_checkins.sql` before enabling the new
   application code. Existing check-in remains usable when the new feature is
   unavailable. The schema contract identifies the missing tables/columns.
 - No migration was applied to a live database, no messages were sent, and no
@@ -82,3 +82,17 @@ names are used, and unsigned viewers never open the service client.
   Grotesk Google Fonts. No font or unrelated application changes were made.
 - No PostgreSQL instance or authenticated live environment was used; the SQL
   migration and real email flow remain unverified at runtime.
+
+## Production release preparation, October 27, 2026
+
+Integrated the reviewed feature onto production commit `c9eccce`, preserving
+the newer grading changes. Renumbered the additive migration to `0052` because
+production already contains `0051_rubric_library.sql`. The production Supabase
+SQL editor applied the migration in a transaction and returned true for both
+new tables and both RPC functions. No student attendance rows or emails were
+created during this schema verification.
+
+The integrated source passes all 827 tests, full ESLint, TypeScript, and the
+optimized production build. A stale generated development route cache from
+the older branch was removed before the successful build. An unrelated local
+`ReportAbsence.test.tsx` file was left outside the release commit.

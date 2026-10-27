@@ -30,12 +30,12 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
   {
     table: "late_checkin_requests",
     columns: ["session_id", "enrollment_id", "seat_id", "status", "confirmed_at"],
-    migration: "0051_late_checkins.sql",
+    migration: "0052_late_checkins.sql",
   },
   {
     table: "late_checkin_witnesses",
     columns: ["request_id", "enrollment_id", "response", "emailed_at", "email_claimed_at"],
-    migration: "0051_late_checkins.sql",
+    migration: "0052_late_checkins.sql",
   },
   {
     table: "check_ins",
