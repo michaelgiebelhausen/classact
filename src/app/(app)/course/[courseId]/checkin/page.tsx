@@ -13,6 +13,7 @@ import {
   type CourseSchedule,
 } from "@/lib/schedule";
 import { socialModeEndsAt } from "@/lib/arrivals";
+import { LateCheckinSection } from "@/server/latecheckin";
 import { flashcardHintFields } from "@/lib/icebreakers";
 import {
   CheckInLive,
@@ -449,6 +450,8 @@ async function renderCheckIn(courseId: string) {
           date={lastSession.date}
         />
       )}
+
+      {!isProfessor && myEnrollmentId && <LateCheckinSection courseId={courseId} today={today} />}
 
       {isProfessor ? (
         <CollapsedAbsences count={courseAbsences.length}>

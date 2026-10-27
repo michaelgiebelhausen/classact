@@ -813,6 +813,25 @@ type TableShape<Row> = {
   Relationships: []
 }
 
+export type LateCheckinRequestRow = {
+  id: string
+  session_id: string
+  enrollment_id: string
+  seat_id: string
+  status: 'pending' | 'confirmed'
+  created_at: string
+  confirmed_at: string | null
+}
+export type LateCheckinWitnessRow = {
+  id: string
+  request_id: string
+  enrollment_id: string
+  response: 'confirm' | 'not_present' | 'unsure' | null
+  responded_at: string | null
+  emailed_at: string | null
+  email_claimed_at: string | null
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -828,6 +847,8 @@ export type Database = {
       student_answers: TableShape<StudentAnswerRow>
       class_sessions: TableShape<ClassSessionRow>
       check_ins: TableShape<CheckInRow>
+      late_checkin_requests: TableShape<LateCheckinRequestRow>
+      late_checkin_witnesses: TableShape<LateCheckinWitnessRow>
       seat_verifications: TableShape<SeatVerificationRow>
       seat_denials: TableShape<SeatDenialRow>
       name_game_scores: TableShape<NameGameScoreRow>
@@ -873,6 +894,14 @@ export type Database = {
     }
     Views: { [_ in never]: never }
     Functions: {
+      request_late_checkin: {
+        Args: { p_session: string; p_seat: string }
+        Returns: string
+      }
+      respond_late_checkin: {
+        Args: { p_request: string; p_response: string }
+        Returns: undefined
+      }
       /** 0029 — professor moves a student between seats, swapping if the
        *  target is occupied. Atomic; authorizes the caller internally. */
       reassign_seat: {
