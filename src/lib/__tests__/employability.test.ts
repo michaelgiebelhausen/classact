@@ -33,6 +33,18 @@ function get(w: ReturnType<typeof computeWorkReadiness>, key: string) {
 }
 
 describe("computeWorkReadiness", () => {
+  it("keeps classroom initiative and team leadership when project tasks are unavailable", () => {
+    const result = computeWorkReadiness({ ...EMPTY, projectTaskSignalsAvailable: false,
+      teams: 1, newSeats: 3, shoutOutsGiven: 2, leadRoles: 1,
+      selfAssignedTasks: 99, distributedTasks: 99, doneMinutes: 900, flaggedTasks: 99 });
+    expect(result.competencies.some(c => c.key === "work-ethic")).toBe(false);
+    expect(get(result, "initiative").score).toBe(34);
+    expect(get(result, "initiative").evidence).toEqual(expect.arrayContaining([
+      expect.stringContaining("3 different seat"), expect.stringContaining("2 shout-out"),
+    ]));
+    expect(get(result, "leadership").score).toBe(30);
+    expect(get(result, "dependability").evidence.join()).not.toContain("flagged");
+  });
   it("reports no signal and all getting-started for an empty record", () => {
     const w = computeWorkReadiness(EMPTY);
     expect(w.hasSignal).toBe(false);

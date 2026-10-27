@@ -28,6 +28,26 @@ export interface SchemaExpectation {
 
 export const SCHEMA_CONTRACT: SchemaExpectation[] = [
   {
+    table: "projects",
+    columns: ["mode", "brief"],
+    migration: "0053_project_contributions.sql",
+  },
+  {
+    table: "contribution_agreements",
+    columns: ["team_id", "course_id", "roster", "shares", "confirmations", "confirmed_at", "note"],
+    migration: "0053_project_contributions.sql",
+  },
+  {
+    table: "contribution_checkpoints",
+    columns: ["team_id", "course_id", "title", "deadline", "roster", "agreement_id", "deadline_history"],
+    migration: "0053_project_contributions.sql",
+  },
+  {
+    table: "contribution_responses",
+    columns: ["checkpoint_id", "respondent_id", "respondent_profile_id", "course_id", "actual", "credit", "declined", "explanation", "help_requested", "submitted_at", "revision"],
+    migration: "0053_project_contributions.sql",
+  },
+  {
     table: "late_checkin_requests",
     columns: ["session_id", "enrollment_id", "seat_id", "status", "confirmed_at"],
     migration: "0052_late_checkins.sql",

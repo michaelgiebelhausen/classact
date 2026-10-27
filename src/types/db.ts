@@ -689,6 +689,8 @@ export type PollPairRow = {
 }
 
 export type ProjectRow = {
+  mode: "tasks" | "contribution"
+  brief: string
   id: string
   course_id: string
   title: string
@@ -863,6 +865,9 @@ export type Database = {
       poll_answers: TableShape<PollAnswerRow>
       poll_pairs: TableShape<PollPairRow>
       projects: TableShape<ProjectRow>
+      contribution_agreements: TableShape<import("@/lib/contributions").Agreement>
+      contribution_checkpoints: TableShape<import("@/lib/contributions").Checkpoint>
+      contribution_responses: TableShape<import("@/lib/contributions").ContributionResponse>
       project_tasks: TableShape<ProjectTaskRow>
       project_teams: TableShape<ProjectTeamRow>
       project_team_members: TableShape<ProjectTeamMemberRow>
@@ -894,6 +899,10 @@ export type Database = {
     }
     Views: { [_ in never]: never }
     Functions: {
+      contribution_command: {
+        Args: { p_team: string; p_action: string; p_data: Record<string, unknown> }
+        Returns: undefined
+      }
       request_late_checkin: {
         Args: { p_session: string; p_seat: string }
         Returns: string

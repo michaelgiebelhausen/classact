@@ -53,7 +53,7 @@ export default async function ProjectsPage({
   const { data: projectRows } = await supabase
     .from("projects")
     .select(
-      "id, title, page_count, due_date, target_team_size, contract_text, status"
+      "id, title, page_count, due_date, target_team_size, contract_text, status, mode, brief"
     )
     .eq("course_id", courseId)
     .order("created_at", { ascending: false });
@@ -140,6 +140,8 @@ export default async function ProjectsPage({
     const projects: ProjectListItem[] = (projectRows ?? []).map((p) => ({
       id: p.id,
       title: p.title,
+      mode: p.mode,
+      brief: p.brief,
       pageCount: p.page_count,
       dueDate: p.due_date,
       targetTeamSize: p.target_team_size,
@@ -182,7 +184,7 @@ export default async function ProjectsPage({
             <CardTitle>No projects yet</CardTitle>
             <CardDescription>
               When your professor posts a group project, it shows up here with
-              its task list and due date.
+              its work agreement and due date.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -220,7 +222,7 @@ export default async function ProjectsPage({
                     Teams of ~{p.target_team_size}
                   </span>
                 )}
-                {tasks.length > 0 && (
+                {p.mode === "tasks" && tasks.length > 0 && (
                   <span>
                     {tasks.length} tasks · ~{formatMinutes(totalMinutes)} of
                     work
@@ -229,7 +231,8 @@ export default async function ProjectsPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
-              {tasks.length > 0 && (
+              {p.brief && <p className="whitespace-pre-wrap text-sm">{p.brief}</p>}
+              {p.mode === "tasks" && tasks.length > 0 && (
                 <ul className="grid gap-1.5">
                   {tasks.map((t) => (
                     <li
@@ -255,6 +258,7 @@ export default async function ProjectsPage({
                 <TeamPanel
                   courseId={courseId}
                   projectId={p.id}
+                  mode={p.mode}
                   targetTeamSize={p.target_team_size}
                   myEnrollmentId={myEnrollment.id}
                   teams={teamsByProject.get(p.id) ?? []}

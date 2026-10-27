@@ -299,6 +299,7 @@ export async function getCourseProjectStats(
       .from("projects")
       .select("id, title")
       .eq("course_id", courseId)
+      .eq("mode", "tasks")
       .order("created_at", { ascending: false }),
     supabase
       .from("project_teams")
@@ -306,7 +307,8 @@ export async function getCourseProjectStats(
       .eq("course_id", courseId)
       .order("created_at", { ascending: true }),
   ]);
-  const teamIds = (teams ?? []).map((t) => t.id);
+  const taskProjectIds = new Set((projects ?? []).map(p => p.id));
+  const teamIds = (teams ?? []).filter(t => taskProjectIds.has(t.project_id)).map((t) => t.id);
   if (teamIds.length === 0) return [];
 
   const [
@@ -437,7 +439,7 @@ export async function getMyProjectStats(
   ] = await Promise.all([
     supabase
       .from("project_teams")
-      .select("id, project_id, name, projects(title)")
+      .select("id, project_id, name, projects(title, mode)")
       .in("id", teamIds),
     supabase
       .from("project_team_members")
@@ -467,6 +469,7 @@ export async function getMyProjectStats(
 
   const out: MyProjectStats[] = [];
   for (const team of teams ?? []) {
+    if ((team.projects as unknown as { mode: string } | null)?.mode === "contribution") continue;
     const members = (memberRows ?? [])
       .filter((m) => m.team_id === team.id)
       .map((m) => ({ enrollmentId: m.enrollment_id, teamId: m.team_id }));
@@ -527,6 +530,7 @@ export async function getStudentWorkReadiness(
     { data: answers },
     { data: exerciseMemberships },
     { data: teamRoles },
+    { data: contractSignatures },
     myProjects,
   ] = await Promise.all([
     supabase.from("class_sessions").select("id").eq("course_id", courseId),
@@ -555,7 +559,9 @@ export async function getStudentWorkReadiness(
       .eq("enrollment_id", enrollment.id),
     supabase
       .from("project_team_members")
-      .select("role")
+      .select("team_id, role, project_teams!inner(projects!inner(mode))")
+      .eq("enrollment_id", enrollment.id),
+    supabase.from("team_contract_signatures").select("team_id")
       .eq("enrollment_id", enrollment.id),
     getMyProjectStats(courseId),
   ]);
@@ -580,6 +586,7 @@ export async function getStudentWorkReadiness(
 
   // Aggregate project contribution across the student's teams.
   const projects = myProjects ?? [];
+  const signedTeamIds = new Set((contractSignatures ?? []).map(s => s.team_id));
   const withWork = projects.filter((p) => p.teamDoneMinutes > 0);
   const avgShareOfTeam =
     withWork.length > 0
@@ -599,8 +606,9 @@ export async function getStudentWorkReadiness(
     exercisesJoined: (exerciseMemberships ?? []).length,
     answered: participation.answered,
     changedToCorrect: participation.changedToCorrect,
-    teams: projects.length,
-    contractsSigned: projects.filter((p) => p.signedContract).length,
+    projectTaskSignalsAvailable: !(teamRoles ?? []).length || projects.length > 0,
+    teams: (teamRoles ?? []).length,
+    contractsSigned: (teamRoles ?? []).filter(m => signedTeamIds.has(m.team_id)).length,
     leadRoles: (teamRoles ?? []).filter((r) => r.role === "lead").length,
     doneMinutes: projects.reduce((sum, p) => sum + p.stats.doneMinutes, 0),
     doneTasks: projects.reduce((sum, p) => sum + p.stats.doneTasks, 0),

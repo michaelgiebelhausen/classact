@@ -54,6 +54,8 @@ export interface ProjectTeamSummary {
 }
 
 export interface ProjectListItem {
+  mode: "tasks" | "contribution";
+  brief: string;
   id: string;
   title: string;
   pageCount: number | null;
@@ -71,6 +73,7 @@ interface Props {
 }
 
 interface ProjectSettings {
+  brief: string;
   id: string;
   title: string;
   dueDate: string;
@@ -109,6 +112,10 @@ export function ProjectManager({ courseId, projects }: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [mode, setMode] = useState<"tasks" | "contribution">("contribution");
+  const [newTitle, setNewTitle] = useState("");
+  const [brief, setBrief] = useState("");
+  const [createError, setCreateError] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [teamSize, setTeamSize] = useState("");
   const [busyProject, setBusyProject] = useState<string | null>(null);
@@ -142,6 +149,7 @@ export function ProjectManager({ courseId, projects }: Props) {
         courseId,
         title,
         storagePath: path,
+        mode: "tasks",
         pageCount: pageCount ?? undefined,
         dueDate: dueDate || undefined,
         targetTeamSize: size,
@@ -161,6 +169,16 @@ export function ProjectManager({ courseId, projects }: Props) {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  }
+
+  async function handleCreateContribution() {
+    setUploading(true); setCreateError("");
+    try {
+      const result = await createProject({ courseId, title: newTitle, brief, mode: "contribution", dueDate: dueDate || undefined, targetTeamSize: teamSize.trim() ? Number(teamSize) : undefined });
+      if (!result.ok) { setCreateError(result.error); return; }
+      setNewTitle(""); setBrief(""); setDueDate(""); setTeamSize(""); router.refresh();
+    } catch { setCreateError("Connection failed. Try again."); }
+    finally { setUploading(false); }
   }
 
   async function handleToggleOpen(project: ProjectListItem) {
@@ -213,6 +231,7 @@ export function ProjectManager({ courseId, projects }: Props) {
         dueDate: settings.dueDate || undefined,
         targetTeamSize: size,
         contractText: settings.contractText,
+        brief: settings.brief,
       });
       if (!result.ok) {
         toast.error(result.error);
@@ -232,11 +251,20 @@ export function ProjectManager({ courseId, projects }: Props) {
         <CardHeader>
           <CardTitle>Add a project</CardTitle>
           <CardDescription>
-            Upload the assignment brief as a PDF. AI breaks it into a task
-            list; each team gets a copy of that list as their to-do board.
+            Start with a title. Teams agree on work shares and privately check in on contributions. You can also create a legacy task board from a PDF.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          <label className="grid gap-1.5 text-sm">Project approach
+            <select value={mode} onChange={e => setMode(e.target.value as "tasks" | "contribution")} className="min-h-11 rounded-lg border bg-background p-2">
+              <option value="contribution">Work shares and private check-ins</option><option value="tasks">Legacy task board (PDF)</option>
+            </select>
+          </label>
+          {mode === "contribution" && <>
+            <label className="grid gap-1.5 text-sm">Project title<Input maxLength={200} value={newTitle} onChange={e => setNewTitle(e.target.value)} /></label>
+            <label className="grid gap-1.5 text-sm">Assignment brief (optional)<textarea maxLength={20000} value={brief} onChange={e => setBrief(e.target.value)} className="min-h-24 rounded-lg border bg-background p-3 focus-visible:outline-ring" /></label>
+          </>}
+          {createError && <p role="alert" className="text-sm text-destructive">{createError}</p>}
           <div className="flex flex-wrap items-end gap-3">
             <div className="grid gap-1.5">
               <label
@@ -281,13 +309,13 @@ export function ProjectManager({ courseId, projects }: Props) {
                 if (file) void handleFile(file);
               }}
             />
-            <Button
+            {mode === "tasks" ? <Button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
             >
               <FileText className="mr-2 size-4" />
               {uploading ? "Working…" : "Upload assignment PDF"}
-            </Button>
+            </Button> : <Button disabled={uploading || !newTitle.trim()} onClick={() => void handleCreateContribution()}>{uploading ? "Creating…" : "Create project"}</Button>}
           </div>
         </CardContent>
       </Card>
@@ -296,14 +324,13 @@ export function ProjectManager({ courseId, projects }: Props) {
         <CardHeader>
           <CardTitle>Your projects</CardTitle>
           <CardDescription>
-            Review the AI task list, then open the project so students can form
-            teams. Drafts are invisible to students.
+            Open a project so students can form teams. Select a team to review its agreement and private check-ins. Drafts are invisible to students.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {projects.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No projects yet — upload your first assignment PDF above.
+              No projects yet. Create your first project above.
             </p>
           ) : (
             <ul className="grid gap-2">
@@ -363,6 +390,7 @@ export function ProjectManager({ courseId, projects }: Props) {
                         onClick={() =>
                           setSettings({
                             id: project.id,
+                            brief: project.brief,
                             title: project.title,
                             dueDate: project.dueDate ?? "",
                             targetTeamSize: project.targetTeamSize
@@ -387,11 +415,11 @@ export function ProjectManager({ courseId, projects }: Props) {
                       </Button>
                     </div>
                   </div>
-                  <ProjectTasks
+                  {project.mode === "tasks" && <ProjectTasks
                     courseId={courseId}
                     projectId={project.id}
                     tasks={project.tasks}
-                  />
+                  />}
                   {project.teams.length > 0 && (
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2">
                       <Users className="size-3 text-muted-foreground" />
@@ -437,6 +465,7 @@ export function ProjectManager({ courseId, projects }: Props) {
           </DialogHeader>
           {settings && (
             <div className="grid gap-4">
+              <label className="grid gap-1.5 text-sm">Assignment brief (optional)<textarea value={settings.brief} maxLength={20000} onChange={e => setSettings(s => s ? { ...s, brief: e.target.value } : s)} className="min-h-24 rounded-lg border bg-background p-3 focus-visible:outline-ring" /></label>
               <div className="grid gap-1.5">
                 <label className="text-sm font-medium" htmlFor="ps-title">
                   Title

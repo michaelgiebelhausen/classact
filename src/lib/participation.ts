@@ -32,7 +32,7 @@ export function participationScore(
   scores: Record<string, number>,
   weights: WeightedAttribute[]
 ): number {
-  const normalized = normalizeWeights(weights);
+  const normalized = normalizeWeights(weights.filter(w => Number.isFinite(scores[w.key])));
   let sum = 0;
   for (const w of normalized) {
     sum += (scores[w.key] ?? 0) * w.weight;
@@ -69,7 +69,8 @@ export function fitWeights(
     for (const c of decisive) {
       // Feature: score difference scaled to ~[-1, 1].
       const x = keys.map(
-        (k) => ((c.right[k.key] ?? 0) - (c.left[k.key] ?? 0)) / 100
+        (k) => Number.isFinite(c.right[k.key]) && Number.isFinite(c.left[k.key])
+          ? (c.right[k.key] - c.left[k.key]) / 100 : 0
       );
       const target = c.verdict > 0 ? 1 : 0;
       const margin = Math.abs(c.verdict); // "clearly" counts double

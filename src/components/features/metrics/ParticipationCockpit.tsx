@@ -285,7 +285,7 @@ export function ParticipationCockpit({
                           />
                         </div>
                         <span className="w-8 text-right">
-                          {Math.round(p.scores[a.key] ?? 0)}
+                          {Number.isFinite(p.scores[a.key]) ? Math.round(p.scores[a.key]) : "N/A"}
                         </span>
                       </div>
                     ))}
@@ -350,7 +350,7 @@ export function ParticipationCockpit({
                     />
                   </div>
                   <span className="w-8 text-right text-xs">
-                    {Math.round(selected.scores[a.key] ?? 0)}
+                    {Number.isFinite(selected.scores[a.key]) ? Math.round(selected.scores[a.key]) : "N/A"}
                   </span>
                 </div>
               ))}

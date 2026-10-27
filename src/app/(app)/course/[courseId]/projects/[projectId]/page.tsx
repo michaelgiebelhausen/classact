@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ContributionPanel } from "@/components/features/projects/ContributionPanel";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, CalendarDays } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
@@ -43,7 +44,7 @@ export default async function ProjectBoardPage({
   // RLS: students only see open projects, so drafts 404 for them.
   const { data: project } = await supabase
     .from("projects")
-    .select("id, title, due_date")
+    .select("id, title, due_date, mode, brief")
     .eq("id", projectId)
     .eq("course_id", courseId)
     .single();
@@ -164,6 +165,25 @@ export default async function ProjectBoardPage({
       name: directory[m.enrollment_id]?.name ?? "Unknown",
       role: m.role,
     }));
+
+  if (project.mode === "contribution") {
+    const [agreements, checkpoints] = await Promise.all([
+      supabase.from("contribution_agreements").select("*").eq("team_id", activeTeam.id).order("created_at", { ascending: false }).order("id", { ascending: false }),
+      supabase.from("contribution_checkpoints").select("*").eq("team_id", activeTeam.id).order("created_at", { ascending: false }),
+    ]);
+    const responses = checkpoints.data?.length
+      ? await supabase.from("contribution_responses").select("*").in("checkpoint_id", checkpoints.data.map(c => c.id))
+      : { data: [], error: null };
+    if (agreements.error || checkpoints.error || responses.error) {
+      return <div className="grid gap-6">{header}<p role="alert">Contribution records could not be loaded. Refresh or ask the instructor to check the project setup.</p></div>;
+    }
+    return <div className="grid gap-6">{header}<h2 className="text-lg font-medium">{activeTeam.name}</h2>
+      <ContributionPanel key={activeTeam.id} courseId={courseId} projectId={projectId} teamId={activeTeam.id}
+        members={members.map(m => ({ id: m.enrollmentId, name: m.name, profile_id: null }))}
+        agreements={agreements.data ?? []} checkpoints={checkpoints.data ?? []} responses={responses.data ?? []}
+        me={myEnrollmentId} isProfessor={isProfessor} now={new Date().toISOString()} brief={project.brief} />
+    </div>;
+  }
 
   const { data: taskRows } = await supabase
     .from("team_tasks")

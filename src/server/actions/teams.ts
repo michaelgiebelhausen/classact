@@ -83,7 +83,7 @@ export async function createTeam(
   // Students can only read open projects (RLS), so this doubles as the gate.
   const { data: project } = await supabase
     .from("projects")
-    .select("id, contract_text")
+    .select("id, contract_text, mode")
     .eq("id", projectId)
     .eq("course_id", courseId)
     .single();
@@ -120,29 +120,31 @@ export async function createTeam(
     };
   }
 
-  // Copy the professor's template onto the team's own board.
-  const { data: template } = await supabase
-    .from("project_tasks")
-    .select("id, title, description, estimated_minutes, position, source")
-    .eq("project_id", projectId)
-    .order("position", { ascending: true });
-  if (template && template.length > 0) {
-    await supabase.from("team_tasks").insert(
-      template.map((t) => ({
-        team_id: team.id,
-        project_id: projectId,
-        course_id: courseId,
-        source_task_id: t.id,
-        title: t.title,
-        description: t.description,
-        estimated_minutes: t.estimated_minutes,
-        status: "unassigned" as const,
-        position: t.position,
-        source: t.source,
-      }))
-    );
+  if (project.mode === "tasks") {
+    // Copy the professor's template onto the team's own board.
+    const { data: template } = await supabase
+      .from("project_tasks")
+      .select("id, title, description, estimated_minutes, position, source")
+      .eq("project_id", projectId)
+      .order("position", { ascending: true });
+    if (template && template.length > 0) {
+      await supabase.from("team_tasks").insert(
+        template.map((t) => ({
+          team_id: team.id,
+          project_id: projectId,
+          course_id: courseId,
+          source_task_id: t.id,
+          title: t.title,
+          description: t.description,
+          estimated_minutes: t.estimated_minutes,
+          status: "unassigned" as const,
+          position: t.position,
+          source: t.source,
+        }))
+      );
+    }
+    await addContractCard(supabase, team, enrollmentId);
   }
-  await addContractCard(supabase, team, enrollmentId);
 
   revalidatePath(`/course/${courseId}/projects`);
   return { ok: true, data: { teamId: team.id } };
@@ -179,7 +181,8 @@ export async function joinTeam(
       error: "You're already on a team for this project — leave it first.",
     };
   }
-  await addContractCard(supabase, team, enrollmentId);
+  const { data: project } = await supabase.from("projects").select("mode").eq("id", team.project_id).single();
+  if (project?.mode === "tasks") await addContractCard(supabase, team, enrollmentId);
 
   revalidatePath(`/course/${courseId}/projects`);
   return { ok: true };
@@ -227,11 +230,21 @@ export async function leaveTeam(
 /** Student: sign the team contract — also completes your contract card. */
 export async function signContract(
   courseId: string,
-  teamId: string
+  teamId: string,
+  reviewedText?: string
 ): Promise<ActionResult> {
   const { supabase, error, enrollmentId } = await requireEnrollment(courseId);
   if (error || !enrollmentId)
     return { ok: false, error: error ?? "No enrollment." };
+
+  const { data: teamMode } = await supabase.from("project_teams").select("project_id, projects(mode)").eq("id", teamId).eq("course_id", courseId).single();
+  if (!teamMode) return { ok: false, error: "Team not found in this course." };
+  if ((teamMode?.projects as unknown as { mode: string } | null)?.mode === "contribution") {
+    const { error: signError } = await supabase.rpc("contribution_command", { p_team: teamId, p_action: "sign-contract", p_data: { text: reviewedText ?? "" } });
+    if (signError) return { ok: false, error: signError.code === "P0001" ? signError.message : "Couldn't sign the contract." };
+    revalidatePath(`/course/${courseId}/projects`);
+    return { ok: true };
+  }
 
   const { error: signError } = await supabase
     .from("team_contract_signatures")
@@ -271,6 +284,15 @@ export async function updateTeamContract(
 
   const text = contractText.trim().slice(0, 20_000);
   if (!text) return { ok: false, error: "The contract can't be empty." };
+
+  const { data: teamMode } = await supabase.from("project_teams").select("project_id, projects(mode)").eq("id", teamId).eq("course_id", courseId).single();
+  if (!teamMode) return { ok: false, error: "Team not found in this course." };
+  if ((teamMode?.projects as unknown as { mode: string } | null)?.mode === "contribution") {
+    const { error: contractError } = await supabase.rpc("contribution_command", { p_team: teamId, p_action: "contract", p_data: { text } });
+    if (contractError) return { ok: false, error: "Couldn't save the contract. Refresh and try again." };
+    revalidatePath(`/course/${courseId}/projects`);
+    return { ok: true };
+  }
 
   const { error: updateError } = await supabase
     .from("project_teams")

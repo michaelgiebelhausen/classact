@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { PROJECT_BUCKET } from "@/lib/storage";
-import { DEFAULT_TEAM_CONTRACT } from "@/lib/projects";
+import { DEFAULT_TEAM_CONTRACT, CONTRIBUTION_TEAM_CONTRACT } from "@/lib/projects";
 import { generateProjectTasks } from "@/server/projectgen";
 import type { ActionResult } from "@/server/actions/auth";
 
@@ -64,15 +64,15 @@ function validateTaskFields(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Professor: register a project. The browser has already uploaded the
- * assignment PDF to `{courseId}/{uuid}.pdf` in the project-docs bucket
- * (storage RLS limits that to the course professor); this records the row,
- * seeded with the default team contract.
+ * Professor: create a title-first contribution project or a legacy task
+ * project backed by an already-uploaded PDF. Seed the appropriate contract.
  */
 export async function createProject(input: {
   courseId: string;
   title: string;
-  storagePath: string;
+  storagePath?: string;
+  mode?: "tasks" | "contribution";
+  brief?: string;
   pageCount?: number;
   dueDate?: string;
   targetTeamSize?: number;
@@ -82,7 +82,9 @@ export async function createProject(input: {
 
   const title = input.title.trim().slice(0, 200);
   if (!title) return { ok: false, error: "Give the project a title." };
-  if (!input.storagePath.startsWith(`${input.courseId}/`)) {
+  const mode = input.mode ?? "contribution";
+  if (mode !== "tasks" && mode !== "contribution") return { ok: false, error: "Choose a valid project mode." };
+  if ((mode === "tasks" && !input.storagePath) || (input.storagePath && !input.storagePath.startsWith(`${input.courseId}/`))) {
     return { ok: false, error: "Upload didn't complete — try again." };
   }
   const dueDate = parseDueDate(input.dueDate);
@@ -102,11 +104,13 @@ export async function createProject(input: {
     .insert({
       course_id: input.courseId,
       title,
-      storage_path: input.storagePath,
+      storage_path: input.storagePath ?? null,
+      mode,
+      brief: (input.brief ?? "").trim().slice(0, 20_000),
       page_count: input.pageCount ?? null,
       due_date: dueDate,
       target_team_size: teamSize,
-      contract_text: DEFAULT_TEAM_CONTRACT,
+      contract_text: mode === "contribution" ? CONTRIBUTION_TEAM_CONTRACT : DEFAULT_TEAM_CONTRACT,
     })
     .select("id")
     .single();
@@ -125,6 +129,7 @@ export async function updateProject(input: {
   dueDate?: string;
   targetTeamSize?: number | null;
   contractText: string;
+  brief?: string;
 }): Promise<ActionResult> {
   const { supabase, error } = await requireProfessor(input.courseId);
   if (error) return { ok: false, error };
@@ -150,6 +155,7 @@ export async function updateProject(input: {
       due_date: dueDate,
       target_team_size: teamSize,
       contract_text: input.contractText.slice(0, 20_000),
+      ...(input.brief !== undefined ? { brief: input.brief.trim().slice(0, 20_000) } : {}),
     })
     .eq("id", input.projectId)
     .eq("course_id", input.courseId);

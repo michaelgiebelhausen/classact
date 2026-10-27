@@ -143,7 +143,7 @@ async function buildCourseSignals(
       .not("ended_at", "is", null),
     admin
       .from("project_team_members")
-      .select("team_id, enrollment_id, role, project_teams!inner(course_id)")
+      .select("team_id, enrollment_id, role, project_teams!inner(course_id, projects!inner(mode))")
       .eq("project_teams.course_id", courseId),
     admin
       .from("team_tasks")
@@ -223,6 +223,9 @@ async function buildCourseSignals(
     );
   }
 
+  const legacyTeamIds = new Set((teamMembers ?? []).filter(m =>
+    (m.project_teams as unknown as { projects: { mode: string } }).projects.mode === "tasks"
+  ).map(m => m.team_id));
   const teamIdSet = new Set((teamMembers ?? []).map((m) => m.team_id));
   const courseSignatures = (signatures ?? []).filter((s) => teamIdSet.has(s.team_id));
   const publishedAssignments = new Set(
@@ -352,7 +355,7 @@ async function buildCourseSignals(
     let flaggedTasks = 0;
     const shares: number[] = [];
     const myTeams = (teamMembers ?? []).filter((m) => m.enrollment_id === eid);
-    for (const membership of myTeams) {
+    for (const membership of myTeams.filter(m => legacyTeamIds.has(m.team_id))) {
       const stats = statsByTeamMember.get(`${membership.team_id}|${eid}`);
       if (!stats) continue;
       doneMinutes += stats.doneMinutes;
@@ -470,6 +473,7 @@ async function buildCourseSignals(
       exercisesJoined: myGroups.length,
       answered: tps.answered,
       changedToCorrect: tps.changedToCorrect,
+      projectTaskSignalsAvailable: !myTeams.length || myTeams.some(m => legacyTeamIds.has(m.team_id)),
       teams: myTeams.length,
       contractsSigned,
       leadRoles,

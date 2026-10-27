@@ -46,6 +46,7 @@ export interface TeamInfo {
 }
 
 interface Props {
+  mode?: "tasks" | "contribution";
   courseId: string;
   projectId: string;
   targetTeamSize: number | null;
@@ -59,6 +60,7 @@ interface Props {
  * Editing the contract clears signatures so everyone re-signs.
  */
 export function TeamPanel({
+  mode = "tasks",
   courseId,
   projectId,
   targetTeamSize,
@@ -103,13 +105,13 @@ export function TeamPanel({
     if (ok) {
       setNewTeamName("");
       toast.success(
-        `"${name}" is live — your board has the starting task list. First up: the team contract.`
+        mode === "contribution" ? `"${name}" is ready. Review the team contract and agree on your work split.` : `"${name}" is live — your board has the starting task list. First up: the team contract.`
       );
     }
   }
 
   async function handleSign() {
-    const ok = await run(() => signContract(courseId, myTeam!.id));
+    const ok = await run(() => signContract(courseId, myTeam!.id, myTeam!.contractText));
     if (ok) {
       toast.success("Contract signed.");
       setContractOpen(false);
@@ -142,7 +144,7 @@ export function TeamPanel({
           <div className="flex flex-wrap gap-2">
             <Button size="sm" asChild>
               <Link href={`/course/${courseId}/projects/${projectId}`}>
-                <FolderKanban className="mr-1 size-4" /> Open board
+                <FolderKanban className="mr-1 size-4" /> {mode === "contribution" ? "Work split & check-ins" : "Open board"}
               </Link>
             </Button>
             <Button
@@ -163,7 +165,7 @@ export function TeamPanel({
               onClick={() => {
                 if (
                   window.confirm(
-                    "Leave this team? Your unfinished tasks go back to Unassigned."
+                    mode === "contribution" ? "Leave this team? Historical agreements and check-ins will be preserved." : "Leave this team? Your unfinished tasks go back to Unassigned."
                   )
                 ) {
                   void run(() => leaveTeam(courseId, myTeam.id));
@@ -206,7 +208,7 @@ export function TeamPanel({
               <DialogDescription>
                 {editingContract
                   ? "Editing the contract clears all signatures — the whole team re-signs the new version."
-                  : "What this team agrees to. Signing checks off your contract card."}
+                  : mode === "contribution" ? "What this team agrees to. Work share confirmation is a separate step." : "What this team agrees to. Signing checks off your contract card."}
               </DialogDescription>
             </DialogHeader>
             {editingContract ? (

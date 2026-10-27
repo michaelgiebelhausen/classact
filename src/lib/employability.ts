@@ -26,6 +26,8 @@ export interface WorkReadinessInput {
   answered: number;
   changedToCorrect: number;
   // Projects (summed across the student's teams in this course)
+  /** False when only contribution projects exist: task evidence is unavailable. */
+  projectTaskSignalsAvailable?: boolean;
   teams: number;
   contractsSigned: number;
   leadRoles: number;
@@ -139,6 +141,11 @@ function signal(
 }
 
 export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
+  const projectTasksAvailable = input.projectTaskSignalsAvailable !== false;
+  if (!projectTasksAvailable) {
+    input = { ...input, doneMinutes: 0, doneTasks: 0, biggestTaskMinutes: 0,
+      distributedTasks: 0, selfAssignedTasks: 0, flaggedTasks: 0, avgShareOfTeam: 0 };
+  }
   const attendanceRate =
     input.sessionsHeld > 0 ? input.sessionsAttended / input.sessionsHeld : 0;
   const verifiedRate =
@@ -228,7 +235,9 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
   }
   if (input.selfAssignedTasks === 0 && input.newSeats === 0) {
     initEvidence.push(
-      "Claiming work before you're asked is how initiative shows — grab a task off your team board"
+      projectTasksAvailable
+        ? "Claiming work before you're asked is how initiative shows — grab a task off your team board"
+        : "Try a new seat or recognize a classmate's good work to build initiative"
     );
   }
   const shoutOutsGiven = input.shoutOutsGiven ?? 0;
@@ -255,7 +264,9 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
   }
   if (input.distributedTasks === 0 && input.leadRoles === 0) {
     leadEvidence.push(
-      "Organising the work — distributing tasks, starting a team — is where leadership shows"
+      projectTasksAvailable
+        ? "Organising the work — distributing tasks, starting a team — is where leadership shows"
+        : "Starting a team and bringing people together is where leadership shows"
     );
   }
   const leadership = signal(
@@ -445,7 +456,7 @@ export function computeWorkReadiness(input: WorkReadinessInput): WorkReadiness {
     coachability,
     focus,
     judgment,
-  ];
+  ].filter(c => projectTasksAvailable || c.key !== "work-ethic");
 
   const hasSignal =
     input.sessionsAttended > 0 ||

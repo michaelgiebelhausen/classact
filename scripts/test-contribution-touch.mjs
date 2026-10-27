@@ -1,0 +1,40 @@
+// Supply the endpoint from the named preview session's `get cdp-url` command.
+// Operates only on that session's fictional localhost preview tab.
+import assert from 'node:assert/strict';
+const endpoint=process.argv[2];
+if(!endpoint?.startsWith('ws://127.0.0.1:')) throw new Error('Supply the isolated preview browser endpoint.');
+const ws=new WebSocket(endpoint);
+await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});
+let seq=0; const pending=new Map();
+ws.addEventListener('message',({data})=>{const result=JSON.parse(data);if(result.id){const p=pending.get(result.id);pending.delete(result.id);result.error?p.reject(new Error(result.error.message)):p.resolve(result.result);}});
+const send=(method,params={},sessionId)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});
+const {targetInfos}=await send('Target.getTargets');
+const target=targetInfos.find(t=>t.type==='page'&&t.url==='http://127.0.0.1:4513/');
+assert.ok(target,'Fictional preview tab must already be open.');
+const {sessionId}=await send('Target.attachToTarget',{targetId:target.targetId,flatten:true});
+const cdp=(method,params)=>send(method,params,sessionId);
+const evaluate=async expression=>{const r=await cdp('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.text);return r.result.value;};
+await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+await cdp('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+await evaluate(`document.querySelector('select').value='student';document.querySelector('select').dispatchEvent(new Event('change',{bubbles:true}));new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+await evaluate(`window.scrollBy(0,[...document.querySelectorAll('input[type=range]')].find(e=>e.checkVisibility()).getBoundingClientRect().y-180);new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+// Mobile resize/scroll hit-testing updates after layout in headless Chromium.
+await evaluate(`new Promise(r=>setTimeout(r,200))`);
+const box=await evaluate(`(()=>{const e=[...document.querySelectorAll('input[type=range]')].find(e=>e.checkVisibility()),b=e.getBoundingClientRect();return {x:b.x,y:b.y,w:b.width,h:b.height,value:Number(e.value),disabled:e.disabled};})()`);
+assert.equal(box.disabled,false);
+const start=box.x+12+(box.w-24)*box.value/10000, end=box.x+12+(box.w-24)*0.65, y=box.y+box.h/2;
+await evaluate(`window.previewTouchEvents=[];for(const type of ['pointerdown','touchstart','input','pointermove'])document.addEventListener(type,e=>window.previewTouchEvents.push({type,target:e.target.tagName,x:e.clientX,y:e.clientY}),{once:true});`);
+const hit=await evaluate(`({tag:document.elementFromPoint(${start},${y})?.tagName,visual:{height:visualViewport.height,width:visualViewport.width,top:visualViewport.offsetTop,pageTop:visualViewport.pageTop},height:innerHeight})`);
+assert.equal(hit.tag,'INPUT','Touch must target a visible slider.');
+await cdp('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:start,y,id:1}]});
+for(let i=1;i<=8;i++)await cdp('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start+(end-start)*i/8,y,id:1}]});
+await cdp('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+await evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+const moved=await evaluate(`({value:Number([...document.querySelectorAll('input[type=range]')].find(e=>e.checkVisibility()).value),total:[...document.querySelectorAll('input[type=range]')].filter(e=>e.checkVisibility()).slice(0,4).reduce((s,e)=>s+Number(e.value),0),width:innerWidth,scrollWidth:document.documentElement.scrollWidth})`);
+const events=await evaluate(`window.previewTouchEvents`);
+assert.ok(moved.value>box.value,`Touch drag must change contribution: ${JSON.stringify({box,moved,hit,events})}`);assert.equal(moved.total,10000);assert.equal(moved.width,moved.scrollWidth);
+await evaluate(`document.querySelector('select').value='instructor';document.querySelector('select').dispatchEvent(new Event('change',{bubbles:true}));new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+const instructor=await evaluate(`({width:innerWidth,scrollWidth:document.documentElement.scrollWidth,tableScroll:document.querySelector('table').parentElement.scrollWidth>document.querySelector('table').parentElement.clientWidth})`);
+assert.equal(instructor.width,instructor.scrollWidth);assert.equal(instructor.tableScroll,true);
+await send('Target.detachFromTarget',{sessionId});ws.close();
+console.log('Emulated touch drag changed contribution, retained 10000 total, and both phone views fit the viewport; instructor table scrolls within its region.');

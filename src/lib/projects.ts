@@ -13,6 +13,14 @@
  */
 export const CONTRACT_TASK_TITLE = "Review & sign the team contract";
 
+export const CONTRIBUTION_TEAM_CONTRACT = `TEAM CONTRACT
+
+We agree on each member's share of the work and confirm changes together.
+We communicate early when our availability changes and support each other in completing the whole assignment.
+At each checkpoint, we privately assess everyone's actual contribution, including our own, and recommend a division of 100 credit points.
+These shares describe completed work, not the completeness or quality of the assignment. The instructor retains grading authority.
+We can ask the instructor for help at any time, including when someone is excluded from the work.`;
+
 export const DEFAULT_TEAM_CONTRACT = `TEAM CONTRACT
 
 As a member of this team, I agree to:
