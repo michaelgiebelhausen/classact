@@ -14,6 +14,8 @@ const fonts={name:'local-fonts',async transformIndexHtml(html){
 }};
 const server=await createServer({plugins:[fonts],configFile:false,root:preview,server:{host:'127.0.0.1',port:4514,strictPort:true,fs:{allow:[root]}},esbuild:{jsx:'automatic'},css:{postcss:path.join(root,'postcss.config.mjs')},resolve:{alias:[
   {find:'@/server/actions/studentview',replacement:path.join(preview,'actions.ts')},
+  {find:'@/server/actions/attendancehistory',replacement:path.join(preview,'attendance.ts')},
+  {find:'@/server/actions/latecheckin',replacement:path.join(preview,'attendance.ts')},
   {find:'next/navigation',replacement:path.join(preview,'navigation.ts')},
   {find:'next/link',replacement:path.join(preview,'link.tsx')},
   {find:'@',replacement:path.join(root,'src')},

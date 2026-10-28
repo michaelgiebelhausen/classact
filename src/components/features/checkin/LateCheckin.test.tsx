@@ -4,6 +4,7 @@ import { LateCheckin, type LateCheckinProps } from './LateCheckin';
 
 const actions = vi.hoisted(() => ({ requestLateCheckin: vi.fn(), respondLateCheckin: vi.fn(), retryLateCheckinEmails: vi.fn() }));
 vi.mock('@/server/actions/latecheckin', () => actions);
+vi.mock('@/server/actions/attendancehistory', () => ({ getMyAttendanceHistory: vi.fn() }));
 const props: LateCheckinProps = {
   courseId: 'course', sessions: [{ id: 'session', date: '2026-09-15' }],
   seats: [{ id: 'seat', label: 'B4' }], mine: [], incoming: [],
@@ -52,6 +53,7 @@ describe('late check-in', () => {
   it('keeps the rest of check-in usable when this feature is unavailable', () => {
     render(<LateCheckin {...props} unavailable />);
     expect(screen.getByText(/not available yet/)).toBeVisible();
-    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByRole('button', { name: 'See my attendance record' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Ask my neighbors to vouch' })).toBeNull();
   });
 });

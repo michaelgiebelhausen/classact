@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { requestLateCheckin, respondLateCheckin, retryLateCheckinEmails } from '@/server/actions/latecheckin';
 import type { LateResponse } from '@/lib/latecheckin';
 import type { ActionResult } from '@/server/actions/auth';
+import { AttendanceHistory } from './AttendanceHistory';
 
 export type LateCheckinProps = {
   courseId: string;
@@ -42,6 +43,7 @@ export function LateCheckin({ courseId, sessions, seats, mine, incoming, unavail
       <CardDescription>Choose the class and the seat you used, even if it was weeks ago. We’ll ask the students recorded on either side of you to vouch for your attendance. One confirmation is enough.</CardDescription>
     </CardHeader>
     <CardContent className="grid gap-6">
+      <AttendanceHistory courseId={courseId} />
       {unavailable ? <p className="text-sm text-muted-foreground">Late check-in is not available yet. Please try again later.</p> : <>
         {incoming.length > 0 && <section aria-label="Attendance confirmations" className="grid gap-3">
           <h3 className="font-medium">Can you vouch for a classmate?</h3>
