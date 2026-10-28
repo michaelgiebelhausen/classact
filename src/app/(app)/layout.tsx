@@ -5,6 +5,8 @@ import { needsOnboarding } from "@/lib/membership";
 import { Sidebar } from "@/components/features/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { createClient } from "@/lib/supabase/server";
+import { StudentViewControls } from "@/components/features/StudentViewControls";
 
 function initials(name: string | null): string {
   if (!name) return "ME";
@@ -35,19 +37,25 @@ export default async function AppLayout({
   // count returns null and we let them through rather than trapping someone
   // behind a hiccup.
   const membership = await getMembership(profile.id);
+  const client = await createClient();
+  const [{ data: taught }, { data: practices }] = await Promise.all([
+    client.from("courses").select("id").eq("professor_id", profile.id),
+    client.from("courses").select("id, practice_source_id, practice_routes").eq("practice_instructor_id", profile.id),
+  ]);
   if (membership && needsOnboarding(membership, profile.onboarding_complete)) {
     redirect("/onboarding");
   }
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar />
+      <Sidebar practiceIds={(practices ?? []).map(p => p.id)} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-border/60 bg-background/80 px-6 backdrop-blur-md">
+        <header className="sticky top-0 z-30 flex min-h-16 flex-wrap items-center gap-3 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur-md sm:px-6 has-[[data-practice]]:[&_[data-account-link]]:hidden">
           <span className="font-[family-name:var(--font-heading)] text-lg font-medium tracking-tight">
             ClassAct
           </span>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            <StudentViewControls taught={(taught ?? []).map(c => c.id)} practices={(practices ?? []).filter(p => p.practice_source_id !== null).map(p => ({ ...p, practice_source_id: p.practice_source_id! }))} />
             <form action="/auth/signout" method="post">
               <Button variant="outline" size="sm" type="submit">
                 Sign out
@@ -55,6 +63,7 @@ export default async function AppLayout({
             </form>
             {/* The obvious place people click for their own account. */}
             <Link
+              data-account-link
               href="/profile"
               prefetch={false}
               className="flex items-center gap-3 rounded-full pl-2 transition-opacity hover:opacity-80"

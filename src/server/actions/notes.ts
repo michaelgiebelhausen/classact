@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/ratelimit";
 import { sendNotesExport } from "@/lib/email";
+import { isPracticeCourse } from "@/server/practice";
 import {
   buildNotesMarkdown,
   notesFilename,
@@ -263,6 +264,8 @@ export async function emailNotesExport(input: {
   );
   if (error || !enrollmentId || !userId)
     return { ok: false, error: error ?? "No enrollment." };
+
+  if (await isPracticeCourse(input.courseId, supabase)) return { ok: false, error: "Email delivery is disabled in Student View. Download your practice notes instead." };
 
   const parsed = emailSchema.safeParse(input.to);
   if (!parsed.success)

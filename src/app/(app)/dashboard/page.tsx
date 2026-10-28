@@ -42,8 +42,9 @@ export default async function DashboardPage() {
         .order("created_at", { ascending: false }),
       supabase
         .from("enrollments")
-        .select("id, status, course_id, courses(id, name, term)")
+        .select("id, status, course_id, courses!inner(id, name, term, practice_source_id)")
         .eq("profile_id", profile.id)
+        .is("courses.practice_source_id", null)
         .neq("status", "dropped"),
     ]);
 

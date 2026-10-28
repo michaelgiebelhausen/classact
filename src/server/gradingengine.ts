@@ -1197,13 +1197,15 @@ export async function findGradingWork(admin: Supa): Promise<string[]> {
   const [{ data: starting }, { data: graded }] = await Promise.all([
     admin
       .from("assignments")
-      .select("id")
+      .select("id, courses!inner(practice_source_id)")
+      .is("courses.practice_source_id", null)
       .in("state", PIPELINE_STATES)
       .lt("deadline", now.toISOString())
       .order("deadline"),
     admin
       .from("assignments")
-      .select("id, analysis")
+      .select("id, analysis, courses!inner(practice_source_id)")
+      .is("courses.practice_source_id", null)
       .in("state", GRADED_STATES)
       .eq("analysis->>phase", "done"),
   ]);

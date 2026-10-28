@@ -8,6 +8,7 @@ import { Resend } from 'resend';
 import { lateCheckinEmail, type LateResponse } from '@/lib/latecheckin';
 import type { ActionResult } from '@/server/actions/auth';
 import { rosterDisplayName } from '@/lib/names';
+import { isPracticeCourse } from '@/server/practice';
 
 export async function requestLateCheckin(courseId: string, sessionId: string, seatId: string): Promise<ActionResult> {
   if (!isConfigured.supabaseAdmin || !isConfigured.email) {
@@ -43,6 +44,7 @@ async function emailWitnesses(requestId: string, profileId: string, expectedCour
   if (!request || request.status !== 'pending') return false;
   const { data: student } = await admin.from('enrollments').select('profile_id, roster_name, course_id, status').eq('id', request.enrollment_id).single();
   if (student?.profile_id !== profileId || student.status !== 'active' || (expectedCourseId && student.course_id !== expectedCourseId)) return false;
+  if (await isPracticeCourse(student.course_id)) return false;
   const { data: profile } = await admin.from('profiles').select('full_name').eq('id', profileId).maybeSingle();
   const studentName = rosterDisplayName(student.roster_name, profile?.full_name) || 'A classmate';
   const [{ data: course }, { data: session }, { data: seat }, { data: witnesses }] = await Promise.all([

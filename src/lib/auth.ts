@@ -70,8 +70,9 @@ export async function getMembership(
       .eq("professor_id", profileId),
     supabase
       .from("enrollments")
-      .select("id", { count: "exact", head: true })
+      .select("id, courses!inner(practice_source_id)", { count: "exact", head: true })
       .eq("profile_id", profileId)
+      .is("courses.practice_source_id", null)
       .neq("status", "dropped"),
   ])
   if (taught.error || joined.error) return null

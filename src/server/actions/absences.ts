@@ -681,10 +681,10 @@ export async function appealAbsence(
   try {
     const { data: course } = await admin
       .from("courses")
-      .select("name, professor_id")
+      .select("name, professor_id, practice_source_id")
       .eq("id", row.course_id)
       .single();
-    if (course) {
+    if (course && !course.practice_source_id) {
       const { data: prof } = await admin.auth.admin.getUserById(course.professor_id);
       if (prof.user?.email) {
         await sendAbsenceAppealNotification({

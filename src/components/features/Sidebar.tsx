@@ -99,10 +99,12 @@ function RailLink({
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ practiceIds = [] }: { practiceIds?: string[] }) {
   const pathname = usePathname() ?? "";
   const match = pathname.match(/\/course\/([^/]+)/);
   const courseId = match?.[1];
+  const practicing = Boolean(courseId && practiceIds.includes(courseId));
+  const homeHref = practicing ? `/course/${courseId}` : "/dashboard";
   const homeActive = pathname === "/dashboard" || pathname === "/";
 
   return (
@@ -114,7 +116,7 @@ export function Sidebar() {
     // a collapsing toolbar doesn't hide the last link behind it.
     <nav className="sticky top-0 z-20 flex h-dvh w-[84px] shrink-0 flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden bg-[var(--sidebar)] py-5 [scrollbar-width:thin] [scrollbar-color:var(--sidebar-accent)_transparent]">
       <Link
-        href="/dashboard"
+        href={homeHref}
         prefetch={false}
         className="mb-3 grid size-11 shrink-0 place-items-center rounded-[13px] bg-gradient-to-br from-[var(--flame)] to-[#c33d1c] font-[family-name:var(--font-heading)] text-xl font-semibold text-white shadow-[0_6px_16px_-4px_rgba(224,85,47,0.6)]"
         aria-label="ClassAct home"
@@ -125,7 +127,7 @@ export function Sidebar() {
       <RailLink
         label="Home"
         icon={LayoutDashboard}
-        href="/dashboard"
+        href={homeHref}
         active={homeActive}
       />
 
@@ -153,18 +155,18 @@ export function Sidebar() {
 
       <div className="flex-1" />
       <div className="my-1.5 h-px w-8 shrink-0 bg-white/10" />
-      <RailLink
+      {!practicing && <RailLink
         label="Feedback"
         icon={MessageSquarePlus}
         href="/feedback"
         active={pathname.startsWith("/feedback")}
-      />
-      <RailLink
+      />}
+      {!practicing && <RailLink
         label="Profile"
         icon={Settings}
         href="/profile"
         active={pathname.startsWith("/profile")}
-      />
+      />}
     </nav>
   );
 }

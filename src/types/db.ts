@@ -117,6 +117,9 @@ export type ProfessorCanvasRow = {
 }
 
 export type CourseRow = {
+  practice_source_id: string | null
+  practice_instructor_id: string | null
+  practice_routes: Record<string, string>
   id: string
   professor_id: string
   name: string
@@ -899,6 +902,10 @@ export type Database = {
     }
     Views: { [_ in never]: never }
     Functions: {
+      create_practice_course: {
+        Args: { p_source: string; p_instructor: string; p_owner: string; p_reset: boolean; p_expected: string | null }
+        Returns: string
+      }
       contribution_command: {
         Args: { p_team: string; p_action: string; p_data: Record<string, unknown> }
         Returns: undefined

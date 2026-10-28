@@ -68,10 +68,10 @@ export async function resolveCourseAi(
   const admin = createAdminClient();
   const { data: course } = await admin
     .from("courses")
-    .select("professor_id")
+    .select("professor_id, practice_source_id")
     .eq("id", courseId)
     .single();
-  if (!course) return null;
+  if (!course || course.practice_source_id) return null;
 
   const [{ data: vault }, { data: profile }] = await Promise.all([
     admin

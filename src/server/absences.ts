@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfigured } from "@/lib/env";
+import { isPracticeCourse } from "@/server/practice";
 
 /**
  * Absence helpers that must NOT be server actions.
@@ -26,10 +27,12 @@ export async function flagAbsencesElsewhere(
 ): Promise<void> {
   if (!isConfigured.supabaseAdmin) return;
   try {
+    if (await isPracticeCourse(courseId)) return;
     const admin = createAdminClient();
     const { data: others } = await admin
       .from("enrollments")
-      .select("id")
+      .select("id, courses!inner(practice_source_id)")
+      .is("courses.practice_source_id", null)
       .eq("profile_id", profileId)
       .neq("course_id", courseId);
     const ids = (others ?? []).map((e) => e.id);
@@ -56,10 +59,12 @@ export async function checkedInElsewhere(
   date: string
 ): Promise<boolean> {
   if (!isConfigured.supabaseAdmin) return false;
+  if (await isPracticeCourse(courseId)) return false;
   const admin = createAdminClient();
   const { data: myEnrollments } = await admin
     .from("enrollments")
-    .select("id")
+    .select("id, courses!inner(practice_source_id)")
+    .is("courses.practice_source_id", null)
     .eq("profile_id", profileId)
     .neq("course_id", courseId);
   const ids = (myEnrollments ?? []).map((e) => e.id);
