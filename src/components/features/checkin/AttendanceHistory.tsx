@@ -34,7 +34,7 @@ export function AttendanceHistory({ courseId }: { courseId: string }) {
         <h3 className="font-semibold">My attendance record</h3>
         <Button size="sm" variant="outline" disabled={pending} onClick={() => void load()}>{error ? 'Try again' : 'Refresh record'}</Button>
       </div>
-      <p className="text-sm text-muted-foreground">Class sessions recorded in ClassAct, newest first. A check-in records your seat; confirmed attendance means a classmate or instructor vouched for you. A missing check-in does not necessarily mean you were absent.</p>
+      <p className="text-sm text-muted-foreground">Class sessions recorded in ClassAct, newest first. A check-in records your seat; confirmed attendance means a classmate or instructor vouched for you, or you signed an attendance pledge. A missing check-in does not necessarily mean you were absent.</p>
       {pending && <p role="status" className="text-sm">Loading your attendance record…</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {data && (data.rows.length ? <>
@@ -57,7 +57,7 @@ export function AttendanceHistory({ courseId }: { courseId: string }) {
             <td className="py-3"><p className="font-medium">{row.attendance}</p><p className="mt-1 text-xs text-muted-foreground">{row.detail}</p>{row.absence && <p className="mt-2 text-xs">Absence report: {row.absence}</p>}</td>
           </tr>)}</tbody>
         </table>
-        <p className="text-sm text-muted-foreground">Missing a day you attended? Use the date and seat fields below to request a late confirmation. Contact your instructor if a class date is missing or a record needs correction.</p>
+        <p className="text-sm text-muted-foreground">Missing a day you attended? Use the date and seat fields below to request a late confirmation. Dates excluded by your instructor do not appear here and need no check-in. Reported absences do not need attendance recovery.</p>
       </> : <p className="text-sm">No class sessions have been recorded yet.</p>)}
     </section>}
   </div>;

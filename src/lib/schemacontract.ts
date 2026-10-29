@@ -27,6 +27,9 @@ export interface SchemaExpectation {
 }
 
 export const SCHEMA_CONTRACT: SchemaExpectation[] = [
+  { table: "attendance_exclusions", columns: ["course_id", "session_date", "reason"], migration: "0055_attendance_recovery.sql" },
+  { table: "class_sessions", columns: ["attendance_required"], migration: "0055_attendance_recovery.sql" },
+  { table: "absences", columns: ["assessment_pending"], migration: "0055_attendance_recovery.sql" },
   {
     table: "projects",
     columns: ["mode", "brief"],
@@ -49,13 +52,13 @@ export const SCHEMA_CONTRACT: SchemaExpectation[] = [
   },
   {
     table: "late_checkin_requests",
-    columns: ["session_id", "enrollment_id", "seat_id", "status", "confirmed_at"],
-    migration: "0052_late_checkins.sql",
+    columns: ["session_id", "enrollment_id", "seat_id", "status", "confirmed_at", "pledged_at", "pledge_text"],
+    migration: "0052_late_checkins.sql / 0055_attendance_recovery.sql",
   },
   {
     table: "late_checkin_witnesses",
-    columns: ["request_id", "enrollment_id", "response", "emailed_at", "email_claimed_at"],
-    migration: "0052_late_checkins.sql",
+    columns: ["request_id", "enrollment_id", "response", "emailed_at", "email_claimed_at", "pledge_text"],
+    migration: "0052_late_checkins.sql / 0055_attendance_recovery.sql",
   },
   {
     table: "check_ins",

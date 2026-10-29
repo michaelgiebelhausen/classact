@@ -1,9 +1,11 @@
 "use client";
 
+import { useRouter } from 'next/navigation';
+import { ATTENDANCE_PLEDGE, WITNESS_PLEDGE } from '@/lib/latecheckin';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { requestLateCheckin, respondLateCheckin, retryLateCheckinEmails } from '@/server/actions/latecheckin';
+import { pledgeLateCheckin, requestLateCheckin, respondLateCheckin, retryLateCheckinEmails } from '@/server/actions/latecheckin';
 import type { LateResponse } from '@/lib/latecheckin';
 import type { ActionResult } from '@/server/actions/auth';
 import { AttendanceHistory } from './AttendanceHistory';
@@ -18,6 +20,9 @@ export type LateCheckinProps = {
 };
 
 export function LateCheckin({ courseId, sessions, seats, mine, incoming, unavailable }: LateCheckinProps) {
+  const router = useRouter();
+  const [pledge, setPledge] = useState(false);
+  const [witnessPledges, setWitnessPledges] = useState<Record<string, boolean>>({});
   const [sessionId, setSessionId] = useState('');
   const [seatId, setSeatId] = useState('');
   const [pending, startTransition] = useTransition();
@@ -29,6 +34,7 @@ export function LateCheckin({ courseId, sessions, seats, mine, incoming, unavail
       try {
         const result = await action();
         setError(!result.ok);
+        if (result.ok) { setPledge(false); router.refresh(); }
         setMessage(result.ok ? success : result.error || 'Please try again.');
       } catch {
         setError(true);
@@ -44,13 +50,15 @@ export function LateCheckin({ courseId, sessions, seats, mine, incoming, unavail
     </CardHeader>
     <CardContent className="grid gap-6">
       <AttendanceHistory courseId={courseId} />
+      <p className="text-sm text-muted-foreground">Dates excluded by your instructor do not require check-in. Reported absences appear in your attendance record and do not need a witness or attendance pledge.</p>
       {unavailable ? <p className="text-sm text-muted-foreground">Late check-in is not available yet. Please try again later.</p> : <>
         {incoming.length > 0 && <section aria-label="Attendance confirmations" className="grid gap-3">
           <h3 className="font-medium">Can you vouch for a classmate?</h3>
           {incoming.map(request => <div key={request.id} className="grid gap-3 rounded-md border p-4">
             <p className="text-sm"><strong>{request.name}</strong> says they sat next to you in seat {request.seat} on {request.date}. Do you remember them being there?</p>
+            <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={!!witnessPledges[request.id]} disabled={pending} onChange={e => setWitnessPledges({ ...witnessPledges, [request.id]: e.target.checked })} />{WITNESS_PLEDGE}</label>
             <div className="flex flex-wrap gap-2">
-              {([['confirm', 'Yes, they were there'], ['not_present', 'They were not there'], ['unsure', 'I don’t remember']] as [LateResponse, string][]).map(([response, label]) => <Button key={response} disabled={pending} variant={response === 'confirm' ? 'default' : 'outline'} onClick={() => run(() => respondLateCheckin(courseId, request.id, response), 'Your response is saved.')}>{label}</Button>)}
+              {([['confirm', 'I am confident that they were there.'], ['unsure', "I don't remember."], ['not_present', 'To the best of my recollection, they were not there.']] as [LateResponse, string][]).map(([response, label]) => <Button key={response} className="h-auto min-h-8 max-w-full whitespace-normal py-2 text-left" disabled={pending || (response === 'confirm' && !witnessPledges[request.id])} variant={response === 'confirm' ? 'default' : 'outline'} onClick={() => run(() => respondLateCheckin(courseId, request.id, response, !!witnessPledges[request.id]), 'Your response is saved.')}>{label}</Button>)}
             </div>
           </div>)}
         </section>}
@@ -60,12 +68,20 @@ export function LateCheckin({ courseId, sessions, seats, mine, incoming, unavail
         }}>
           {sessions.length ? <>
             <label className="grid gap-2 text-sm" htmlFor="late-session">Class date
-              <select id="late-session" className={selectClass} required value={sessionId} disabled={pending} onChange={e => setSessionId(e.target.value)}><option value="">Choose a class</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.date}</option>)}</select>
+              <select id="late-session" className={selectClass} required value={sessionId} disabled={pending} onChange={e => { setSessionId(e.target.value); setPledge(false); }}><option value="">Choose a class</option>{sessions.map(s => <option key={s.id} value={s.id}>{s.date}</option>)}</select>
             </label>
             <label className="grid gap-2 text-sm" htmlFor="late-seat">Where did you sit?
-              <select id="late-seat" className={selectClass} required value={seatId} disabled={pending} onChange={e => setSeatId(e.target.value)}><option value="">Choose your seat</option>{seats.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select>
+              <select id="late-seat" className={selectClass} required value={seatId} disabled={pending} onChange={e => { setSeatId(e.target.value); setPledge(false); }}><option value="">Choose your seat</option>{seats.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select>
             </label>
             <Button type="submit" disabled={pending || !sessionId || !seatId} className="justify-self-start">{pending ? 'Saving…' : 'Ask my neighbors to vouch'}</Button>
+            <details className="rounded-md border p-4">
+              <summary className="cursor-pointer text-sm font-medium">No one nearby checked in?</summary>
+              <div className="mt-3 grid gap-3">
+                <p className="text-sm text-muted-foreground">If no recorded neighbor is available, confirm your own attendance by pledge. Your attendance is recorded immediately, and you can vouch for nearby classmates for this date.</p>
+                <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={pledge} disabled={pending} onChange={e => setPledge(e.target.checked)} />{ATTENDANCE_PLEDGE}</label>
+                <Button type="button" variant="outline" disabled={pending || !sessionId || !seatId || !pledge} onClick={() => run(() => pledgeLateCheckin(courseId, sessionId, seatId, pledge), 'Attendance recorded by pledge.')}>Confirm my attendance by pledge</Button>
+              </div>
+            </details>
           </> : <p className="text-sm text-muted-foreground">No past classes are awaiting a check-in request.</p>}
         </form>
         {mine.length > 0 && <section aria-label="Your late check-in requests" className="grid gap-3">

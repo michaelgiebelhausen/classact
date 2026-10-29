@@ -49,11 +49,13 @@ async function emailWitnesses(requestId: string, profileId: string, expectedCour
   const studentName = rosterDisplayName(student.roster_name, profile?.full_name) || 'A classmate';
   const [{ data: course }, { data: session }, { data: seat }, { data: witnesses }] = await Promise.all([
     admin.from('courses').select('name, timezone').eq('id', student.course_id).single(),
-    admin.from('class_sessions').select('session_date').eq('id', request.session_id).single(),
+    admin.from('class_sessions').select('session_date, attendance_required').eq('id', request.session_id).single(),
     admin.from('seats').select('label').eq('id', request.seat_id).single(),
     admin.from('late_checkin_witnesses').select('*').eq('request_id', requestId).is('emailed_at', null).is('response', null),
   ]);
-  if (!course || !session || !seat || !witnesses) return false;
+  if (!course || !session || !session.attendance_required || !seat || !witnesses) return false;
+  const { data: absence, error: absenceError } = await admin.from('absences').select('id').eq('enrollment_id', request.enrollment_id).eq('absence_date', session.session_date).maybeSingle();
+  if (absenceError || absence) return false;
   // Match actual lecture timestamps in the course timezone; never infer a
   // topic from a nearby date or a deck that was merely uploaded that day.
   const { data: lectures } = await admin.from('lectures').select('started_at, deck_id').eq('course_id', student.course_id);
@@ -88,10 +90,23 @@ async function emailWitnesses(requestId: string, profileId: string, expectedCour
   return allSent;
 }
 
-export async function respondLateCheckin(courseId: string, requestId: string, response: LateResponse): Promise<ActionResult> {
+export async function respondLateCheckin(courseId: string, requestId: string, response: LateResponse, pledge = false): Promise<ActionResult> {
   const client = await createClient();
-  const { error } = await client.rpc('respond_late_checkin', { p_request: requestId, p_response: response });
+  const { error } = await client.rpc('respond_late_checkin', { p_request: requestId, p_response: response, p_pledge: pledge });
   if (error) return { ok: false, error: error.code === 'P0001' ? error.message : 'Could not save your response. Refresh and try again.' };
   revalidatePath(`/course/${courseId}/checkin`);
+  return { ok: true };
+}
+
+export async function pledgeLateCheckin(courseId: string, sessionId: string, seatId: string, pledge: boolean): Promise<ActionResult> {
+  if (pledge !== true) return { ok: false, error: 'Affirm the university academic integrity pledge first.' };
+  const client = await createClient();
+  const { data: { user } } = await client.auth.getUser();
+  if (!user) return { ok: false, error: 'Sign in first.' };
+  const { data: session } = await client.from('class_sessions').select('course_id').eq('id', sessionId).single();
+  if (session?.course_id !== courseId) return { ok: false, error: 'Choose a session in this course.' };
+  const { error } = await client.rpc('pledge_late_checkin', { p_session: sessionId, p_seat: seatId, p_pledge: pledge });
+  if (error) return { ok: false, error: error.code === 'P0001' ? error.message : 'Could not save your pledge. Refresh and try again.' };
+  revalidatePath(`/course/${courseId}`, 'layout');
   return { ok: true };
 }

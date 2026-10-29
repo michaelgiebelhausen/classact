@@ -17,3 +17,4 @@ export async function getMyAttendanceHistory() {
 export async function requestLateCheckin() { return { ok: false as const, error: 'This is a local preview.' }; }
 export const respondLateCheckin = requestLateCheckin;
 export const retryLateCheckinEmails = requestLateCheckin;
+export const pledgeLateCheckin = requestLateCheckin;

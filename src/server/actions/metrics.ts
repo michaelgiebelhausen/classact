@@ -69,7 +69,7 @@ export async function getStudentMetrics(
     await Promise.all([
       supabase
         .from("check_ins")
-        .select("seat_id, verified, is_new_seat, professor_confirmed_at")
+        .select("seat_id, verified, is_new_seat, professor_confirmed_at, class_sessions!inner(attendance_required)").eq("class_sessions.attendance_required", true)
         .eq("enrollment_id", enrollment.id),
       supabase
         .from("seat_verifications")
@@ -139,7 +139,7 @@ export async function getCourseMetrics(
     isConfigured.supabaseAdmin ? createAdminClient() : supabase;
 
   const [{ data: sessions }, { data: enrollments }] = await Promise.all([
-    client.from("class_sessions").select("id").eq("course_id", courseId),
+    client.from("class_sessions").select("id").eq("course_id", courseId).eq("attendance_required", true),
     client
       .from("enrollments")
       .select("id, roster_name")
@@ -153,7 +153,7 @@ export async function getCourseMetrics(
     enrollmentIds.length > 0
       ? client
           .from("check_ins")
-          .select("enrollment_id, verified, is_new_seat, professor_confirmed_at")
+          .select("enrollment_id, verified, is_new_seat, professor_confirmed_at, class_sessions!inner(attendance_required)").eq("class_sessions.attendance_required", true)
           .in("enrollment_id", enrollmentIds)
       : Promise.resolve({ data: [] as { enrollment_id: string; verified: boolean; is_new_seat: boolean; professor_confirmed_at: string | null }[] }),
     enrollmentIds.length > 0
@@ -533,10 +533,10 @@ export async function getStudentWorkReadiness(
     { data: contractSignatures },
     myProjects,
   ] = await Promise.all([
-    supabase.from("class_sessions").select("id").eq("course_id", courseId),
+    supabase.from("class_sessions").select("id, session_date").eq("course_id", courseId).eq("attendance_required", true),
     supabase
       .from("check_ins")
-      .select("verified, is_new_seat, professor_confirmed_at")
+      .select("session_id, verified, is_new_seat, professor_confirmed_at, class_sessions!inner(attendance_required)").eq("class_sessions.attendance_required", true)
       .eq("enrollment_id", enrollment.id),
     supabase
       .from("seat_verifications")
@@ -565,6 +565,16 @@ export async function getStudentWorkReadiness(
       .eq("enrollment_id", enrollment.id),
     getMyProjectStats(courseId),
   ]);
+
+  const exemptDates = new Set<string>();
+  if (isConfigured.supabaseAdmin) {
+    const { data: reports, error } = await createAdminClient().from('absences')
+      .select('absence_date, ai_verdict, professor_verdict, assessment_pending, appealed_at').eq('enrollment_id', enrollment.id);
+    if (error) return null;
+    for (const report of reports ?? []) {
+      if ((report.professor_verdict ?? report.ai_verdict) === 'excused' || (!report.professor_verdict && (report.assessment_pending || report.appealed_at))) exemptDates.add(report.absence_date);
+    }
+  }
 
   const met = new Set<string>();
   let neighborsVerified = 0;
@@ -595,7 +605,7 @@ export async function getStudentWorkReadiness(
       : 0;
 
   return computeWorkReadiness({
-    sessionsHeld: (sessions ?? []).length,
+    sessionsHeld: (sessions ?? []).filter(s => !exemptDates.has(s.session_date) || (checkins ?? []).some(c => c.session_id === s.id)).length,
     sessionsAttended: (checkins ?? []).length,
     verifiedAttendances: (checkins ?? []).filter(
       (c) => c.verified || c.professor_confirmed_at != null

@@ -205,6 +205,7 @@ export interface SubmitAbsenceInput {
 export interface SubmitAbsenceResult {
   id: string;
   verdict: AbsenceVerdict;
+  assessmentPending?: boolean;
   reason: string;
   date: string;
 }
@@ -260,6 +261,10 @@ export async function submitAbsence(
     }
   }
 
+  const { data: exclusion, error: exclusionError } = await admin.from('attendance_exclusions').select('session_date').eq('course_id', input.courseId).eq('session_date', input.date).maybeSingle();
+  if (exclusionError) return { ok: false, error: 'Could not check attendance requirements. Try again.' };
+  if (exclusion) return { ok: false, error: 'Check-in is not required for this date. No absence request is needed.' };
+
   // Cheap flood guard on a platform-paid call. Generous enough that no real
   // student notices: a handful of reports an hour, one course at a time.
   const limit = rateLimit(`absence:${user.id}`, { limit: 6, windowMs: 60 * 60 * 1000 });
@@ -274,16 +279,14 @@ export async function submitAbsence(
   // One report per class date; point at the existing one rather than fail.
   const { data: existing } = await admin
     .from("absences")
-    .select("id, ai_verdict, professor_verdict, ai_reason")
+    .select("id, ai_verdict, professor_verdict, ai_reason, assessment_pending")
     .eq("enrollment_id", enrollment.id)
     .eq("absence_date", input.date)
     .maybeSingle();
   if (existing) {
     return {
       ok: false,
-      error: `You already reported an absence for ${input.date} — it's ${finalVerdict(
-        existing
-      )}. Edit that report instead.`,
+      error: `You already reported an absence for ${input.date} — it's ${existing.assessment_pending ? 'awaiting assessment' : finalVerdict(existing)}. Edit that report instead.`,
     };
   }
 
@@ -298,11 +301,16 @@ export async function submitAbsence(
   // History this term (for the model's "repeat pattern" judgment).
   const { data: priors } = await admin
     .from("absences")
-    .select("ai_verdict, professor_verdict")
+    .select("absence_date, ai_verdict, professor_verdict, assessment_pending, appealed_at")
     .eq("enrollment_id", enrollment.id);
-  let priorExcused = 0;
+  const { data: historyExclusions, error: historyError } = await admin.from('attendance_exclusions').select('session_date').eq('course_id', input.courseId);
+  if (historyError) return { ok: false, error: 'Could not load attendance settings. Try again.' };
+  const excludedHistoryDates = new Set((historyExclusions ?? []).map(e => e.session_date));
+  let priorExcused: number = 0;
   let priorUnexcused = 0;
   for (const p of priors ?? []) {
+    if (excludedHistoryDates.has(p.absence_date)) continue;
+    if (!p.professor_verdict && (p.assessment_pending || p.appealed_at)) continue;
     if (finalVerdict(p) === "excused") priorExcused++;
     else priorUnexcused++;
   }
@@ -313,6 +321,22 @@ export async function submitAbsence(
     input.courseId,
     input.date
   );
+
+  // Persist the request before calling the assessment service. A failed call
+  // leaves a visible pending request, never a fabricated unexcused decision.
+  const { data: pendingReport, error: pendingError } = await admin.from('absences').insert({
+    course_id: input.courseId, enrollment_id: enrollment.id, absence_date: input.date,
+    category, explanation, submitted_at: submittedAt.toISOString(), advance_hours: notice,
+    has_documentation: document !== null, ai_verdict: 'unexcused', assessment_pending: true,
+    ai_legitimacy: 50, ai_summary: 'Assessment pending', ai_reason: 'Absence excuse requested. Assessment is pending.',
+    ai_flags: [], attended_elsewhere: attendedElsewhere,
+  }).select('id').single();
+  if (pendingError || !pendingReport) return { ok: false, error: pendingError?.code === '23505' ? 'You already reported this absence.' : 'Could not save your absence request. Try again.' };
+  revalidatePath(`/course/${input.courseId}/checkin`);
+  const pendingResult: ActionResult<SubmitAbsenceResult> = { ok: true, data: {
+    id: pendingReport.id, verdict: 'unexcused', assessmentPending: true, date: input.date,
+    reason: 'Your absence request is saved. Assessment is pending. You can retry by editing the report.',
+  } };
 
   const judged = await judgeReport({
     courseId: input.courseId,
@@ -328,46 +352,33 @@ export async function submitAbsence(
     attendedElsewhere,
     revised: false,
   });
-  if (!judged.ok) return judged;
+  if (!judged.ok) return pendingResult;
   const { verdict, legitimacy, summary, reason, docKind, docAuthenticity, flags } =
     judged.data!;
 
   // The document is out of scope from here on — nothing below touches it.
-  const { data: created, error } = await admin
-    .from("absences")
-    .insert({
-      course_id: input.courseId,
-      enrollment_id: enrollment.id,
-      absence_date: input.date,
-      category,
-      explanation,
-      submitted_at: submittedAt.toISOString(),
-      advance_hours: notice,
-      has_documentation: document !== null,
-      documentation_kind: docKind,
-      ai_doc_authenticity: docAuthenticity,
-      ai_verdict: verdict,
-      ai_legitimacy: legitimacy,
-      ai_summary: summary,
-      ai_reason: reason,
-      ai_flags: flags,
-      attended_elsewhere: attendedElsewhere,
-    })
-    .select("id")
-    .single();
-  if (error || !created) {
-    if (error?.code === "23505") {
-      return { ok: false, error: `You already reported an absence for ${input.date}.` };
-    }
-    console.error("[absences] insert failed:", error?.message);
-    return { ok: false, error: "Couldn't save your report. Try again." };
+  const { data: assessed, error } = await admin.from('absences').update({
+    documentation_kind: docKind, ai_doc_authenticity: docAuthenticity,
+    ai_verdict: verdict, assessment_pending: false, ai_legitimacy: legitimacy,
+    ai_summary: summary, ai_reason: reason, ai_flags: flags,
+  }).eq('id', pendingReport.id).eq('assessment_pending', true).is('professor_verdict', null).select('id').maybeSingle();
+  if (error) return pendingResult;
+  if (!assessed) {
+    // Another assessment or an instructor decision won the race. Return the
+    // stored outcome, never the discarded result of this model call.
+    const { data: current, error: currentError } = await admin.from('absences')
+      .select('id, ai_verdict, ai_reason, professor_verdict, professor_note, assessment_pending').eq('id', pendingReport.id).maybeSingle();
+    if (currentError || !current) return { ok: false, error: 'Your request was saved, but its latest decision could not load. Refresh your absence reports.' };
+    return { ok: true, data: { id: current.id, date: input.date, verdict: finalVerdict(current),
+      assessmentPending: current.assessment_pending && !current.professor_verdict,
+      reason: current.professor_verdict ? current.professor_note || 'Your instructor has recorded a decision.' : current.ai_reason } };
   }
 
   revalidatePath(`/course/${input.courseId}/checkin`);
   revalidatePath(`/course/${input.courseId}/metrics`);
   return {
     ok: true,
-    data: { id: created.id, verdict, reason, date: input.date },
+    data: { id: pendingReport.id, verdict, reason, date: input.date },
   };
 }
 
@@ -564,11 +575,16 @@ export async function updateAbsence(
   // History this term, not counting the report being revised.
   const { data: priors } = await admin
     .from("absences")
-    .select("id, ai_verdict, professor_verdict")
+    .select("id, absence_date, ai_verdict, professor_verdict, assessment_pending, appealed_at")
     .eq("enrollment_id", row.enrollment_id);
-  let priorExcused = 0;
+  const { data: historyExclusions, error: historyError } = await admin.from('attendance_exclusions').select('session_date').eq('course_id', row.course_id);
+  if (historyError) return { ok: false, error: 'Could not load attendance settings. Try again.' };
+  const excludedHistoryDates = new Set((historyExclusions ?? []).map(e => e.session_date));
+  let priorExcused: number = 0;
   let priorUnexcused = 0;
   for (const p of priors ?? []) {
+    if (excludedHistoryDates.has(p.absence_date)) continue;
+    if (!p.professor_verdict && (p.assessment_pending || p.appealed_at)) continue;
     if (p.id === row.id) continue;
     if (finalVerdict(p) === "excused") priorExcused++;
     else priorUnexcused++;
@@ -608,6 +624,7 @@ export async function updateAbsence(
       documentation_kind: docKind,
       ai_doc_authenticity: docAuthenticity,
       ai_verdict: verdict,
+      assessment_pending: false,
       ai_legitimacy: legitimacy,
       ai_summary: summary,
       ai_reason: reason,
@@ -653,7 +670,7 @@ export async function appealAbsence(
   const admin = createAdminClient();
   const { data: row } = await admin
     .from("absences")
-    .select("id, course_id, enrollment_id, absence_date, category, ai_summary, appealed_at, professor_verdict, enrollments!inner(profile_id, roster_name)")
+    .select("id, course_id, enrollment_id, absence_date, category, ai_summary, assessment_pending, appealed_at, professor_verdict, enrollments!inner(profile_id, roster_name)")
     .eq("id", absenceId)
     .maybeSingle();
   const owner = (row?.enrollments as unknown as { profile_id: string | null; roster_name: string } | null);
@@ -663,6 +680,7 @@ export async function appealAbsence(
   if (row.professor_verdict) {
     return { ok: false, error: "Your professor has already ruled on this one." };
   }
+  if (row.assessment_pending) return { ok: false, error: 'Your absence request is still awaiting assessment. Edit it to retry assessment.' };
   if (row.appealed_at) {
     return { ok: false, error: "You've already appealed this absence — your professor will see it." };
   }
@@ -763,6 +781,7 @@ export interface CourseAbsenceView {
   aiVerdict: AbsenceVerdict;
   professorVerdict: AbsenceVerdict | null;
   finalVerdict: AbsenceVerdict;
+  assessmentPending?: boolean;
   flags: string[];
   attendedElsewhere: boolean;
   /** They reported an absence but checked into THIS course that day anyway. */
@@ -847,6 +866,7 @@ function toView(
     aiVerdict: r.ai_verdict,
     professorVerdict: r.professor_verdict,
     finalVerdict: finalVerdict(r),
+    assessmentPending: r.assessment_pending && !r.professor_verdict,
     flags: r.ai_flags ?? [],
     attendedElsewhere: r.attended_elsewhere,
     attendedHere: attended.has(`${r.enrollment_id}|${r.absence_date}`),
@@ -865,6 +885,7 @@ export interface MyAbsenceView {
   categoryLabel: string;
   explanation: string;
   verdict: AbsenceVerdict;
+  assessmentPending?: boolean;
   reason: string;
   overridden: boolean;
   professorNote: string | null;
@@ -897,7 +918,7 @@ export async function listMyAbsences(courseId: string): Promise<MyAbsenceView[]>
   const { data: rows } = await admin
     .from("absences")
     .select(
-      "id, absence_date, category, explanation, ai_verdict, ai_reason, professor_verdict, professor_note, appealed_at, decided_at, has_documentation"
+      "id, absence_date, category, explanation, ai_verdict, ai_reason, professor_verdict, professor_note, appealed_at, decided_at, has_documentation, assessment_pending"
     )
     .eq("enrollment_id", enrollment.id)
     .order("absence_date", { ascending: false });
@@ -908,6 +929,7 @@ export async function listMyAbsences(courseId: string): Promise<MyAbsenceView[]>
     categoryLabel: categoryLabel(r.category),
     explanation: r.explanation,
     verdict: finalVerdict(r),
+    assessmentPending: r.assessment_pending && !r.professor_verdict,
     reason: r.ai_reason,
     overridden: r.professor_verdict !== null,
     professorNote: r.professor_note,

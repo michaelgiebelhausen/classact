@@ -140,7 +140,7 @@ export function ReportAbsence({
       }
       const excused = result.data!.verdict === "excused";
       toast[excused ? "success" : "message"](
-        editing
+        result.data!.assessmentPending ? "Absence excuse requested." : editing
           ? excused
             ? "Updated — now excused."
             : "Updated — still unexcused."
@@ -353,12 +353,12 @@ export function ReportAbsence({
                       </span>
                     </div>
                     <Badge variant={a.verdict === "excused" ? "secondary" : "outline"}>
-                      {a.verdict === "excused" ? (
+                      {!a.assessmentPending && a.verdict === "excused" ? (
                         <CheckCircle2 className="mr-1 size-3" />
                       ) : (
                         <XCircle className="mr-1 size-3" />
                       )}
-                      {a.verdict}
+                      {a.assessmentPending ? 'Absence excuse requested' : a.appealedAt && !a.overridden ? 'Absence appeal pending' : a.verdict === 'excused' ? 'Excused absence' : 'Unexcused absence'}
                       {a.overridden ? " (professor)" : ""}
                     </Badge>
                   </div>
@@ -384,7 +384,7 @@ export function ReportAbsence({
                       </Button>
                     </div>
                   )}
-                  {a.verdict === "unexcused" && !a.overridden && !a.appealedAt && (
+                  {!a.assessmentPending && a.verdict === "unexcused" && !a.overridden && !a.appealedAt && (
                     <div className="mt-2">
                       {appealFor === a.id ? (
                         <div className="grid gap-2">

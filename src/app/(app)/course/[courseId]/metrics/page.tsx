@@ -86,10 +86,13 @@ export default async function MetricsPage({
     // stands (the professor's if they ruled, otherwise ClassAct's).
     const { data: absenceRows } = await supabase
       .from("absences")
-      .select("enrollment_id, ai_verdict, professor_verdict")
+      .select("enrollment_id, ai_verdict, professor_verdict, absence_date, assessment_pending, appealed_at")
       .eq("course_id", courseId);
+    const { data: exclusions } = await supabase.from('attendance_exclusions').select('session_date').eq('course_id', courseId);
+    const excludedDates = new Set((exclusions ?? []).map(e => e.session_date));
     const absenceTally = new Map<string, { excused: number; unexcused: number }>();
     for (const a of absenceRows ?? []) {
+      if (excludedDates.has(a.absence_date) || (!a.professor_verdict && (a.assessment_pending || a.appealed_at))) continue;
       const tally = absenceTally.get(a.enrollment_id) ?? { excused: 0, unexcused: 0 };
       if (finalVerdict(a) === "excused") tally.excused++;
       else tally.unexcused++;

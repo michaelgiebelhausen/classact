@@ -268,7 +268,7 @@ export function ScheduledAbsences({
                       <Badge
                         variant={r.finalVerdict === "excused" ? "secondary" : "outline"}
                       >
-                        {r.finalVerdict}
+                        {r.assessmentPending ? 'Absence excuse requested' : r.appealedAt && !r.professorVerdict ? 'Absence appeal pending' : r.finalVerdict}
                       </Badge>
                       {r.professorVerdict && (
                         <span className="text-[10px] text-muted-foreground">
@@ -277,6 +277,7 @@ export function ScheduledAbsences({
                       )}
                       {/* Always offered, including after a decision — an
                           override was previously a one-way door. */}
+                      {r.assessmentPending && <button type="button" className="text-[10px] text-muted-foreground underline" disabled={busyId === r.id} onClick={e => { e.stopPropagation(); decide(r.id, 'unexcused'); }}>Mark unexcused</button>}
                       <button
                         type="button"
                         className="text-[10px] text-muted-foreground underline"

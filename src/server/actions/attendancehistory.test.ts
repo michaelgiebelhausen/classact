@@ -47,7 +47,7 @@ describe('private attendance history', () => {
     expect(late.in).toHaveBeenCalledWith('session_id', ['session']);
     expect(absences.eq).toHaveBeenCalledWith('course_id', 'course');
     expect(absences.in).toHaveBeenCalledWith('absence_date', ['2026-10-28']);
-    expect(absences.select).toHaveBeenCalledWith('absence_date, ai_verdict, professor_verdict, appealed_at');
+    expect(absences.select).toHaveBeenCalledWith('absence_date, ai_verdict, professor_verdict, appealed_at, assessment_pending');
     expect(result).toEqual({ ok: true, data: { today: '2026-10-28', rows: [{ date: '2026-10-28', checkin: 'Recorded', attendance: 'Present · confirmed', detail: 'Confirmed by a classmate.', absence: 'Excused absence' }] } });
   });
   it.each(['class_sessions', 'check_ins', 'late_checkin_requests', 'absences'])('does not report missing attendance when %s fails', async failed => {

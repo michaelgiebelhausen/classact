@@ -43,7 +43,7 @@ describe('late check-in server boundary', () => {
   it('revalidates after a response commits', async () => {
     mocks.rpc.mockResolvedValue({ error: null });
     expect((await respondLateCheckin('course', 'request', 'confirm')).ok).toBe(true);
-    expect(mocks.rpc).toHaveBeenCalledWith('respond_late_checkin', { p_request: 'request', p_response: 'confirm' });
+    expect(mocks.rpc).toHaveBeenCalledWith('respond_late_checkin', { p_request: 'request', p_response: 'confirm', p_pledge: false });
     expect(mocks.revalidate).toHaveBeenCalledWith('/course/course/checkin');
   });
 });

@@ -82,16 +82,21 @@ export default async function CourseLayout({
   const now = new Date();
   const today = schedule
     ? sessionDateFor(schedule, now)
-    : now.toISOString().slice(0, 10);
+    : new Intl.DateTimeFormat('en-CA', { timeZone: course.timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
 
   const { data: session } = await supabase
     .from("class_sessions")
     .select("id, opened_at")
     .eq("course_id", courseId)
     .eq("session_date", today)
+    .eq("attendance_required", true)
     .is("closed_at", null)
     .maybeSingle();
   if (!session) return bare;
+  if (isConfigured.supabaseAdmin) {
+    const { data: absence, error } = await createAdminClient().from('absences').select('id').eq('enrollment_id', enrollment.id).eq('absence_date', today).maybeSingle();
+    if (error || absence) return bare;
+  }
 
   const socialEndsAt = socialModeEndsAt(
     schedule ? meetingStartInstant(schedule, today)?.toISOString() ?? null : null,

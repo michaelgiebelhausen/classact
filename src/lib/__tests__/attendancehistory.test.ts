@@ -25,7 +25,14 @@ describe('attendance record states', () => {
   });
   it('keeps absence decisions and pending appeals visible without erasing presence', () => {
     expect(row(date, undefined, undefined, { verdict: 'excused', appealPending: false }).attendance).toBe('Excused absence');
-    expect(row(date, undefined, undefined, { verdict: 'unexcused', appealPending: true })).toMatchObject({ attendance: 'Unexcused absence', absence: 'Unexcused absence · Appeal pending' });
+    expect(row(date, undefined, undefined, { verdict: 'unexcused', appealPending: true })).toMatchObject({ attendance: 'Absence appeal pending', absence: 'Absence appeal pending' });
     expect(row(date, { ...click, verified: true }, undefined, { verdict: 'excused', appealPending: false })).toMatchObject({ attendance: 'Present · confirmed', absence: 'Excused absence' });
   });
+});
+
+it('pending absence requests replace missing attendance and pending neighbor claims', () => {
+  expect(row(date, undefined, { status: 'pending' }, { verdict: 'unexcused', appealPending: false, assessmentPending: true }).attendance).toBe('Absence excuse requested');
+});
+it('distinguishes a self pledge from a classmate confirmation', () => {
+  expect(row(date, { ...click, verified: true }, { status: 'confirmed', pledged_at: '2026-10-29' }).detail).toContain('your university academic integrity pledge');
 });

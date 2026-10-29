@@ -30,7 +30,7 @@ export async function getMyAttendanceHistory(courseId: string): Promise<ActionRe
     const pageSize = 100;
     for (let offset = 0; ; offset += pageSize) {
       const { data: sessions, error } = await admin.from('class_sessions').select('id, session_date')
-        .eq('course_id', courseId).lte('session_date', today).order('session_date', { ascending: false })
+        .eq('course_id', courseId).eq('attendance_required', true).lte('session_date', today).order('session_date', { ascending: false })
         .range(offset, offset + pageSize - 1);
       if (error || !sessions) return { ok: false, error: unavailable };
       if (!sessions.length) break;
@@ -39,9 +39,9 @@ export async function getMyAttendanceHistory(courseId: string): Promise<ActionRe
       const [checkins, requests, absences] = await Promise.all([
         admin.from('check_ins').select('session_id, verified, professor_confirmed_at, denied_count')
           .eq('enrollment_id', enrollment.id).in('session_id', ids),
-        admin.from('late_checkin_requests').select('session_id, status')
+        admin.from('late_checkin_requests').select('session_id, status, pledged_at')
           .eq('enrollment_id', enrollment.id).in('session_id', ids),
-        admin.from('absences').select('absence_date, ai_verdict, professor_verdict, appealed_at')
+        admin.from('absences').select('absence_date, ai_verdict, professor_verdict, appealed_at, assessment_pending')
           .eq('course_id', courseId).eq('enrollment_id', enrollment.id).in('absence_date', dates),
       ]);
       // Never turn a failed query into a list of apparent missed classes.
@@ -51,7 +51,7 @@ export async function getMyAttendanceHistory(courseId: string): Promise<ActionRe
         rows.push(attendanceHistoryRow(session.session_date,
           checkins.data.find(c => c.session_id === session.id),
           requests.data.find(r => r.session_id === session.id),
-          absence ? { verdict: finalVerdict(absence), appealPending: !!absence.appealed_at && !absence.professor_verdict } : undefined));
+          absence ? { verdict: finalVerdict(absence), assessmentPending: absence.assessment_pending && !absence.professor_verdict, appealPending: !!absence.appealed_at && !absence.professor_verdict } : undefined));
       }
       if (sessions.length < pageSize) break;
     }

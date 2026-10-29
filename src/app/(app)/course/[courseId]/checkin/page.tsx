@@ -21,6 +21,7 @@ import {
   type OccupantInfo,
   type SeatInfo,
 } from "@/components/features/checkin/CheckInLive";
+import { AttendanceDays } from "@/components/features/checkin/AttendanceDays";
 import { SessionControls } from "@/components/features/checkin/SessionControls";
 import { ReportAbsence } from "@/components/features/checkin/ReportAbsence";
 import { ScheduledAbsences } from "@/components/features/checkin/ScheduledAbsences";
@@ -116,7 +117,19 @@ async function renderCheckIn(courseId: string) {
   const now = new Date();
   const today = schedule
     ? sessionDateFor(schedule, now)
-    : now.toISOString().slice(0, 10);
+    : new Intl.DateTimeFormat('en-CA', { timeZone: course.timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const { data: exclusions, error: exclusionsError } = await supabase.from('attendance_exclusions').select('session_date, reason').eq('course_id', courseId);
+  if (exclusionsError) throw new Error('Attendance settings could not load. Apply migration 0055_attendance_recovery.sql and try again.');
+  const excludedDates = new Set((exclusions ?? []).map(e => e.session_date));
+  const todayExcluded = excludedDates.has(today);
+  const { data: allSessions } = isProfessor ? await supabase.from('class_sessions').select('session_date').eq('course_id', courseId) : { data: [] };
+  const attendanceDates = new Set([...(allSessions ?? []).map(s => s.session_date), ...excludedDates]);
+  if (isProfessor && schedule?.termStart && schedule.termEnd) {
+    const cursor = new Date(`${schedule.termStart}T12:00:00Z`);
+    for (let i=0; i<400 && cursor.toISOString().slice(0,10)<=schedule.termEnd; i++, cursor.setUTCDate(cursor.getUTCDate()+1)) {
+      if (schedule.days.includes(cursor.getUTCDay())) attendanceDates.add(cursor.toISOString().slice(0,10));
+    }
+  }
   const { data: session } = await supabase
     .from("class_sessions")
     .select("id, closed_at, opened_at")
@@ -124,7 +137,7 @@ async function renderCheckIn(courseId: string) {
     .eq("session_date", today)
     .is("closed_at", null)
     .maybeSingle();
-  let sessionId = session?.id ?? null;
+  let sessionId = todayExcluded ? null : session?.id ?? null;
   let sessionOpenedAt = session?.opened_at ?? null;
 
   // Scheduled auto-open: inside the meeting window (start − 15 min → end),
@@ -132,6 +145,7 @@ async function renderCheckIn(courseId: string) {
   // click needed. The unique (course_id, session_date) constraint makes
   // concurrent opens race-safe.
   if (
+    !todayExcluded &&
     !sessionId &&
     schedule &&
     course.auto_open &&
@@ -376,6 +390,7 @@ async function renderCheckIn(courseId: string) {
     isProfessor
       ? [await listCourseAbsences(courseId), []]
       : [[], await listMyAbsences(courseId)];
+  const todayAbsence = myAbsences.find(a => a.date === today);
   const upcomingDates =
     !isProfessor && schedule ? upcomingMeetingDates(schedule, new Date(), 8) : [];
   // Illness is usually reported after the fact, so recent classes have to be
@@ -403,12 +418,13 @@ async function renderCheckIn(courseId: string) {
           </h1>
           <p className="text-sm text-muted-foreground">{course.name}</p>
         </div>
-        {isProfessor && (
+        {isProfessor && !todayExcluded && (
           <SessionControls courseId={courseId} sessionId={sessionId} />
         )}
       </div>
 
-      {schemaGap ? (
+      {isProfessor && <AttendanceDays courseId={courseId} days={[...attendanceDates].sort().map(date => ({ date, excluded: excludedDates.has(date), reason: exclusions?.find(e => e.session_date === date)?.reason ?? '' }))} />}
+      {todayExcluded ? <p className="rounded-md border p-4 text-sm">Check-in is not required today.</p> : todayAbsence ? <p className="rounded-md border p-4 text-sm">{todayAbsence.assessmentPending ? 'Absence excuse requested' : todayAbsence.appealedAt && !todayAbsence.overridden ? 'Absence appeal pending' : todayAbsence.verdict === 'excused' ? 'Excused absence' : 'Unexcused absence'}. Your report is on file; no check-in is needed.</p> : schemaGap ? (
         <SchemaBehindNotice
           migrations={schemaGap}
           isProfessor={isProfessor}
@@ -460,9 +476,9 @@ async function renderCheckIn(courseId: string) {
       ) : myEnrollmentId ? (
         <ReportAbsence
           courseId={courseId}
-          upcomingDates={upcomingDates}
-          pastDates={pastDates}
-          mine={myAbsences}
+          upcomingDates={upcomingDates.filter(d => !excludedDates.has(d))}
+          pastDates={pastDates.filter(d => !excludedDates.has(d))}
+          mine={myAbsences.filter(a => !excludedDates.has(a.date))}
           policyNote={policyNote}
         />
       ) : null}

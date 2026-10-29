@@ -7,7 +7,7 @@ import { rosterDisplayName } from '@/lib/names';
 
 export async function LateCheckinSection({ courseId, today }: { courseId: string; today: string }) {
   const empty: LateCheckinProps = { courseId, sessions: [], seats: [], mine: [], incoming: [] };
-  if (!isConfigured.supabaseAdmin || !isConfigured.email) return <LateCheckin {...empty} unavailable />;
+  if (!isConfigured.supabaseAdmin) return <LateCheckin {...empty} unavailable />;
   const client = await createClient();
   const { data: { user } } = await client.auth.getUser();
   if (!user) return null;
@@ -17,7 +17,7 @@ export async function LateCheckinSection({ courseId, today }: { courseId: string
   // only the student's claims and invitations addressed to them are exposed.
   const admin = createAdminClient();
   const [{ data: sessions, error: sessionError }, { data: seats, error: seatError }, { data: requests, error }, { data: invitations, error: invitationError }, { data: checkins, error: checkinError }] = await Promise.all([
-    admin.from('class_sessions').select('id, session_date').eq('course_id', courseId).lt('session_date', today).order('session_date', { ascending: false }),
+    admin.from('class_sessions').select('id, session_date').eq('course_id', courseId).eq('attendance_required', true).lt('session_date', today).order('session_date', { ascending: false }),
     admin.from('seats').select('id, label').eq('course_id', courseId).order('label'),
     admin.from('late_checkin_requests').select('*').eq('enrollment_id', enrollment.id),
     admin.from('late_checkin_witnesses').select('request_id').eq('enrollment_id', enrollment.id).is('response', null),
@@ -35,16 +35,21 @@ export async function LateCheckinSection({ courseId, today }: { courseId: string
   const profileIds = [...new Set((names ?? []).flatMap(n => n.profile_id ? [n.profile_id] : []))];
   const { data: profiles } = profileIds.length ? await admin.from('profiles').select('id, full_name').in('id', profileIds) : { data: [] };
   const displayNames = new Map((names ?? []).map(n => [n.id, rosterDisplayName(n.roster_name, profiles?.find(p => p.id === n.profile_id)?.full_name) || 'A classmate']));
+  const { data: absenceDates, error: absenceError } = await admin.from('absences').select('absence_date').eq('course_id', courseId).eq('enrollment_id', enrollment.id);
+  if (absenceError) return <LateCheckin {...empty} unavailable />;
+  const reported = new Set((absenceDates ?? []).map(a => a.absence_date));
+  const { data: claimantAbsences, error: claimantError } = studentIds.length ? await admin.from('absences').select('enrollment_id, absence_date').eq('course_id', courseId).in('enrollment_id', studentIds) : { data: [], error: null };
+  if (claimantError) return <LateCheckin {...empty} unavailable />;
   const dateFor = (sessionId: string) => sessions?.find(s => s.id === sessionId)?.session_date;
   const seatFor = (seatId: string) => seats?.find(s => s.id === seatId)?.label ?? 'Unknown';
   const excluded = new Set([...(requests ?? []).map(r => r.session_id), ...(checkins ?? []).map(c => c.session_id)]);
   return <LateCheckin {...empty}
-    sessions={(sessions ?? []).filter(s => !excluded.has(s.id)).map(s => ({ id: s.id, date: s.session_date }))}
+    sessions={(sessions ?? []).filter(s => !excluded.has(s.id) && !reported.has(s.session_date)).map(s => ({ id: s.id, date: s.session_date }))}
     seats={seats ?? []}
-    mine={(requests ?? []).map(r => {
+    mine={(requests ?? []).filter(r => dateFor(r.session_id) && !reported.has(dateFor(r.session_id)!)).map(r => {
       const replies = (witnesses ?? []).filter(w => w.request_id === r.id);
       return { id: r.id, date: dateFor(r.session_id) ?? 'Past class', seat: seatFor(r.seat_id), confirmed: r.status === 'confirmed', unsent: replies.some(w => !w.emailed_at && !w.response), responses: replies.every(w => w.response) ? 'Your neighbors have responded, but neither confirmed attendance.' : 'Waiting for a neighbor to confirm. You do not have attendance credit yet.' };
     })}
-    incoming={(incoming ?? []).filter(r => dateFor(r.session_id)).map(r => ({ id: r.id, name: displayNames.get(r.enrollment_id) ?? 'A classmate', date: dateFor(r.session_id)!, seat: seatFor(r.seat_id) }))}
+    incoming={(incoming ?? []).filter(r => dateFor(r.session_id) && !(claimantAbsences ?? []).some(a => a.enrollment_id === r.enrollment_id && a.absence_date === dateFor(r.session_id))).map(r => ({ id: r.id, name: displayNames.get(r.enrollment_id) ?? 'A classmate', date: dateFor(r.session_id)!, seat: seatFor(r.seat_id) }))}
   />;
 }

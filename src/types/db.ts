@@ -193,6 +193,7 @@ export type AbsenceRow = {
   documentation_kind: string | null
   ai_doc_authenticity: number | null
   ai_verdict: AbsenceVerdict
+  assessment_pending: boolean
   ai_legitimacy: number
   ai_summary: string
   ai_reason: string
@@ -513,6 +514,7 @@ export type ClassSessionRow = {
   id: string
   course_id: string
   session_date: string
+  attendance_required: boolean
   opened_at: string
   closed_at: string | null
 }
@@ -824,6 +826,8 @@ export type LateCheckinRequestRow = {
   enrollment_id: string
   seat_id: string
   status: 'pending' | 'confirmed'
+  pledged_at: string | null
+  pledge_text: string | null
   created_at: string
   confirmed_at: string | null
 }
@@ -850,6 +854,7 @@ export type Database = {
       profile_photos: TableShape<ProfilePhotoRow>
       profile_documents: TableShape<ProfileDocumentRow>
       student_answers: TableShape<StudentAnswerRow>
+      attendance_exclusions: TableShape<{ course_id: string; session_date: string; reason: string; updated_at: string }>
       class_sessions: TableShape<ClassSessionRow>
       check_ins: TableShape<CheckInRow>
       late_checkin_requests: TableShape<LateCheckinRequestRow>
@@ -910,12 +915,14 @@ export type Database = {
         Args: { p_team: string; p_action: string; p_data: Record<string, unknown> }
         Returns: undefined
       }
+      pledge_late_checkin: { Args: { p_session: string; p_seat: string; p_pledge: boolean }; Returns: undefined }
+      set_attendance_exclusions: { Args: { p_course: string; p_dates: string[]; p_excluded: boolean; p_reason: string }; Returns: undefined }
       request_late_checkin: {
         Args: { p_session: string; p_seat: string }
         Returns: string
       }
       respond_late_checkin: {
-        Args: { p_request: string; p_response: string }
+        Args: { p_request: string; p_response: string; p_pledge?: boolean }
         Returns: undefined
       }
       /** 0029 — professor moves a student between seats, swapping if the

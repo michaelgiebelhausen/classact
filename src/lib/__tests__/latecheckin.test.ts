@@ -10,6 +10,9 @@ describe('late attendance email', () => {
     expect(email.text).toContain('seat B4');
     expect(email.text).toContain(input.url);
     expect(email.text).toContain('One confirmation');
+    expect(email.text).toContain('I am confident that they were there.');
+    expect(email.text).toContain("I don't remember.");
+    expect(email.text).toContain('To the best of my recollection, they were not there.');
     expect(email.text).toContain('does not submit a response');
     expect(email.text).not.toContain('Lecture:');
   });

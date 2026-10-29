@@ -18,11 +18,6 @@ import {
 } from "@/lib/seatmove";
 import type { SeatNeighbors, SeatRelation } from "@/types/db";
 
-/** Today's date in the server's local calendar, YYYY-MM-DD. */
-function todayDate(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 /** Professor: open (or reuse) today's session (FR-008, idempotent). */
 export async function openSession(
   courseId: string
@@ -35,14 +30,16 @@ export async function openSession(
 
   const { data: course } = await supabase
     .from("courses")
-    .select("id, professor_id")
+    .select("id, professor_id, timezone")
     .eq("id", courseId)
     .single();
   if (!course || course.professor_id !== user.id) {
     return { ok: false, error: "Only the course owner can open a session." };
   }
 
-  const sessionDate = todayDate();
+  const sessionDate = new Intl.DateTimeFormat('en-CA', { timeZone: course.timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const { data: exclusion, error: exclusionError } = await supabase.from('attendance_exclusions').select('session_date').eq('course_id', courseId).eq('session_date', sessionDate).maybeSingle();
+  if (exclusionError || exclusion) return { ok: false, error: exclusion ? 'Check-in is not required today.' : 'Could not load attendance settings.' };
   const { data: existing } = await supabase
     .from("class_sessions")
     .select("id, closed_at")
